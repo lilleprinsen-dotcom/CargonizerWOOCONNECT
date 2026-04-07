@@ -22,7 +22,7 @@ class LP_Cargonizer_Connector {
 	const NONCE_ACTION_OPTIMIZE_DSV = 'lp_cargonizer_optimize_dsv_estimates';
 	const NONCE_ACTION_SERVICEPARTNERS = 'lp_cargonizer_fetch_servicepartners';
 
-	public function __construct() {
+	public function register_hooks() {
 		add_action('admin_menu', array($this, 'add_admin_menu'), 99);
 		add_action('admin_init', array($this, 'register_settings'));
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_estimate_button'));
@@ -4694,5 +4694,3 @@ class LP_Cargonizer_Connector {
 		<?php
 	}
 }
-
-new LP_Cargonizer_Connector();
