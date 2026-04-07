@@ -11,3 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/includes/class-lp-cargonizer-connector.php';
+require_once __DIR__ . '/includes/class-lp-cargonizer-plugin.php';
+
+$lp_cargonizer_plugin = new LP_Cargonizer_Plugin();
+$lp_cargonizer_plugin->bootstrap();
