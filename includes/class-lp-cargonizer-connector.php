@@ -1,3 +1,4 @@
+<?php
 /*
 Plugin Name: Lilleprinsen Cargonizer Connector
 Description: Egen WooCommerce-adminside for å lagre Cargonizer-autentisering og hente fraktmetoder fra transport_agreements.xml
