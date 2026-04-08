@@ -1283,9 +1283,17 @@
 				runBookingBtn.textContent = 'Booker...';
 				bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
 
+				var bookingNonce = (config.nonces && config.nonces.book ? config.nonces.book : '');
+				if (!bookingNonce) {
+					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Booking nonce mangler i frontend-konfigurasjonen.</span>';
+					runBookingBtn.disabled = false;
+					runBookingBtn.textContent = 'Book shipment';
+					return;
+				}
+
 				var form = new FormData();
 				form.append('action', 'lp_cargonizer_book_shipment');
-				form.append('nonce', (config.nonces && config.nonces.booking ? config.nonces.booking : ''));
+				form.append('nonce', bookingNonce);
 				form.append('order_id', currentOrderId);
 				colli.payload.packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){
