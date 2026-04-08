@@ -61,6 +61,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'estimateBaseline' => wp_create_nonce(self::NONCE_ACTION_ESTIMATE_BASELINE),
 				'optimizeDsv' => wp_create_nonce(self::NONCE_ACTION_OPTIMIZE_DSV),
 				'servicepartners' => wp_create_nonce(self::NONCE_ACTION_SERVICEPARTNERS),
+				'book' => wp_create_nonce(self::NONCE_ACTION_BOOK),
+				'printers' => wp_create_nonce(self::NONCE_ACTION_PRINTERS),
 			),
 		));
 	}
@@ -78,7 +80,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			return;
 		}
 
-		echo '<p style="margin-top:12px;"><button type="button" class="button lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '">Estimer fraktkostnad</button></p>';
+		echo '<p style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+			. '<button type="button" class="button lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '">Estimer fraktkostnad</button>'
+			. '<button type="button" class="button lp-cargonizer-book-open" data-order-id="' . esc_attr($order->get_id()) . '">Book shipment</button>'
+			. '</p>';
 	}
 
 	public function render_estimate_modal() {
@@ -93,7 +98,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		<div id="lp-cargonizer-estimate-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;">
 			<div style="background:#fff;max-width:1100px;width:96%;max-height:90vh;overflow:auto;margin:3vh auto;padding:20px 20px 28px 20px;border-radius:8px;box-shadow:0 20px 50px rgba(0,0,0,.25);position:relative;">
 				<button type="button" class="lp-cargonizer-close" style="position:absolute;right:16px;top:12px;border:none;background:transparent;font-size:26px;line-height:1;cursor:pointer;">&times;</button>
-				<h2 style="margin-top:0;">Estimer fraktkostnad</h2>
+				<h2 id="lp-cargonizer-modal-title" style="margin-top:0;">Estimer fraktkostnad</h2>
 				<div id="lp-cargonizer-estimate-loading" style="display:none;margin:12px 0;"><em>Laster ordredata...</em></div>
 				<div id="lp-cargonizer-estimate-error" style="display:none;margin:12px 0;color:#b32d2e;"></div>
 				<div id="lp-cargonizer-estimate-content" style="display:none;">
@@ -117,8 +122,23 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<h3 style="margin:0 0 8px 0;">Prisresultater</h3>
 						<div id="lp-cargonizer-results-content" style="color:#646970;">Ingen estimater kjørt enda.</div>
 					</div>
+					<div id="lp-cargonizer-booking-printer-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<h3 style="margin:0 0 8px 0;">Utskrift</h3>
+						<label style="display:flex;flex-direction:column;gap:4px;">
+							<span>Printer</span>
+							<select id="lp-cargonizer-booking-printer-choice" style="max-width:420px;">
+								<option value="">Ingen utskrift</option>
+							</select>
+						</label>
+						<div id="lp-cargonizer-booking-printer-help" style="margin-top:6px;color:#646970;"></div>
+					</div>
+					<div id="lp-cargonizer-booking-results" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<h3 style="margin:0 0 8px 0;">Booking result</h3>
+						<div id="lp-cargonizer-booking-results-content" style="color:#646970;">Ingen booking kjørt enda.</div>
+					</div>
 					<div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;align-items:center;">
 						<button type="button" class="button button-primary" id="lp-cargonizer-run-estimate">Estimer fraktpris</button>
+						<button type="button" class="button button-primary" id="lp-cargonizer-run-booking" style="display:none;">Book shipment</button>
 						<button type="button" class="button" id="lp-cargonizer-close-bottom">Lukk</button>
 					</div>
 				</div>
