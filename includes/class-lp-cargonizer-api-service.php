@@ -656,6 +656,8 @@ class LP_Cargonizer_Api_Service {
 			$city = $this->xml_value_or_attribute($node, array('city', 'post_area', 'municipality'));
 			$country = $this->xml_value_or_attribute($node, array('country', 'country_code'));
 			$customer_number = $this->xml_value_or_attribute($node, array('customer-number', 'customer_number', 'customernumber'));
+			$distance_raw = $this->xml_value_or_attribute($node, array('distance_in_meters', 'meters', 'meter', 'distance_meters', 'distance_km', 'distance'));
+			$distance_meters = $this->normalize_servicepartner_distance_meters($node, $distance_raw);
 
 			$label_parts = array();
 			if ($name !== '') {
@@ -694,13 +696,38 @@ class LP_Cargonizer_Api_Service {
 			if ($customer_number !== '') {
 				$option['customer_number'] = $customer_number;
 			}
+			if ($distance_meters !== null) {
+				$option['distance_meters'] = $distance_meters;
+			}
+			if ($distance_raw !== '') {
+				$option['distance_raw'] = $distance_raw;
+			}
 
 			$parsed['options'][] = array(
 				'value' => $option['value'],
 				'label' => $option['label'],
 				'customer_number' => isset($option['customer_number']) ? $option['customer_number'] : '',
+				'distance_meters' => isset($option['distance_meters']) ? $option['distance_meters'] : null,
 				'raw' => $option,
 			);
+		}
+
+		$has_distance = false;
+		foreach ($parsed['options'] as $option) {
+			if (isset($option['distance_meters']) && $option['distance_meters'] !== null && is_numeric($option['distance_meters'])) {
+				$has_distance = true;
+				break;
+			}
+		}
+		if ($has_distance) {
+			usort($parsed['options'], function ($a, $b) {
+				$a_distance = isset($a['distance_meters']) && $a['distance_meters'] !== null && is_numeric($a['distance_meters']) ? (float) $a['distance_meters'] : INF;
+				$b_distance = isset($b['distance_meters']) && $b['distance_meters'] !== null && is_numeric($b['distance_meters']) ? (float) $b['distance_meters'] : INF;
+				if ($a_distance === $b_distance) {
+					return 0;
+				}
+				return $a_distance < $b_distance ? -1 : 1;
+			});
 		}
 
 		$parsed['parser_debug']['produced_options'] = count($parsed['options']);
@@ -709,6 +736,114 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		return $parsed;
+	}
+
+	private function normalize_servicepartner_distance_meters($node, $distance_raw) {
+		$raw = trim((string) $distance_raw);
+		$meters_raw = $this->xml_value_or_attribute($node, array('distance_in_meters', 'distance_meters', 'meters', 'meter'));
+		$kilometers_raw = $this->xml_value_or_attribute($node, array('distance_km'));
+
+		if ($meters_raw !== '') {
+			$meters_numeric = preg_replace('/[^0-9\.\,\-]/', '', (string) $meters_raw);
+			$meters_numeric = str_replace(',', '.', $meters_numeric);
+			if (is_numeric($meters_numeric)) {
+				return (float) $meters_numeric;
+			}
+		}
+
+		if ($kilometers_raw !== '') {
+			$km_numeric = preg_replace('/[^0-9\.\,\-]/', '', (string) $kilometers_raw);
+			$km_numeric = str_replace(',', '.', $km_numeric);
+			if (is_numeric($km_numeric)) {
+				return round(((float) $km_numeric) * 1000, 3);
+			}
+		}
+
+		if ($raw === '') {
+			return null;
+		}
+		$normalized = strtolower($raw);
+		$numeric = preg_replace('/[^0-9\.\,\-]/', '', $normalized);
+		$numeric = str_replace(',', '.', $numeric);
+		if (!is_numeric($numeric)) {
+			return null;
+		}
+		$value = (float) $numeric;
+		if (strpos($normalized, 'km') !== false) {
+			return round($value * 1000, 3);
+		}
+		return $value;
+	}
+
+	public function pick_default_servicepartner_option($options) {
+		if (!is_array($options) || empty($options)) {
+			return array();
+		}
+		foreach ($options as $option) {
+			if (!is_array($option)) {
+				continue;
+			}
+			$value = isset($option['value']) ? sanitize_text_field((string) $option['value']) : '';
+			if ($value === '') {
+				continue;
+			}
+			return array(
+				'value' => $value,
+				'customer_number' => isset($option['customer_number']) ? sanitize_text_field((string) $option['customer_number']) : '',
+				'option' => $option,
+			);
+		}
+		return array();
+	}
+
+	public function resolve_default_servicepartner_selection($method_payload, $recipient) {
+		$selection_value = isset($method_payload['servicepartner']) ? sanitize_text_field((string) $method_payload['servicepartner']) : '';
+		$selection_customer_number = isset($method_payload['servicepartner_customer_number']) ? sanitize_text_field((string) $method_payload['servicepartner_customer_number']) : '';
+		if ($selection_value !== '') {
+			return array(
+				'servicepartner' => $selection_value,
+				'servicepartner_customer_number' => $selection_customer_number,
+				'servicepartner_selection_source' => 'manual',
+				'servicepartner_auto_selected' => false,
+				'auto_selection_reason' => 'manual_selection_present',
+				'selected_option' => array(),
+				'servicepartner_options' => array(),
+				'servicepartner_fetch' => array(),
+			);
+		}
+
+		$lookup_method = is_array($method_payload) ? $method_payload : array();
+		$lookup_method['country'] = isset($recipient['country']) ? sanitize_text_field((string) $recipient['country']) : '';
+		$lookup_method['postcode'] = isset($recipient['postcode']) ? sanitize_text_field((string) $recipient['postcode']) : '';
+		$lookup_method['city'] = isset($recipient['city']) ? sanitize_text_field((string) $recipient['city']) : '';
+		$lookup_method['address'] = isset($recipient['address_1']) ? sanitize_text_field((string) $recipient['address_1']) : '';
+
+		$servicepartner_fetch = $this->fetch_servicepartner_options($lookup_method);
+		$options = isset($servicepartner_fetch['options']) && is_array($servicepartner_fetch['options']) ? $servicepartner_fetch['options'] : array();
+		$default_option = $this->pick_default_servicepartner_option($options);
+		if (!empty($default_option)) {
+			return array(
+				'servicepartner' => isset($default_option['value']) ? $default_option['value'] : '',
+				'servicepartner_customer_number' => isset($default_option['customer_number']) ? $default_option['customer_number'] : '',
+				'servicepartner_selection_source' => 'automatic',
+				'servicepartner_auto_selected' => true,
+				'auto_selection_reason' => 'nearest_or_first_available_option',
+				'selected_option' => isset($default_option['option']) ? $default_option['option'] : array(),
+				'servicepartner_options' => $options,
+				'servicepartner_fetch' => $servicepartner_fetch,
+			);
+		}
+
+		return array(
+			'servicepartner' => '',
+			'servicepartner_customer_number' => '',
+			'servicepartner_selection_source' => 'none',
+			'servicepartner_auto_selected' => false,
+			'auto_selection_reason' => 'no_servicepartner_options_available',
+			'selected_option' => array(),
+			'servicepartner_options' => $options,
+			'servicepartner_fetch' => $servicepartner_fetch,
+		);
 	}
 
 	private function xml_value_or_attribute($node, $possible_keys = array()) {

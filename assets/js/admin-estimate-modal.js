@@ -526,6 +526,18 @@
 				return selectEl.options[index].getAttribute('data-customer-number') || '';
 			}
 
+			function pickDefaultServicepartnerOption(options){
+				if (!Array.isArray(options)) { return null; }
+				for (var i = 0; i < options.length; i++) {
+					var opt = options[i];
+					var value = (opt && opt.value) ? String(opt.value) : '';
+					if (value) {
+						return opt;
+					}
+				}
+				return null;
+			}
+
 			function getFetchFailureDetails(payload, debug){
 				var message = (payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil';
 				var statusText = debug && debug.http_status ? ' (HTTP ' + debug.http_status + ')' : '';
@@ -805,6 +817,10 @@
 					'Produkt: ' + (summary.product_id || row.product_id || '—'),
 					'Kolli: ' + (summary.number_of_packages !== undefined ? summary.number_of_packages : '—'),
 					'Servicepartner: ' + (summary.selected_servicepartner || row.selected_servicepartner || '—'),
+					'Servicepartner-kunde#: ' + (row.selected_servicepartner_customer_number || '—'),
+					'Servicepartner-kilde: ' + (row.servicepartner_selection_source || '—'),
+					'Servicepartner auto-valgt: ' + (row.servicepartner_auto_selected ? 'Ja' : 'Nei'),
+					'Auto-valg årsak: ' + (row.auto_selection_reason || '—'),
 					'SMS service valgt: ' + ((summary.use_sms_service || row.use_sms_service) ? 'Ja' : 'Nei'),
 					'Pakker: ' + (packageText || '—'),
 					'Formel: ' + formulaText
@@ -1006,12 +1022,25 @@
 								row.servicepartner_options = options;
 								row.servicepartner_fetch = debug;
 								var selectedServicepartner = row.selected_servicepartner ? String(row.selected_servicepartner) : '';
+								var hasManualSelection = !!row.servicepartner_user_selected || row.servicepartner_selection_source === 'manual';
 								if (selectedServicepartner) {
 									var stillExists = options.some(function(opt){
 										return opt && opt.value && String(opt.value) === selectedServicepartner;
 									});
 									if (!stillExists) {
 										row.selected_servicepartner = '';
+										row.selected_servicepartner_customer_number = '';
+									}
+								}
+								if (!hasManualSelection && !row.selected_servicepartner) {
+									var defaultOption = pickDefaultServicepartnerOption(options);
+									if (defaultOption && defaultOption.value) {
+										row.selected_servicepartner = String(defaultOption.value);
+										row.selected_servicepartner_customer_number = defaultOption.customer_number ? String(defaultOption.customer_number) : '';
+										row.servicepartner_selection_source = 'automatic';
+										row.servicepartner_auto_selected = true;
+										row.auto_selection_reason = 'nearest_or_first_available_option';
+										row.human_error = 'Nærmeste servicepartner ble valgt automatisk.';
 									}
 								}
 								if (!payload || !payload.success) {
@@ -1053,12 +1082,31 @@
 							}
 						}
 						if (currentMode === 'booking' && bookingServicepartnerSelect && currentProactiveMethodKey === methodKey) {
-							var previousProactiveValue = bookingServicepartnerSelect.value || '';
+							var rowForMethod = null;
+							for (var r = 0; r < latestEstimateResults.length; r++) {
+								if (methodKeyForRow(latestEstimateResults[r]) === methodKey) {
+									rowForMethod = latestEstimateResults[r];
+									break;
+								}
+							}
+							var previousProactiveValue = bookingServicepartnerSelect.value || (rowForMethod && rowForMethod.selected_servicepartner ? String(rowForMethod.selected_servicepartner) : '');
 							renderProactiveServicepartnerOptions(methodKey, options, previousProactiveValue);
-							syncServicepartnerSelectors(methodKey, bookingServicepartnerSelect.value || '', 'proactive');
+							var syncedValue = bookingServicepartnerSelect.value || previousProactiveValue || '';
+							if (!syncedValue) {
+								var defaultProactive = pickDefaultServicepartnerOption(options);
+								if (defaultProactive && defaultProactive.value) {
+									syncedValue = String(defaultProactive.value);
+									bookingServicepartnerSelect.value = syncedValue;
+								}
+							}
+							syncServicepartnerSelectors(methodKey, syncedValue, 'proactive');
 							if (payload && payload.success) {
 								if (options.length) {
-									setProactiveServicepartnerHelp('Fant ' + options.length + ' servicepartnere.', '#125228');
+									if (rowForMethod && rowForMethod.servicepartner_selection_source === 'automatic' && rowForMethod.selected_servicepartner) {
+										setProactiveServicepartnerHelp('Nærmeste servicepartner ble valgt automatisk.', '#125228');
+									} else {
+										setProactiveServicepartnerHelp('Fant ' + options.length + ' servicepartnere.', '#125228');
+									}
 								} else {
 									setProactiveServicepartnerHelp('Ingen hentesteder/servicepartnere funnet for valgt metode og adresse.', '#8a4b00');
 								}
@@ -1701,6 +1749,8 @@
 				}
 				method.servicepartner = selectedServicepartner || '';
 				method.servicepartner_customer_number = '';
+				method.servicepartner_selection_source = method.servicepartner ? 'manual' : 'none';
+				method.servicepartner_user_selected = !!method.servicepartner;
 				if (bookingResultsContent) {
 					var selectedServicepartnerSelectForBooking = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 					method.servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(selectedServicepartnerSelectForBooking);
@@ -1711,10 +1761,16 @@
 				var proactiveVisibleForMethod = !!(bookingServicepartnerSection && bookingServicepartnerSection.style.display !== 'none' && bookingServicepartnerSelect && (bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey);
 				var proactiveOptionsCount = (bookingServicepartnerSelect && bookingServicepartnerSelect.options) ? bookingServicepartnerSelect.options.length : 0;
 				if (proactiveVisibleForMethod && methodLikelyNeedsServicepartner(method) && proactiveOptionsCount > 1 && !method.servicepartner) {
-					var guardMessage = 'Velg utleveringssted / servicepartner før booking.';
-					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">' + esc(guardMessage) + '</span>';
-					setProactiveServicepartnerHelp(guardMessage, '#b32d2e');
-					return;
+					var defaultBookingOption = bookingServicepartnerSelect && bookingServicepartnerSelect.options && bookingServicepartnerSelect.options.length > 1 ? bookingServicepartnerSelect.options[1] : null;
+					if (defaultBookingOption && defaultBookingOption.value) {
+						method.servicepartner = String(defaultBookingOption.value);
+						method.servicepartner_customer_number = defaultBookingOption.getAttribute('data-customer-number') || '';
+						method.servicepartner_selection_source = 'automatic';
+						method.servicepartner_user_selected = false;
+						bookingServicepartnerSelect.value = method.servicepartner;
+						syncServicepartnerSelectors(methodKey, method.servicepartner, 'proactive');
+						setProactiveServicepartnerHelp('Nærmeste servicepartner ble valgt automatisk.', '#125228');
+					}
 				}
 				if (proactiveVisibleForMethod && methodLikelyNeedsServicepartner(method) && proactiveOptionsCount <= 1 && !method.servicepartner) {
 					setProactiveServicepartnerHelp('Ingen servicepartnere tilgjengelige fra oppslaget. Booking kan fortsatt feile.', '#8a4b00');
@@ -1832,6 +1888,11 @@
 					latestEstimateResults = latestEstimateResults.map(function(row){
 						if (methodKeyForRow(row) === methodKey) {
 							row.selected_servicepartner = value;
+							row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(bookingServicepartnerSelect);
+							row.servicepartner_selection_source = value ? 'manual' : 'none';
+							row.servicepartner_user_selected = !!value;
+							row.servicepartner_auto_selected = false;
+							row.auto_selection_reason = value ? 'manual_selection_changed_by_user' : '';
 						}
 						return row;
 					});
@@ -1882,6 +1943,10 @@
 					if (methodKeyForRow(row) === methodKey) {
 						row.selected_servicepartner = select.value || '';
 						row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(select);
+						row.servicepartner_selection_source = select.value ? 'manual' : 'none';
+						row.servicepartner_user_selected = !!select.value;
+						row.servicepartner_auto_selected = false;
+						row.auto_selection_reason = select.value ? 'manual_selection_changed_by_user' : '';
 					}
 					return row;
 				});
@@ -1897,6 +1962,10 @@
 							if (methodKeyForRow(row) === methodKey) {
 								row.selected_servicepartner = value;
 								row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(select);
+								row.servicepartner_selection_source = value ? 'manual' : 'none';
+								row.servicepartner_user_selected = !!value;
+								row.servicepartner_auto_selected = false;
+								row.auto_selection_reason = value ? 'manual_selection_changed_by_user' : '';
 							}
 							return row;
 						});
