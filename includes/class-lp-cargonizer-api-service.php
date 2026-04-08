@@ -231,9 +231,32 @@ class LP_Cargonizer_Api_Service {
 
 				if (isset($product->services)) {
 					foreach ($product->services->children() as $service) {
+						$service_attributes = array();
+						if (isset($service->attributes)) {
+							foreach ($service->attributes->children() as $attribute_node) {
+								$attribute_values = array();
+								if (isset($attribute_node->values)) {
+									foreach ($attribute_node->values->children() as $value_node) {
+										$attribute_values[] = array(
+											'value' => trim((string) $value_node),
+											'description' => isset($value_node['description']) ? trim((string) $value_node['description']) : '',
+										);
+									}
+								}
+								$service_attributes[] = array(
+									'identifier' => $this->xml_value($attribute_node, array('identifier', 'id', 'name')),
+									'type' => $this->xml_value($attribute_node, array('type')),
+									'required' => $this->xml_value($attribute_node, array('required')),
+									'min' => $this->xml_value($attribute_node, array('min')),
+									'max' => $this->xml_value($attribute_node, array('max')),
+									'values' => $attribute_values,
+								);
+							}
+						}
 						$product_item['services'][] = array(
 							'service_id'   => $this->xml_value($service, array('id', 'identifier', 'service')),
 							'service_name' => $this->xml_value($service, array('name', 'title')),
+							'attributes' => $service_attributes,
 						);
 					}
 				}
@@ -581,6 +604,8 @@ class LP_Cargonizer_Api_Service {
 		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
+		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
+		$notify_email_to_consignee = !empty($payload['notify_email_to_consignee']);
 		$transfer = isset($options['transfer']) ? (bool) $options['transfer'] : true;
 		$booking_request = isset($options['booking_request']) ? (bool) $options['booking_request'] : false;
 
@@ -595,6 +620,7 @@ class LP_Cargonizer_Api_Service {
 		$consignment->addAttribute('estimate', 'false');
 		$consignment->addChild('transfer', $transfer ? 'true' : 'false');
 		$consignment->addChild('booking_request', $booking_request ? 'true' : 'false');
+		$consignment->addChild('email-notification-to-consignee', $notify_email_to_consignee ? 'true' : 'false');
 		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
 
 		$parts = $consignment->addChild('parts');
@@ -658,10 +684,24 @@ class LP_Cargonizer_Api_Service {
 			}
 		}
 
+		$all_service_ids = array();
+		foreach ($selected_service_ids as $selected_service_id) {
+			$clean_service_id = sanitize_text_field((string) $selected_service_id);
+			if ($clean_service_id !== '') {
+				$all_service_ids[] = $clean_service_id;
+			}
+		}
 		if ($use_sms_service && $sms_service_id !== '') {
+			$all_service_ids[] = $sms_service_id;
+		}
+		$all_service_ids = array_values(array_unique($all_service_ids));
+
+		if (!empty($all_service_ids)) {
 			$services_node = $consignment->addChild('services');
-			$service_node = $services_node->addChild('service');
-			$service_node->addAttribute('id', (string) $sms_service_id);
+			foreach ($all_service_ids as $service_id) {
+				$service_node = $services_node->addChild('service');
+				$service_node->addAttribute('id', (string) $service_id);
+			}
 		}
 
 		$references = $consignment->addChild('references');

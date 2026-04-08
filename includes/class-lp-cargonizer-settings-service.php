@@ -20,6 +20,7 @@ class LP_Cargonizer_Settings_Service {
 		$defaults = array(
 			'api_key'   => '',
 			'sender_id' => '',
+			'booking_email_notification_default' => 1,
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
@@ -46,6 +47,9 @@ class LP_Cargonizer_Settings_Service {
 		$output = array(
 			'api_key'   => isset($input['api_key']) ? sanitize_text_field($input['api_key']) : '',
 			'sender_id' => isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : '',
+			'booking_email_notification_default' => array_key_exists('booking_email_notification_default', $input)
+				? $this->sanitize_checkbox_value($input['booking_email_notification_default'])
+				: (isset($current['booking_email_notification_default']) ? $this->sanitize_checkbox_value($current['booking_email_notification_default']) : 1),
 			'available_methods' => array(),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
@@ -99,6 +103,7 @@ class LP_Cargonizer_Settings_Service {
 					$clean_method['services'][] = array(
 						'service_id' => $service_id,
 						'service_name' => $service_name,
+						'attributes' => $this->sanitize_service_attributes(isset($service['attributes']) && is_array($service['attributes']) ? $service['attributes'] : array()),
 					);
 				}
 			}
@@ -182,6 +187,57 @@ class LP_Cargonizer_Settings_Service {
 		}
 
 		return $output;
+	}
+
+	private function sanitize_service_attributes($attributes) {
+		$clean_attributes = array();
+		if (!is_array($attributes)) {
+			return $clean_attributes;
+		}
+
+		foreach ($attributes as $attribute) {
+			if (!is_array($attribute)) {
+				continue;
+			}
+
+			$identifier = isset($attribute['identifier']) ? sanitize_text_field((string) $attribute['identifier']) : '';
+			$type = isset($attribute['type']) ? sanitize_text_field((string) $attribute['type']) : '';
+			$required = isset($attribute['required']) ? sanitize_text_field((string) $attribute['required']) : '';
+			$min = isset($attribute['min']) ? sanitize_text_field((string) $attribute['min']) : '';
+			$max = isset($attribute['max']) ? sanitize_text_field((string) $attribute['max']) : '';
+
+			$clean_values = array();
+			$values = isset($attribute['values']) && is_array($attribute['values']) ? $attribute['values'] : array();
+			foreach ($values as $value_item) {
+				if (!is_array($value_item)) {
+					continue;
+				}
+				$value_value = isset($value_item['value']) ? sanitize_text_field((string) $value_item['value']) : '';
+				$value_description = isset($value_item['description']) ? sanitize_text_field((string) $value_item['description']) : '';
+				if ($value_value === '' && $value_description === '') {
+					continue;
+				}
+				$clean_values[] = array(
+					'value' => $value_value,
+					'description' => $value_description,
+				);
+			}
+
+			if ($identifier === '' && $type === '' && $required === '' && $min === '' && $max === '' && empty($clean_values)) {
+				continue;
+			}
+
+			$clean_attributes[] = array(
+				'identifier' => $identifier,
+				'type' => $type,
+				'required' => $required,
+				'min' => $min,
+				'max' => $max,
+				'values' => $clean_values,
+			);
+		}
+
+		return $clean_attributes;
 	}
 
 	public function sanitize_discount_percent($value) {

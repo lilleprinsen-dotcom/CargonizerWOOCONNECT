@@ -53,6 +53,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$script_version = file_exists($script_path) ? (string) filemtime($script_path) : '1.0.0';
 
 		wp_enqueue_script('lp-cargonizer-admin-estimate-modal', $script_url, array(), $script_version, true);
+		$settings = $this->get_settings();
 		wp_localize_script('lp-cargonizer-admin-estimate-modal', 'lpCargonizerEstimateModalConfig', array(
 			'nonces' => array(
 				'orderData' => wp_create_nonce(self::NONCE_ACTION_ORDER_DATA),
@@ -63,6 +64,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'servicepartners' => wp_create_nonce(self::NONCE_ACTION_SERVICEPARTNERS),
 				'book' => wp_create_nonce(self::NONCE_ACTION_BOOK),
 				'printers' => wp_create_nonce(self::NONCE_ACTION_PRINTERS),
+			),
+			'bookingDefaults' => array(
+				'notifyEmailToConsignee' => isset($settings['booking_email_notification_default']) ? (int) $this->sanitize_checkbox_value($settings['booking_email_notification_default']) : 1,
 			),
 		));
 	}
@@ -132,6 +136,19 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</label>
 						<div id="lp-cargonizer-booking-printer-help" style="margin-top:6px;color:#646970;"></div>
 					</div>
+					<div id="lp-cargonizer-booking-notify-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<label style="display:flex;gap:6px;align-items:center;">
+							<input type="checkbox" id="lp-cargonizer-booking-notify-email">
+							<span>Notify customer by e-mail via Cargonizer</span>
+						</label>
+						<div style="margin-top:6px;color:#646970;">Sender track &amp; trace-link til mottaker når sendingen er overført til transportør.</div>
+					</div>
+					<div id="lp-cargonizer-booking-services-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<h3 style="margin:0 0 8px 0;">Tjenester</h3>
+						<div style="margin-bottom:8px;color:#646970;">Valgfrie tilleggstjenester for valgt fraktmetode.</div>
+						<select id="lp-cargonizer-booking-services-choice" multiple size="6" style="width:100%;max-width:520px;"></select>
+						<div id="lp-cargonizer-booking-services-help" style="margin-top:6px;color:#646970;"></div>
+					</div>
 					<div id="lp-cargonizer-booking-results" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
 						<h3 style="margin:0 0 8px 0;">Booking result</h3>
 						<div id="lp-cargonizer-booking-results-content" style="color:#646970;">Ingen booking kjørt enda.</div>
@@ -174,6 +191,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$new_settings = array(
 				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
+				'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => is_array($posted_enabled_methods)
 					? $posted_enabled_methods
@@ -292,6 +310,23 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<p class="description">
 										Brukes som header: <code>X-Cargonizer-Sender</code>
 									</p>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+
+					<h2>Booking defaults</h2>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<tr>
+								<th scope="row">Standardvalg</th>
+								<td>
+									<label style="display:flex;align-items:center;gap:6px;">
+										<input type="hidden" name="lp_cargonizer_booking_email_notification_default" value="0">
+										<input type="checkbox" name="lp_cargonizer_booking_email_notification_default" value="1" <?php checked(!empty($settings['booking_email_notification_default'])); ?>>
+										<span>Notify customer by e-mail from Cargonizer by default</span>
+									</label>
+									<p class="description">Bruker Cargonizers e-postvarsling til mottaker når sendingen overføres til transportør.</p>
 								</td>
 							</tr>
 						</tbody>
