@@ -105,6 +105,53 @@ class LP_Cargonizer_Api_Service {
 		}
 	}
 
+	public function fetch_printers() {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'message' => '',
+			'raw' => '',
+			'printers' => array(),
+		);
+
+		try {
+			$url = 'https://api.cargonizer.no/printers.xml';
+			$headers = $this->get_auth_headers();
+			if (isset($headers['X-Cargonizer-Sender'])) {
+				unset($headers['X-Cargonizer-Sender']);
+			}
+			$headers['Accept'] = 'application/xml';
+
+			$response = wp_remote_get($url, array(
+				'timeout' => 30,
+				'headers' => $headers,
+			));
+
+			if (is_wp_error($response)) {
+				$result['message'] = 'WP Error: ' . $response->get_error_message();
+				return $result;
+			}
+
+			$result['http_status'] = wp_remote_retrieve_response_code($response);
+			$result['raw'] = wp_remote_retrieve_body($response);
+
+			if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+				$result['message'] = 'Ugyldig respons fra Cargonizer. HTTP-status: ' . $result['http_status'];
+				return $result;
+			}
+
+			if ($result['raw'] === '') {
+				$result['message'] = 'Tom respons fra Cargonizer.';
+				return $result;
+			}
+
+			return $this->parse_printers_response($result['raw'], $result['http_status']);
+		} catch (Throwable $exception) {
+			$result['message'] = 'Uventet feil ved henting av printere: ' . $exception->getMessage();
+			return $result;
+		}
+	}
+
 	public function parse_transport_agreements($xml) {
 		$result = array();
 		$agreements = array();
@@ -207,6 +254,79 @@ class LP_Cargonizer_Api_Service {
 			}
 		}
 		return '';
+	}
+
+	public function parse_printers_response($body, $http_status = 200) {
+		$result = array(
+			'success' => false,
+			'http_status' => (int) $http_status,
+			'message' => '',
+			'raw' => (string) $body,
+			'printers' => array(),
+		);
+
+		if (empty($body)) {
+			$result['message'] = 'Tom respons fra printer-endepunktet.';
+			return $result;
+		}
+
+		$xml = $this->safe_simplexml_load_string($body);
+		if ($xml === false) {
+			$error_messages = $this->collect_libxml_error_messages();
+			$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
+			$result['message'] = 'Kunne ikke parse printer-XML: ' . $error_suffix;
+			return $result;
+		}
+
+		$candidate_nodes = array();
+		$paths = array('//printer', '//printers/printer');
+		foreach ($paths as $path) {
+			$found = $xml->xpath($path);
+			if (!empty($found)) {
+				$candidate_nodes = $found;
+				break;
+			}
+		}
+
+		if (empty($candidate_nodes)) {
+			if (isset($xml->printer)) {
+				foreach ($xml->printer as $printer) {
+					$candidate_nodes[] = $printer;
+				}
+			}
+		}
+
+		$printers = array();
+		foreach ($candidate_nodes as $node) {
+			$id = $this->xml_value($node, array('id', 'printer_id', 'identifier', 'number', 'code', 'value'));
+			if ($id === '' && isset($node['id'])) {
+				$id = trim((string) $node['id']);
+			}
+			if ($id === '') {
+				continue;
+			}
+
+			$label = $this->xml_value($node, array('name', 'title', 'description'));
+			if ($label === '') {
+				$label = $id;
+			}
+
+			$printers[] = array(
+				'id' => (string) $id,
+				'label' => (string) $label,
+			);
+		}
+
+		if (empty($printers)) {
+			$result['message'] = 'Fant ingen printere i XML-responsen.';
+			return $result;
+		}
+
+		$result['success'] = true;
+		$result['message'] = 'Printere hentet.';
+		$result['printers'] = $printers;
+
+		return $result;
 	}
 
 	public function fetch_servicepartner_options($method) {
