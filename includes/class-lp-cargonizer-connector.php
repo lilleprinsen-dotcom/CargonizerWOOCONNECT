@@ -50,6 +50,7 @@ class LP_Cargonizer_Connector {
 	public function register_hooks() {
 		add_action('admin_menu', array($this, 'add_admin_menu'), 99);
 		add_action('admin_init', array($this, 'register_settings'));
+		add_action('admin_enqueue_scripts', array($this, 'enqueue_estimate_modal_assets'));
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_estimate_button'));
 		add_action('admin_footer', array($this, 'render_estimate_modal'));
 		add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', array($this, 'ajax_get_order_estimate_data'));
