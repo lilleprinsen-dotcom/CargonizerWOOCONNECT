@@ -574,6 +574,246 @@ class LP_Cargonizer_Api_Service {
 		return $xml->asXML();
 	}
 
+	public function build_booking_consignment_xml($payload, $method, $options = array()) {
+		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
+		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
+		$order_number = isset($payload['order_number']) ? sanitize_text_field((string) $payload['order_number']) : '';
+		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
+		$use_sms_service = !empty($payload['use_sms_service']);
+		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
+		$transfer = isset($options['transfer']) ? (bool) $options['transfer'] : true;
+		$booking_request = isset($options['booking_request']) ? (bool) $options['booking_request'] : false;
+
+		if (!class_exists('SimpleXMLElement')) {
+			return '';
+		}
+
+		$xml = new SimpleXMLElement('<consignments/>');
+		$consignment = $xml->addChild('consignment');
+		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
+		$consignment->addAttribute('print', 'false');
+		$consignment->addAttribute('estimate', 'false');
+		$consignment->addChild('transfer', $transfer ? 'true' : 'false');
+		$consignment->addChild('booking_request', $booking_request ? 'true' : 'false');
+		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
+
+		$parts = $consignment->addChild('parts');
+		$consignee = $parts->addChild('consignee');
+		$consignee->addChild('name', (string) (isset($recipient['name']) ? $recipient['name'] : ''));
+		$consignee->addChild('address1', (string) (isset($recipient['address_1']) ? $recipient['address_1'] : ''));
+		$consignee->addChild('address2', (string) (isset($recipient['address_2']) ? $recipient['address_2'] : ''));
+		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
+		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
+		$consignee->addChild('country', (string) (isset($recipient['country']) ? $recipient['country'] : ''));
+
+		$email = isset($recipient['email']) ? trim((string) $recipient['email']) : '';
+		if ($email !== '') {
+			$consignee->addChild('email', $email);
+		}
+
+		$mobile = isset($recipient['phone']) ? trim((string) $recipient['phone']) : '';
+		if ($mobile === '' && isset($recipient['mobile'])) {
+			$mobile = trim((string) $recipient['mobile']);
+		}
+		if ($mobile !== '') {
+			$consignee->addChild('mobile', $mobile);
+		}
+
+		if ($servicepartner !== '') {
+			$service_partner = $parts->addChild('service_partner');
+			$service_partner->addChild('number', (string) $servicepartner);
+		}
+
+		$items = $consignment->addChild('items');
+		if (empty($packages)) {
+			$packages[] = array();
+		}
+
+		foreach ($packages as $package) {
+			$weight = isset($package['weight']) ? (float) $package['weight'] : 0;
+			$length_cm = isset($package['length']) ? (float) $package['length'] : 0;
+			$width_cm = isset($package['width']) ? (float) $package['width'] : 0;
+			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
+			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
+			$description = isset($package['description']) ? trim((string) $package['description']) : '';
+			$length_xml = $this->normalize_positive_decimal_for_xml(isset($package['length']) ? $package['length'] : null);
+			$width_xml = $this->normalize_positive_decimal_for_xml(isset($package['width']) ? $package['width'] : null);
+			$height_xml = $this->normalize_positive_decimal_for_xml(isset($package['height']) ? $package['height'] : null);
+
+			$item = $items->addChild('item');
+			$item->addAttribute('type', 'package');
+			$item->addAttribute('amount', '1');
+			$item->addAttribute('weight', (string) max(0, $weight));
+			$item->addAttribute('volume', (string) max(0, $volume_dm3));
+			$item->addAttribute('description', (string) $description);
+
+			if ($length_xml !== '') {
+				$item->addAttribute('length', $length_xml);
+			}
+			if ($width_xml !== '') {
+				$item->addAttribute('width', $width_xml);
+			}
+			if ($height_xml !== '') {
+				$item->addAttribute('height', $height_xml);
+			}
+		}
+
+		if ($use_sms_service && $sms_service_id !== '') {
+			$services_node = $consignment->addChild('services');
+			$service_node = $services_node->addChild('service');
+			$service_node->addAttribute('id', (string) $sms_service_id);
+		}
+
+		$references = $consignment->addChild('references');
+		$references->addChild('consignor', (string) $order_number);
+
+		return $xml->asXML();
+	}
+
+	public function create_booking_consignment($xml) {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error' => '',
+			'error_code' => '',
+			'error_type' => '',
+			'error_details' => '',
+			'parsed_error_message' => '',
+			'raw_response' => '',
+			'consignment_number' => '',
+			'consignment_id' => '',
+			'piece_numbers' => array(),
+			'piece_ids' => array(),
+			'tracking_url' => '',
+			'consignment_pdf_url' => '',
+			'waybill_pdf_url' => '',
+			'net_cost' => '',
+			'gross_cost' => '',
+		);
+
+		$response = wp_remote_post('https://api.cargonizer.no/consignments.xml', array(
+			'timeout' => 40,
+			'headers' => array_merge($this->get_auth_headers(), array(
+				'Accept' => 'application/xml',
+				'Content-Type' => 'application/xml',
+			)),
+			'body' => (string) $xml,
+		));
+
+		if (is_wp_error($response)) {
+			$result['error'] = $response->get_error_message();
+			$result['parsed_error_message'] = $result['error'];
+			return $result;
+		}
+
+		$status = wp_remote_retrieve_response_code($response);
+		$body = wp_remote_retrieve_body($response);
+		$parsed = $this->parse_booking_consignment_response($body);
+		$parsed['http_status'] = $status;
+		$parsed['raw_response'] = $body;
+
+		if ($status < 200 || $status >= 300) {
+			$details = $this->parse_response_error_details($body);
+			$parsed['success'] = false;
+			$parsed['error'] = 'HTTP ' . $status;
+			$parsed['error_code'] = $details['code'];
+			$parsed['error_type'] = $details['type'];
+			$parsed['error_details'] = $details['details'];
+			$parsed['parsed_error_message'] = $details['message'];
+			if ($parsed['parsed_error_message'] !== '') {
+				$parsed['error'] .= ': ' . $parsed['parsed_error_message'];
+			}
+		}
+
+		return $parsed;
+	}
+
+	public function parse_booking_consignment_response($body) {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error' => '',
+			'error_code' => '',
+			'error_type' => '',
+			'error_details' => '',
+			'parsed_error_message' => '',
+			'raw_response' => (string) $body,
+			'consignment_number' => '',
+			'consignment_id' => '',
+			'piece_numbers' => array(),
+			'piece_ids' => array(),
+			'tracking_url' => '',
+			'consignment_pdf_url' => '',
+			'waybill_pdf_url' => '',
+			'net_cost' => '',
+			'gross_cost' => '',
+		);
+
+		if (empty($body)) {
+			$result['error'] = 'Tom respons fra booking-endepunktet.';
+			$result['parsed_error_message'] = $result['error'];
+			return $result;
+		}
+
+		$xml = $this->safe_simplexml_load_string($body);
+		if ($xml === false) {
+			$error_messages = $this->collect_libxml_error_messages();
+			$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
+			$result['error'] = 'Kunne ikke parse booking-respons: ' . $error_suffix;
+			$result['parsed_error_message'] = $result['error'];
+			return $result;
+		}
+
+		$consignment_nodes = $xml->xpath('//consignment');
+		$consignment = !empty($consignment_nodes) ? $consignment_nodes[0] : null;
+		if (!$consignment) {
+			$details = $this->parse_response_error_details($body);
+			$result['error_code'] = $details['code'];
+			$result['error_type'] = $details['type'];
+			$result['error_details'] = $details['details'];
+			$result['parsed_error_message'] = $details['message'];
+			$result['error'] = $result['parsed_error_message'] !== '' ? $result['parsed_error_message'] : 'Fant ingen consignment i responsen.';
+			return $result;
+		}
+
+		$result['consignment_number'] = $this->xml_value($consignment, array('number-with-checksum'));
+		$result['consignment_id'] = $this->xml_value($consignment, array('id', 'consignment_id', 'identifier'));
+		$result['tracking_url'] = $this->xml_value($consignment, array('tracking-url', 'tracking_url'));
+		$result['consignment_pdf_url'] = $this->xml_value($consignment, array('consignment-pdf', 'consignment_pdf'));
+		$result['waybill_pdf_url'] = $this->xml_value($consignment, array('waybill-pdf', 'waybill_pdf'));
+
+		if (isset($consignment->{'cost-estimate'})) {
+			$result['net_cost'] = $this->xml_value($consignment->{'cost-estimate'}, array('net', 'net-amount'));
+			$result['gross_cost'] = $this->xml_value($consignment->{'cost-estimate'}, array('gross', 'gross-amount'));
+		}
+
+		$piece_number_nodes = $consignment->xpath('./bundles//pieces/number-with-checksum');
+		if (!empty($piece_number_nodes)) {
+			foreach ($piece_number_nodes as $piece_number_node) {
+				$value = trim((string) $piece_number_node);
+				if ($value !== '') {
+					$result['piece_numbers'][] = $value;
+				}
+			}
+		}
+
+		$piece_id_nodes = $consignment->xpath('./bundles//pieces/id');
+		if (!empty($piece_id_nodes)) {
+			foreach ($piece_id_nodes as $piece_id_node) {
+				$value = trim((string) $piece_id_node);
+				if ($value !== '') {
+					$result['piece_ids'][] = $value;
+				}
+			}
+		}
+
+		$result['piece_numbers'] = array_values(array_unique($result['piece_numbers']));
+		$result['piece_ids'] = array_values(array_unique($result['piece_ids']));
+		$result['success'] = true;
+
+		return $result;
+	}
+
 	public function normalize_positive_decimal_for_xml($value) {
 		if (is_string($value)) {
 			$value = str_replace(',', '.', $value);
