@@ -262,7 +262,10 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		$options = array();
-		$nodes = $xml->xpath('//servicepartner') ?: array();
+		$nodes = $xml->xpath('//service_partner') ?: array();
+		if (empty($nodes)) {
+			$nodes = $xml->xpath('//servicepartner') ?: array();
+		}
 		foreach ($nodes as $node) {
 			$value = trim((string) $this->xml_value($node, array('id', 'code', 'number', 'value')));
 			$label = trim((string) $this->xml_value($node, array('name', 'title', 'description', 'display_name')));
@@ -359,8 +362,6 @@ class LP_Cargonizer_Api_Service {
 		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
-		$package_count = count($packages);
-
 		if (!class_exists('SimpleXMLElement')) {
 			return '';
 		}
@@ -369,14 +370,11 @@ class LP_Cargonizer_Api_Service {
 		$consignment = $xml->addChild('consignment');
 		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
 		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
-		if ($servicepartner !== '') {
-			$consignment->addChild('servicepartner', (string) $servicepartner);
-		}
 		if ($use_sms_service && $sms_service_id !== '') {
 			$services_node = $consignment->addChild('services');
-			$services_node->addChild('service', (string) $sms_service_id);
+			$service_node = $services_node->addChild('service');
+			$service_node->addAttribute('id', (string) $sms_service_id);
 		}
-		$consignment->addChild('number_of_packages', (string) max(1, $package_count));
 
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
@@ -386,6 +384,10 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
 		$consignee->addChild('country', (string) (isset($recipient['country']) ? $recipient['country'] : ''));
+		if ($servicepartner !== '') {
+			$service_partner = $parts->addChild('service_partner');
+			$service_partner->addChild('number', (string) $servicepartner);
+		}
 
 		$items = $consignment->addChild('items');
 		if (empty($packages)) {
@@ -406,17 +408,17 @@ class LP_Cargonizer_Api_Service {
 			$item = $items->addChild('item');
 			$item->addAttribute('type', 'package');
 			$item->addAttribute('amount', '1');
-			$item->addChild('description', (string) $description);
-			$item->addChild('weight', (string) max(0, $weight));
-			$item->addChild('volume', (string) max(0, $volume_dm3));
+			$item->addAttribute('description', (string) $description);
+			$item->addAttribute('weight', (string) max(0, $weight));
+			$item->addAttribute('volume', (string) max(0, $volume_dm3));
 			if ($length_xml !== '') {
-				$item->addChild('length', $length_xml);
+				$item->addAttribute('length', $length_xml);
 			}
 			if ($width_xml !== '') {
-				$item->addChild('width', $width_xml);
+				$item->addAttribute('width', $width_xml);
 			}
 			if ($height_xml !== '') {
-				$item->addChild('height', $height_xml);
+				$item->addAttribute('height', $height_xml);
 			}
 
 			$this->log_estimate_package_dimensions(array(
