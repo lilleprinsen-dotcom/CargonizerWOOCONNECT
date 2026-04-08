@@ -384,102 +384,182 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Prismodellen per metode bruker valgt prisfelt, rabatt, drivstofftillegg, bomtillegg, håndteringstillegg, mva og avrunding.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
-						<div style="max-height:260px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
-							<?php foreach ($settings['available_methods'] as $method) : ?>
+						<?php
+						$method_groups = array();
+						foreach ($settings['available_methods'] as $method) {
+							$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
+							$agreement_id = isset($method['agreement_id']) ? trim((string) $method['agreement_id']) : '';
+							$agreement_name = isset($method['agreement_name']) ? trim((string) $method['agreement_name']) : '';
+							if ($is_manual_norgespakke_method) {
+								$group_key = 'manual_norgespakke';
+							} elseif ($agreement_id !== '') {
+								$group_key = 'agreement_id:' . $agreement_id;
+							} elseif ($agreement_name !== '') {
+								$group_key = 'agreement_name:' . $agreement_name;
+							} else {
+								$group_key = 'agreement_unknown';
+							}
+							if (!isset($method_groups[$group_key])) {
+								$agreement_description = isset($method['agreement_description']) ? trim((string) $method['agreement_description']) : '';
+								$label = $agreement_description !== '' ? $agreement_description : ($agreement_name !== '' ? $agreement_name : 'Ukjent fraktavtale');
+								if ($is_manual_norgespakke_method) {
+									$label = 'Manuell Norgespakke';
+								}
+								$method_groups[$group_key] = array(
+									'group_key' => $group_key,
+									'label' => $label,
+									'agreement_number' => isset($method['agreement_number']) ? trim((string) $method['agreement_number']) : '',
+									'carriers' => array(),
+									'methods' => array(),
+								);
+							}
+							$carrier_name = isset($method['carrier_name']) ? trim((string) $method['carrier_name']) : '';
+							if ($carrier_name !== '') {
+								$method_groups[$group_key]['carriers'][$carrier_name] = true;
+							}
+							$method_groups[$group_key]['methods'][] = $method;
+						}
+						?>
+						<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
+							<button type="button" class="button button-small lp-cargonizer-open-all-method-groups">Åpne alle avtaler</button>
+							<button type="button" class="button button-small lp-cargonizer-close-all-method-groups">Lukk alle avtaler</button>
+						</div>
+						<div class="lp-cargonizer-methods-groups" style="max-height:520px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
+							<?php foreach ($method_groups as $group) : ?>
 								<?php
-								$method_key = isset($method['key']) ? (string) $method['key'] : '';
-								$is_enabled = in_array($method_key, $settings['enabled_methods'], true);
-								$method_discounts = isset($settings['method_discounts']) && is_array($settings['method_discounts']) ? $settings['method_discounts'] : array();
-										$method_pricing = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
-										$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : array();
-										$discount_value = isset($pricing['discount_percent']) ? $this->sanitize_discount_percent($pricing['discount_percent']) : (isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0);
-										$price_source = $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated');
-										$fuel_percent = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
-										$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
-										$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
-										$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
-										$rounding_mode = $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none');
-										$delivery_to_pickup_point = isset($pricing['delivery_to_pickup_point']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_pickup_point']) : false;
-										$delivery_to_home = isset($pricing['delivery_to_home']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_home']) : true;
-										$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
-										$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
+								$total_count = count($group['methods']);
+								$enabled_count = 0;
+								foreach ($group['methods'] as $method) {
+									$method_key = isset($method['key']) ? (string) $method['key'] : '';
+									if ($method_key !== '' && in_array($method_key, $settings['enabled_methods'], true)) {
+										$enabled_count++;
+									}
+								}
+								$group_open = $enabled_count > 0;
+								$carrier_names = array_keys($group['carriers']);
+								$carrier_label = '';
+								if (count($carrier_names) === 1) {
+									$carrier_label = $carrier_names[0];
+								} elseif (count($carrier_names) > 1) {
+									$carrier_label = 'flere transportører';
+								}
+								$summary_label = $group['label'] . ' (' . $enabled_count . '/' . $total_count . ' aktive)';
 								?>
-								<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
-									<input class="lp-cargonizer-method-toggle" type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked($is_enabled); ?>>
-									<span style="flex:1;">
-										<strong><?php echo esc_html(isset($method['label']) ? $method['label'] : 'Ukjent metode'); ?></strong><br>
-										<small>
-											Transportør: <?php echo esc_html(isset($method['carrier_name']) && $method['carrier_name'] !== '' ? $method['carrier_name'] : '—'); ?><?php echo esc_html(isset($method['carrier_id']) && $method['carrier_id'] !== '' ? ' (' . $method['carrier_id'] . ')' : ''); ?> /
-											Fraktavtalebeskrivelse: <?php echo esc_html(isset($method['agreement_description']) && $method['agreement_description'] !== '' ? $method['agreement_description'] : (isset($method['agreement_name']) ? $method['agreement_name'] : '—')); ?> /
-											Fraktavtalenummer: <?php echo esc_html(isset($method['agreement_number']) && $method['agreement_number'] !== '' ? $method['agreement_number'] : '—'); ?> /
-											Agreement ID: <?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?> /
-											Produkt: <?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?>
+								<details class="lp-cargonizer-method-group" <?php echo $group_open ? 'open' : ''; ?> style="border:1px solid #dcdcde;border-radius:4px;background:#fff;margin-bottom:12px;">
+									<summary style="cursor:pointer;padding:10px 12px;background:#f6f7f7;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+										<span><strong><?php echo esc_html($summary_label); ?></strong></span>
+										<small style="color:#646970;">
+											<?php if ($group['agreement_number'] !== '') : ?>
+												<?php echo esc_html('Avtalenummer: ' . $group['agreement_number']); ?><?php echo esc_html($carrier_label !== '' ? ' / ' : ''); ?>
+											<?php endif; ?>
+											<?php if ($carrier_label !== '') : ?>
+												<?php echo esc_html('Transportør: ' . $carrier_label); ?>
+											<?php endif; ?>
 										</small>
-									</span>
-									<div style="display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px;align-items:end;min-width:760px;">
-									<label style="display:flex;flex-direction:column;gap:4px;">
-									<span>Prisfelt brukt</span><small style="color:#646970;">Hvilken pris fra Cargonizer som brukes som listepris/grunnlag for beregning.</small>
-										<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
-											<option value="estimated" <?php selected($price_source, 'estimated'); ?>>Estimert</option>
-											<option value="net" <?php selected($price_source, 'net'); ?>>Netto</option>
-											<option value="gross" <?php selected($price_source, 'gross'); ?>>Brutto</option>
-											<option value="fallback" <?php selected($price_source, 'fallback'); ?>>Automatisk fallback</option>
-										<option value="manual_norgespakke" <?php selected($price_source, 'manual_norgespakke'); ?>>Manuell Norgespakke</option>
-										</select>
-									</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-										<span>Rabatt (%)</span><small style="color:#646970;">Rabatt trekkes kun fra listepris/grunnlag, ikke tillegg.</small>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Drivstofftillegg (%)</span><small style="color:#646970;">Prosent av utledet grunnfrakt (brukes baklengs mot listepris).</small>
-													<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_percent); ?>" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Bomtillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_surcharge]" value="<?php echo esc_attr($toll_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Håndteringstillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][handling_fee]" value="<?php echo esc_attr($handling_fee); ?>" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<?php if ($is_manual_norgespakke_method) : ?>
-											<label style="display:flex;flex-direction:column;gap:4px;">
-												<span>Ta hensyn til håndteringstillegg</span><small style="color:#646970;">Gjelder kun manuell Norgespakke.</small>
-												<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][manual_norgespakke_include_handling]" value="0" <?php disabled(!$is_enabled); ?>>
-												<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][manual_norgespakke_include_handling]" value="1" <?php checked($include_manual_norgespakke_handling); ?> <?php disabled(!$is_enabled); ?>>
-											</label>
-										<?php endif; ?>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>MVA (%)</span><small style="color:#646970;">Legges på etter rabatt og tillegg.</small>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][vat_percent]" value="<?php echo esc_attr($vat_percent); ?>" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Avrunding</span><small style="color:#646970;">Hvordan sluttprisen avrundes.</small>
-											<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][rounding_mode]" <?php disabled(!$is_enabled); ?>>
-												<option value="none" <?php selected($rounding_mode, 'none'); ?>>Ingen avrunding</option>
-												<option value="nearest_1" <?php selected($rounding_mode, 'nearest_1'); ?>>Nærmeste 1 kr</option>
-												<option value="nearest_10" <?php selected($rounding_mode, 'nearest_10'); ?>>Nærmeste 10 kr</option>
-												<option value="price_ending_9" <?php selected($rounding_mode, 'price_ending_9'); ?>>Slutt på 9</option>
-											</select>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Leveringstype</span><small style="color:#646970;">Velg hvor denne tjenesten leverer til.</small>
-											<span style="display:flex;gap:10px;flex-wrap:wrap;">
-												<label style="display:flex;align-items:center;gap:5px;">
-													<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_pickup_point]" value="0" <?php disabled(!$is_enabled); ?>>
-													<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_pickup_point]" value="1" <?php checked($delivery_to_pickup_point); ?> <?php disabled(!$is_enabled); ?>>
-													<span>HENTESTED</span>
-												</label>
-												<label style="display:flex;align-items:center;gap:5px;">
-													<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_home]" value="0" <?php disabled(!$is_enabled); ?>>
-													<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_home]" value="1" <?php checked($delivery_to_home); ?> <?php disabled(!$is_enabled); ?>>
-													<span>HJEMLEVERING</span>
-												</label>
-											</span>
-										</label>
+									</summary>
+									<div style="padding:10px 12px;">
+										<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
+											<button type="button" class="button button-small lp-cargonizer-select-group">Velg alle i avtalen</button>
+											<button type="button" class="button button-small lp-cargonizer-clear-group">Fjern alle i avtalen</button>
+										</div>
+										<?php foreach ($group['methods'] as $method) : ?>
+											<?php
+											$method_key = isset($method['key']) ? (string) $method['key'] : '';
+											$is_enabled = in_array($method_key, $settings['enabled_methods'], true);
+											$method_discounts = isset($settings['method_discounts']) && is_array($settings['method_discounts']) ? $settings['method_discounts'] : array();
+											$method_pricing = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
+											$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : array();
+											$discount_value = isset($pricing['discount_percent']) ? $this->sanitize_discount_percent($pricing['discount_percent']) : (isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0);
+											$price_source = $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated');
+											$fuel_percent = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
+											$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
+											$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
+											$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
+											$rounding_mode = $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none');
+											$delivery_to_pickup_point = isset($pricing['delivery_to_pickup_point']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_pickup_point']) : false;
+											$delivery_to_home = isset($pricing['delivery_to_home']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_home']) : true;
+											$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
+											$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
+											?>
+											<div class="lp-cargonizer-method-row" style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-top:1px solid #f0f0f1;">
+												<input class="lp-cargonizer-method-toggle" type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked($is_enabled); ?>>
+												<span style="flex:1;">
+													<strong><?php echo esc_html(isset($method['label']) ? $method['label'] : 'Ukjent metode'); ?></strong><br>
+													<small>
+														Transportør: <?php echo esc_html(isset($method['carrier_name']) && $method['carrier_name'] !== '' ? $method['carrier_name'] : '—'); ?><?php echo esc_html(isset($method['carrier_id']) && $method['carrier_id'] !== '' ? ' (' . $method['carrier_id'] . ')' : ''); ?> /
+														Fraktavtalebeskrivelse: <?php echo esc_html(isset($method['agreement_description']) && $method['agreement_description'] !== '' ? $method['agreement_description'] : (isset($method['agreement_name']) ? $method['agreement_name'] : '—')); ?> /
+														Fraktavtalenummer: <?php echo esc_html(isset($method['agreement_number']) && $method['agreement_number'] !== '' ? $method['agreement_number'] : '—'); ?> /
+														Agreement ID: <?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?> /
+														Produkt: <?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?>
+													</small>
+												</span>
+												<div style="display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px;align-items:end;min-width:760px;">
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Prisfelt brukt</span><small style="color:#646970;">Hvilken pris fra Cargonizer som brukes som listepris/grunnlag for beregning.</small>
+														<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
+															<option value="estimated" <?php selected($price_source, 'estimated'); ?>>Estimert</option>
+															<option value="net" <?php selected($price_source, 'net'); ?>>Netto</option>
+															<option value="gross" <?php selected($price_source, 'gross'); ?>>Brutto</option>
+															<option value="fallback" <?php selected($price_source, 'fallback'); ?>>Automatisk fallback</option>
+															<option value="manual_norgespakke" <?php selected($price_source, 'manual_norgespakke'); ?>>Manuell Norgespakke</option>
+														</select>
+													</label>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Rabatt (%)</span><small style="color:#646970;">Rabatt trekkes kun fra listepris/grunnlag, ikke tillegg.</small>
+														<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
+													</label>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Drivstofftillegg (%)</span><small style="color:#646970;">Prosent av utledet grunnfrakt (brukes baklengs mot listepris).</small>
+														<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_percent); ?>" <?php disabled(!$is_enabled); ?>>
+													</label>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Bomtillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
+														<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_surcharge]" value="<?php echo esc_attr($toll_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
+													</label>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Håndteringstillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
+														<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][handling_fee]" value="<?php echo esc_attr($handling_fee); ?>" <?php disabled(!$is_enabled); ?>>
+													</label>
+													<?php if ($is_manual_norgespakke_method) : ?>
+														<label style="display:flex;flex-direction:column;gap:4px;">
+															<span>Ta hensyn til håndteringstillegg</span><small style="color:#646970;">Gjelder kun manuell Norgespakke.</small>
+															<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][manual_norgespakke_include_handling]" value="0" <?php disabled(!$is_enabled); ?>>
+															<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][manual_norgespakke_include_handling]" value="1" <?php checked($include_manual_norgespakke_handling); ?> <?php disabled(!$is_enabled); ?>>
+														</label>
+													<?php endif; ?>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>MVA (%)</span><small style="color:#646970;">Legges på etter rabatt og tillegg.</small>
+														<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][vat_percent]" value="<?php echo esc_attr($vat_percent); ?>" <?php disabled(!$is_enabled); ?>>
+													</label>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Avrunding</span><small style="color:#646970;">Hvordan sluttprisen avrundes.</small>
+														<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][rounding_mode]" <?php disabled(!$is_enabled); ?>>
+															<option value="none" <?php selected($rounding_mode, 'none'); ?>>Ingen avrunding</option>
+															<option value="nearest_1" <?php selected($rounding_mode, 'nearest_1'); ?>>Nærmeste 1 kr</option>
+															<option value="nearest_10" <?php selected($rounding_mode, 'nearest_10'); ?>>Nærmeste 10 kr</option>
+															<option value="price_ending_9" <?php selected($rounding_mode, 'price_ending_9'); ?>>Slutt på 9</option>
+														</select>
+													</label>
+													<label style="display:flex;flex-direction:column;gap:4px;">
+														<span>Leveringstype</span><small style="color:#646970;">Velg hvor denne tjenesten leverer til.</small>
+														<span style="display:flex;gap:10px;flex-wrap:wrap;">
+															<label style="display:flex;align-items:center;gap:5px;">
+																<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_pickup_point]" value="0" <?php disabled(!$is_enabled); ?>>
+																<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_pickup_point]" value="1" <?php checked($delivery_to_pickup_point); ?> <?php disabled(!$is_enabled); ?>>
+																<span>HENTESTED</span>
+															</label>
+															<label style="display:flex;align-items:center;gap:5px;">
+																<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_home]" value="0" <?php disabled(!$is_enabled); ?>>
+																<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_home]" value="1" <?php checked($delivery_to_home); ?> <?php disabled(!$is_enabled); ?>>
+																<span>HJEMLEVERING</span>
+															</label>
+														</span>
+													</label>
+												</div>
+											</div>
+										<?php endforeach; ?>
 									</div>
-								</div>
+								</details>
 							<?php endforeach; ?>
 						</div>
 					<?php else : ?>
@@ -487,10 +567,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<?php endif; ?>
 					<script>
 					(function(){
-						var container = document.currentScript ? document.currentScript.previousElementSibling : null;
+						var scriptTag = document.currentScript;
+						var parentForm = scriptTag ? scriptTag.closest('form') : null;
+						var container = parentForm ? parentForm.querySelector('.lp-cargonizer-methods-groups') : null;
 						if (!container) { return; }
 						container.querySelectorAll('.lp-cargonizer-method-toggle').forEach(function(toggle){
-							var row = toggle.closest('div');
+							var row = toggle.closest('.lp-cargonizer-method-row');
 							if (!row) { return; }
 							var pricingInputs = row.querySelectorAll('.lp-cargonizer-method-input');
 							var sync = function(){
@@ -499,6 +581,49 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							toggle.addEventListener('change', sync);
 							sync();
 						});
+
+						container.querySelectorAll('.lp-cargonizer-select-group').forEach(function(button){
+							button.addEventListener('click', function(){
+								var group = button.closest('.lp-cargonizer-method-group');
+								if (!group) { return; }
+								group.querySelectorAll('.lp-cargonizer-method-toggle').forEach(function(toggle){
+									if (!toggle.checked) {
+										toggle.checked = true;
+										toggle.dispatchEvent(new Event('change', { bubbles: true }));
+									}
+								});
+							});
+						});
+
+						container.querySelectorAll('.lp-cargonizer-clear-group').forEach(function(button){
+							button.addEventListener('click', function(){
+								var group = button.closest('.lp-cargonizer-method-group');
+								if (!group) { return; }
+								group.querySelectorAll('.lp-cargonizer-method-toggle').forEach(function(toggle){
+									if (toggle.checked) {
+										toggle.checked = false;
+										toggle.dispatchEvent(new Event('change', { bubbles: true }));
+									}
+								});
+							});
+						});
+
+						var openAllButton = parentForm ? parentForm.querySelector('.lp-cargonizer-open-all-method-groups') : null;
+						var closeAllButton = parentForm ? parentForm.querySelector('.lp-cargonizer-close-all-method-groups') : null;
+						if (openAllButton) {
+							openAllButton.addEventListener('click', function(){
+								container.querySelectorAll('.lp-cargonizer-method-group').forEach(function(group){
+									group.open = true;
+								});
+							});
+						}
+						if (closeAllButton) {
+							closeAllButton.addEventListener('click', function(){
+								container.querySelectorAll('.lp-cargonizer-method-group').forEach(function(group){
+									group.open = false;
+								});
+							});
+						}
 					})();
 					</script>
 
