@@ -986,11 +986,17 @@
 				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
-						if (!res || !res.success || !res.data) {
-							var message = (res && res.data && res.data.message) ? res.data.message : 'Kunne ikke hente printere.';
+						if (res && res.success === false) {
 							bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
 							if (bookingPrinterHelp) {
-								bookingPrinterHelp.textContent = message;
+								bookingPrinterHelp.textContent = (res.data && res.data.message) ? res.data.message : 'Kunne ikke hente printere.';
+							}
+							return null;
+						}
+						if (!res || !res.success || !res.data) {
+							bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+							if (bookingPrinterHelp) {
+								bookingPrinterHelp.textContent = 'Kunne ikke hente printere.';
 							}
 							return null;
 						}
