@@ -742,7 +742,9 @@ class LP_Cargonizer_Api_Service {
 
 		$is_locker_product = strpos($product_name, 'locker') !== false || strpos($product_id, 'locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_id, 'pakkeboks') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_id, 'parcel_locker') !== false || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false;
 		$is_bring_exact_locker_mapping = in_array($product_id, array('bring_pickup_point_9000', 'bring_pickup_point_9300', 'pickuppoint_9000', 'pickuppoint_9300'), true);
-		$is_postnord_box_mapping = in_array($product_id, array('mypack_small', 'mypack_small_home'), true);
+		$is_postnord_box_mapping = in_array($product_id, array('mypack_small', 'postnord_parcel_locker', 'postnord_mypack_small'), true);
+		$is_explicit_home_delivery = $this->is_method_explicitly_home_delivery($method);
+		$is_explicit_pickup_point = $this->is_method_explicitly_pickup_point($method);
 
 		$carrier_family = 'unknown';
 
@@ -766,17 +768,17 @@ class LP_Cargonizer_Api_Service {
 		if ($is_postnord) {
 			$carrier_family = 'postnord';
 			$debug['detected_carrier_family'] = 'postnord';
-			$is_box_style = strpos($product_name, 'mypack small') !== false || $is_postnord_box_mapping || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false || $is_locker_product;
+			$is_box_style = ($is_postnord_box_mapping || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false || $is_locker_product) && !$is_explicit_home_delivery;
 			if ($is_box_style) {
 				$params['typeId'] = '2';
 				$debug['typeId'] = array(
 					'value' => '2',
-					'reason' => $is_postnord_box_mapping ? 'exact PostNord mapping (MyPack Small)' : 'explicit box/locker-style signal for PostNord',
+					'reason' => $is_postnord_box_mapping ? 'exact PostNord locker mapping' : 'explicit box/locker-style signal for PostNord',
 				);
 			} else {
 				$debug['typeId'] = array(
 					'value' => '',
-					'reason' => 'omitted to avoid over-filtering; no strong box/locker signal',
+					'reason' => $is_explicit_home_delivery ? 'omitted because method is explicitly home-delivery (including Home/Home Small variants)' : ($is_explicit_pickup_point ? 'omitted because pickup-point method lacks strict locker/box signal' : 'omitted to avoid over-filtering; no strict locker/box signal'),
 				);
 			}
 		}
@@ -793,6 +795,48 @@ class LP_Cargonizer_Api_Service {
 			'debug' => $debug,
 			'carrier_family' => $carrier_family,
 		);
+	}
+
+	public function is_method_explicitly_pickup_point($method) {
+		$product_id = strtolower(sanitize_text_field(isset($method['product_id']) ? (string) $method['product_id'] : ''));
+		$product_name = strtolower(sanitize_text_field(isset($method['product_name']) ? (string) $method['product_name'] : ''));
+		$delivery_to_pickup_point = !empty($method['delivery_to_pickup_point']);
+		$delivery_to_home = !empty($method['delivery_to_home']);
+		$strict_pickup_product_ids = array(
+			'mypack_collect',
+			'mypack_small',
+			'mypack_service_point',
+			'postnord_service_point',
+			'postnord_parcel_locker',
+			'postnord_mypack_collect',
+			'postnord_mypack_service_point',
+			'postnord_mypack_small',
+			'bring_pickup_point_9000',
+			'bring_pickup_point_9300',
+			'pickuppoint_9000',
+			'pickuppoint_9300',
+			'parcel_pickup_point',
+		);
+		$has_strict_pickup_id = in_array($product_id, $strict_pickup_product_ids, true);
+		$has_pickup_phrase = strpos($product_name, 'service point') !== false || strpos($product_name, 'pickup point') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_name, 'hentested') !== false;
+		if ($delivery_to_pickup_point && $delivery_to_home) {
+			return $has_strict_pickup_id;
+		}
+		return $delivery_to_pickup_point || $has_strict_pickup_id || $has_pickup_phrase;
+	}
+
+	public function is_method_explicitly_home_delivery($method) {
+		$product_id = strtolower(sanitize_text_field(isset($method['product_id']) ? (string) $method['product_id'] : ''));
+		$product_name = strtolower(sanitize_text_field(isset($method['product_name']) ? (string) $method['product_name'] : ''));
+		$delivery_to_home = !empty($method['delivery_to_home']);
+		$strict_home_product_ids = array(
+			'mypack_home',
+			'mypack_small_home',
+			'postnord_mypack_home',
+			'postnord_mypack_small_home',
+		);
+		$has_home_phrase = strpos($product_name, 'home attended') !== false || strpos($product_name, 'home groupage') !== false || strpos($product_name, 'mypack home') !== false || strpos($product_name, 'home small') !== false || strpos($product_name, 'home') !== false;
+		return $delivery_to_home || in_array($product_id, $strict_home_product_ids, true) || $has_home_phrase;
 	}
 
 	private function extract_servicepartner_selection($payload, $method) {
