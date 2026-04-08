@@ -149,6 +149,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<select id="lp-cargonizer-booking-services-choice" multiple size="6" style="width:100%;max-width:520px;"></select>
 						<div id="lp-cargonizer-booking-services-help" style="margin-top:6px;color:#646970;"></div>
 					</div>
+					<div id="lp-cargonizer-booking-servicepartner-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<h3 style="margin:0 0 8px 0;">Utleveringssted / servicepartner</h3>
+						<div id="lp-cargonizer-booking-servicepartner-help" style="margin-bottom:8px;color:#646970;"></div>
+						<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+							<select id="lp-cargonizer-booking-servicepartner-select" style="min-width:280px;max-width:100%;">
+								<option value="">Velg servicepartner…</option>
+							</select>
+							<button type="button" class="button button-small" id="lp-cargonizer-booking-servicepartner-refresh">Hent servicepartnere</button>
+						</div>
+					</div>
 					<div id="lp-cargonizer-booking-results" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
 						<h3 style="margin:0 0 8px 0;">Booking result</h3>
 						<div id="lp-cargonizer-booking-results-content" style="color:#646970;">Ingen booking kjørt enda.</div>

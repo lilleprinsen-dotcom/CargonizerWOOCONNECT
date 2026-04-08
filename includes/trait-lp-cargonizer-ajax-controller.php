@@ -626,11 +626,15 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'product_name' => isset($_POST['product_name']) ? sanitize_text_field(wp_unslash($_POST['product_name'])) : '',
 			'country' => isset($_POST['recipient_country']) ? sanitize_text_field(wp_unslash($_POST['recipient_country'])) : '',
 			'postcode' => isset($_POST['recipient_postcode']) ? sanitize_text_field(wp_unslash($_POST['recipient_postcode'])) : '',
+			'city' => isset($_POST['recipient_city']) ? sanitize_text_field(wp_unslash($_POST['recipient_city'])) : '',
+			'address' => isset($_POST['recipient_address_1']) ? sanitize_text_field(wp_unslash($_POST['recipient_address_1'])) : '',
 		);
 
 		if ($order) {
 			$method['country'] = $order->get_shipping_country() !== '' ? $order->get_shipping_country() : $method['country'];
 			$method['postcode'] = $order->get_shipping_postcode() !== '' ? $order->get_shipping_postcode() : $method['postcode'];
+			$method['city'] = $order->get_shipping_city() !== '' ? $order->get_shipping_city() : $method['city'];
+			$method['address'] = $order->get_shipping_address_1() !== '' ? $order->get_shipping_address_1() : $method['address'];
 		}
 
 		$servicepartner_result = $this->fetch_servicepartner_options($method);
