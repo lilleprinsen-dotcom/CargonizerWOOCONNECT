@@ -14,84 +14,103 @@ class LP_Cargonizer_Api_Service {
 
 	public function get_auth_headers() {
 		$settings = call_user_func($this->settings_provider);
+		if (!is_array($settings)) {
+			$settings = array();
+		}
+
+		$api_key = isset($settings['api_key']) ? (string) $settings['api_key'] : '';
+		$sender_id = isset($settings['sender_id']) ? (string) $settings['sender_id'] : '';
 
 		return array(
-			'X-Cargonizer-Key'    => $settings['api_key'],
-			'X-Cargonizer-Sender' => $settings['sender_id'],
+			'X-Cargonizer-Key'    => $api_key,
+			'X-Cargonizer-Sender' => $sender_id,
 			'Accept'              => 'application/xml',
 		);
 	}
 
 	public function fetch_transport_agreements() {
-		$url = 'https://api.cargonizer.no/transport_agreements.xml';
+		try {
+			$url = 'https://api.cargonizer.no/transport_agreements.xml';
 
-		$response = wp_remote_get($url, array(
-			'timeout' => 30,
-			'headers' => $this->get_auth_headers(),
-		));
+			$response = wp_remote_get($url, array(
+				'timeout' => 30,
+				'headers' => $this->get_auth_headers(),
+			));
 
-		if (is_wp_error($response)) {
+			if (is_wp_error($response)) {
+				return array(
+					'success' => false,
+					'message' => 'WP Error: ' . $response->get_error_message(),
+					'status'  => 0,
+					'raw'     => '',
+					'data'    => array(),
+				);
+			}
+
+			$status = wp_remote_retrieve_response_code($response);
+			$body   = wp_remote_retrieve_body($response);
+
+			if ($status < 200 || $status >= 300) {
+				return array(
+					'success' => false,
+					'message' => 'Ugyldig respons fra Cargonizer. HTTP-status: ' . $status,
+					'status'  => $status,
+					'raw'     => $body,
+					'data'    => array(),
+				);
+			}
+
+			if (empty($body)) {
+				return array(
+					'success' => false,
+					'message' => 'Tom respons fra Cargonizer.',
+					'status'  => $status,
+					'raw'     => '',
+					'data'    => array(),
+				);
+			}
+
+			$xml = $this->safe_simplexml_load_string($body);
+
+			if ($xml === false) {
+				$error_messages = $this->collect_libxml_error_messages();
+				$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
+
+				return array(
+					'success' => false,
+					'message' => 'Kunne ikke parse XML-respons: ' . $error_suffix,
+					'status'  => $status,
+					'raw'     => $body,
+					'data'    => array(),
+				);
+			}
+
+			$parsed = $this->parse_transport_agreements($xml);
+
+			return array(
+				'success' => true,
+				'message' => 'Autentisering OK og fraktmetoder hentet.',
+				'status'  => $status,
+				'raw'     => $body,
+				'data'    => $parsed,
+			);
+		} catch (Throwable $exception) {
 			return array(
 				'success' => false,
-				'message' => 'WP Error: ' . $response->get_error_message(),
+				'message' => 'Uventet feil ved henting av fraktmetoder: ' . $exception->getMessage(),
 				'status'  => 0,
 				'raw'     => '',
 				'data'    => array(),
 			);
 		}
-
-		$status = wp_remote_retrieve_response_code($response);
-		$body   = wp_remote_retrieve_body($response);
-
-		if ($status < 200 || $status >= 300) {
-			return array(
-				'success' => false,
-				'message' => 'Ugyldig respons fra Cargonizer. HTTP-status: ' . $status,
-				'status'  => $status,
-				'raw'     => $body,
-				'data'    => array(),
-			);
-		}
-
-		if (empty($body)) {
-			return array(
-				'success' => false,
-				'message' => 'Tom respons fra Cargonizer.',
-				'status'  => $status,
-				'raw'     => '',
-				'data'    => array(),
-			);
-		}
-
-		$xml = $this->safe_simplexml_load_string($body);
-
-		if ($xml === false) {
-			$error_messages = $this->collect_libxml_error_messages();
-			$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
-
-			return array(
-				'success' => false,
-				'message' => 'Kunne ikke parse XML-respons: ' . $error_suffix,
-				'status'  => $status,
-				'raw'     => $body,
-				'data'    => array(),
-			);
-		}
-
-		$parsed = $this->parse_transport_agreements($xml);
-
-		return array(
-			'success' => true,
-			'message' => 'Autentisering OK og fraktmetoder hentet.',
-			'status'  => $status,
-			'raw'     => $body,
-			'data'    => $parsed,
-		);
 	}
 
 	public function parse_transport_agreements($xml) {
 		$result = array();
 		$agreements = array();
+		if (!is_object($xml) || !method_exists($xml, 'children')) {
+			return $result;
+		}
 
 		foreach ($xml->children() as $child) {
 			$agreements[] = $child;
