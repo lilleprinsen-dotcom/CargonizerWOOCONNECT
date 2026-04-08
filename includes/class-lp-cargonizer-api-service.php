@@ -355,8 +355,11 @@ class LP_Cargonizer_Api_Service {
 	public function fetch_servicepartner_options($method) {
 		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
 		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+		$carrier_id = isset($method['carrier_id']) ? sanitize_text_field((string) $method['carrier_id']) : '';
 		$country = isset($method['country']) ? $this->sanitize_country_code($method['country']) : '';
 		$postcode = isset($method['postcode']) ? $this->sanitize_postcode($method['postcode']) : '';
+		$city = isset($method['city']) ? sanitize_text_field((string) $method['city']) : '';
+		$address = isset($method['address']) ? sanitize_text_field((string) $method['address']) : '';
 
 		$result = array(
 			'success' => false,
@@ -365,6 +368,8 @@ class LP_Cargonizer_Api_Service {
 			'raw_response_body' => '',
 			'request_url' => '',
 			'options' => array(),
+			'carrier_family' => 'unknown',
+			'omitted_params' => array(),
 			'custom_params_debug' => array(),
 		);
 
@@ -380,18 +385,38 @@ class LP_Cargonizer_Api_Service {
 
 		if ($country !== '') {
 			$query['country'] = $country;
+		} else {
+			$result['omitted_params'][] = 'country';
 		}
 		if ($postcode !== '') {
 			$query['postcode'] = $postcode;
+		} else {
+			$result['omitted_params'][] = 'postcode';
+		}
+		if ($carrier_id !== '') {
+			$query['carrier'] = $carrier_id;
+		} else {
+			$result['omitted_params'][] = 'carrier';
+		}
+		if ($city !== '') {
+			$query['city'] = $city;
+		} else {
+			$result['omitted_params'][] = 'city';
+		}
+		if ($address !== '') {
+			$query['address'] = $address;
+		} else {
+			$result['omitted_params'][] = 'address';
 		}
 
 		$custom = $this->detect_servicepartner_custom_params($method);
+		$result['carrier_family'] = isset($custom['carrier_family']) ? (string) $custom['carrier_family'] : 'unknown';
 		if (!empty($custom['params']) && is_array($custom['params'])) {
 			foreach ($custom['params'] as $custom_key => $custom_value) {
 				$query['custom[params][' . $custom_key . ']'] = $custom_value;
 			}
-			$result['custom_params_debug'] = $custom['debug'];
 		}
+		$result['custom_params_debug'] = isset($custom['debug']) && is_array($custom['debug']) ? $custom['debug'] : array();
 
 		$request_url = add_query_arg($query, 'https://api.cargonizer.no/service_partners.xml');
 		$result['request_url'] = $request_url;
@@ -458,7 +483,7 @@ class LP_Cargonizer_Api_Service {
 		$result['success'] = true;
 		$result['options'] = $options;
 		if (empty($options)) {
-			$result['error_message'] = 'Ingen servicepartnere returnert fra API for denne kombinasjonen av agreement, product, country og postcode';
+			$result['error_message'] = 'Ingen servicepartnere returnert fra API for denne kombinasjonen av agreement, product, country, postcode, city og address';
 		}
 
 		return $result;
@@ -473,36 +498,64 @@ class LP_Cargonizer_Api_Service {
 		$params = array();
 		$debug = array();
 
-		$is_bring = strpos($carrier_id, 'bring') !== false || strpos($carrier_name, 'bring') !== false;
-		$is_postnord = strpos($carrier_id, 'postnord') !== false || strpos($carrier_name, 'postnord') !== false;
+		$is_bring = strpos($carrier_id, 'bring') !== false || strpos($carrier_name, 'bring') !== false || strpos($carrier_id, 'bring2') !== false || strpos($carrier_name, 'bring2') !== false;
+		$is_postnord = strpos($carrier_id, 'postnord') !== false || strpos($carrier_name, 'postnord') !== false || strpos($carrier_id, 'tollpost_globe') !== false || strpos($carrier_name, 'tollpost_globe') !== false;
+
+		$is_locker_product = strpos($product_name, 'locker') !== false || strpos($product_id, 'locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_id, 'pakkeboks') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_id, 'parcel_locker') !== false || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false;
+		$is_pickup_product = strpos($product_name, 'pickup') !== false || strpos($product_id, 'pickup') !== false || strpos($product_name, 'servicepoint') !== false || strpos($product_id, 'servicepoint') !== false || strpos($product_name, 'service point') !== false || strpos($product_name, 'hentested') !== false || strpos($product_id, 'hentested') !== false || strpos($product_name, 'hentepakke') !== false || strpos($product_id, 'hentepakke') !== false || strpos($product_name, 'mypack') !== false || strpos($product_id, 'mypack') !== false;
+
+		$carrier_family = 'unknown';
 
 		if ($is_bring) {
-			$value = 'pickup_point';
-			if (strpos($product_name, 'locker') !== false || strpos($product_id, 'locker') !== false) {
-				$value = 'locker';
+			$carrier_family = 'bring';
+			if ($is_locker_product) {
+				$params['pickupPointType'] = 'locker';
+				$debug['pickupPointType'] = array(
+					'value' => 'locker',
+					'source' => 'auto_detected_from_carrier_product',
+				);
+			} elseif ($is_pickup_product) {
+				$params['pickupPointType'] = 'manned';
+				$debug['pickupPointType'] = array(
+					'value' => 'manned',
+					'source' => 'auto_detected_from_carrier_product',
+				);
+			} else {
+				$debug['pickupPointType'] = array(
+					'value' => '',
+					'source' => 'omitted_no_safe_mapping',
+				);
 			}
-			$params['pickupPointType'] = $value;
-			$debug['pickupPointType'] = array(
-				'value' => $value,
-				'source' => 'auto_detected_from_carrier_product',
-			);
 		}
 
 		if ($is_postnord) {
-			$value = 'pickup';
-			if (strpos($product_name, 'service') !== false || strpos($product_id, 'service') !== false) {
-				$value = 'service_point';
+			$carrier_family = 'postnord';
+			$is_box_style = strpos($product_name, 'mypack small') !== false || strpos($product_id, 'mypack_small') !== false || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false || $is_locker_product;
+			if ($is_box_style) {
+				$params['typeId'] = '2';
+				$debug['typeId'] = array(
+					'value' => '2',
+					'source' => 'auto_detected_from_box_style_product',
+				);
+			} else {
+				$debug['typeId'] = array(
+					'value' => '',
+					'source' => 'omitted_no_safe_mapping',
+				);
 			}
-			$params['typeId'] = $value;
-			$debug['typeId'] = array(
-				'value' => $value,
-				'source' => 'auto_detected_from_carrier_product',
+		}
+
+		if ($carrier_family === 'unknown') {
+			$debug['custom_params'] = array(
+				'value' => '',
+				'source' => 'omitted_unknown_carrier_family',
 			);
 		}
 
 		return array(
 			'params' => $params,
 			'debug' => $debug,
+			'carrier_family' => $carrier_family,
 		);
 	}
 

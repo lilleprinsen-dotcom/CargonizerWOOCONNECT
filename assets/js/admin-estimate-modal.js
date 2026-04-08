@@ -36,6 +36,10 @@
 			var bookingServicesSection = document.getElementById('lp-cargonizer-booking-services-section');
 			var bookingServicesChoice = document.getElementById('lp-cargonizer-booking-services-choice');
 			var bookingServicesHelp = document.getElementById('lp-cargonizer-booking-services-help');
+			var bookingServicepartnerSection = document.getElementById('lp-cargonizer-booking-servicepartner-section');
+			var bookingServicepartnerHelp = document.getElementById('lp-cargonizer-booking-servicepartner-help');
+			var bookingServicepartnerSelect = document.getElementById('lp-cargonizer-booking-servicepartner-select');
+			var bookingServicepartnerRefreshBtn = document.getElementById('lp-cargonizer-booking-servicepartner-refresh');
 			var bookingResultsSection = document.getElementById('lp-cargonizer-booking-results');
 			var bookingResultsContent = document.getElementById('lp-cargonizer-booking-results-content');
 			var runBookingBtn = document.getElementById('lp-cargonizer-run-booking');
@@ -343,6 +347,45 @@
 				bookingServicesSection.style.display = services.length ? 'block' : 'none';
 			}
 
+			function updateProactiveBookingServicepartner(){
+				if (currentMode !== 'booking') {
+					clearProactiveServicepartnerState();
+					return;
+				}
+				var methodKey = getProactiveMethodKey();
+				if (!methodKey) {
+					clearProactiveServicepartnerState();
+					return;
+				}
+				var methodData = getMethodDataByKey(methodKey);
+				if (!methodData) {
+					clearProactiveServicepartnerState();
+					return;
+				}
+				if (bookingServicepartnerSection) {
+					bookingServicepartnerSection.style.display = 'block';
+				}
+				var existingRow = null;
+				for (var i = 0; i < latestEstimateResults.length; i++) {
+					if (methodKeyForRow(latestEstimateResults[i]) === methodKey) {
+						existingRow = latestEstimateResults[i];
+						break;
+					}
+				}
+				var existingOptions = existingRow && Array.isArray(existingRow.servicepartner_options) ? existingRow.servicepartner_options : [];
+				var existingSelected = existingRow && existingRow.selected_servicepartner ? String(existingRow.selected_servicepartner) : '';
+				if (bookingServicepartnerSelect && bookingServicepartnerSelect.getAttribute('data-method-key') === methodKey && bookingServicepartnerSelect.value) {
+					existingSelected = bookingServicepartnerSelect.value;
+				}
+				renderProactiveServicepartnerOptions(methodKey, existingOptions, existingSelected);
+				if (existingOptions.length) {
+					setProactiveServicepartnerHelp('Fant ' + existingOptions.length + ' servicepartnere.', '#125228');
+				} else {
+					setProactiveServicepartnerHelp('Henter servicepartnere…', '#646970');
+				}
+				fetchServicepartnersForMethod(methodKey);
+			}
+
 
 			function methodKeyForRow(row){
 				return (row && row.agreement_id ? row.agreement_id : '') + '|' + (row && row.product_id ? row.product_id : '');
@@ -360,6 +403,60 @@
 				if (row.requires_servicepartner) { return true; }
 				var errorText = ((row.error || '') + ' ' + (row.parsed_error_message || '') + ' ' + (row.error_code || '')).toLowerCase();
 				return errorText.indexOf('servicepartner må angis') !== -1 || errorText.indexOf('servicepartner maa angis') !== -1 || errorText.indexOf('servicepartner must be specified') !== -1 || errorText.indexOf('missing servicepartner') !== -1;
+			}
+
+			function methodLikelyNeedsServicepartner(method){
+				if (!method) { return false; }
+				if (method.delivery_to_pickup_point === true) { return true; }
+				var haystack = ((method.product_id || '') + ' ' + (method.product_name || '')).toLowerCase();
+				var hints = ['pickup', 'servicepoint', 'service point', 'hentested', 'locker', 'pakkeboks', 'parcel_pickup_point', 'mypack', 'hentepakke'];
+				for (var i = 0; i < hints.length; i++) {
+					if (haystack.indexOf(hints[i]) !== -1) {
+						return true;
+					}
+				}
+				return false;
+			}
+
+			function getProactiveMethodKey(){
+				var selectedMethods = getSelectedMethods();
+				if (selectedMethods.length !== 1) {
+					return '';
+				}
+				if (!methodLikelyNeedsServicepartner(selectedMethods[0])) {
+					return '';
+				}
+				return (selectedMethods[0].agreement_id || '') + '|' + (selectedMethods[0].product_id || '');
+			}
+
+			function renderProactiveServicepartnerOptions(methodKey, options, selectedValue){
+				if (!bookingServicepartnerSelect) { return; }
+				var html = '<option value="">Velg servicepartner…</option>';
+				(options || []).forEach(function(opt){
+					var value = (opt && opt.value) ? String(opt.value) : '';
+					var label = (opt && opt.label) ? String(opt.label) : value;
+					if (!value) { return; }
+					html += '<option value="' + esc(value) + '"' + (selectedValue === value ? ' selected' : '') + '>' + esc(label) + '</option>';
+				});
+				bookingServicepartnerSelect.innerHTML = html;
+				bookingServicepartnerSelect.setAttribute('data-method-key', methodKey || '');
+			}
+
+			function setProactiveServicepartnerHelp(message, color){
+				if (!bookingServicepartnerHelp) { return; }
+				bookingServicepartnerHelp.textContent = message || '';
+				bookingServicepartnerHelp.style.color = color || '#646970';
+			}
+
+			function clearProactiveServicepartnerState(){
+				if (bookingServicepartnerSection) {
+					bookingServicepartnerSection.style.display = 'none';
+				}
+				if (bookingServicepartnerSelect) {
+					bookingServicepartnerSelect.innerHTML = '<option value="">Velg servicepartner…</option>';
+					bookingServicepartnerSelect.setAttribute('data-method-key', '');
+				}
+				setProactiveServicepartnerHelp('');
 			}
 
 			function shortRaw(text, maxLen){
@@ -772,33 +869,88 @@
 				form.append('product_name', methodData.product_name || '');
 				form.append('recipient_country', (currentRecipient && currentRecipient.country) ? currentRecipient.country : '');
 				form.append('recipient_postcode', (currentRecipient && currentRecipient.postcode) ? currentRecipient.postcode : '');
+				form.append('recipient_city', (currentRecipient && currentRecipient.city) ? currentRecipient.city : '');
+				form.append('recipient_address_1', (currentRecipient && currentRecipient.address_1) ? currentRecipient.address_1 : '');
 				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
-					.then(function(res){ return res.json(); })
 					.then(function(res){
-						var debug = (res && res.data && res.data.debug) ? res.data.debug : {};
-						var options = (res && res.success && res.data && Array.isArray(res.data.options)) ? res.data.options : [];
+						var status = res && typeof res.status === 'number' ? res.status : 0;
+						return res.json().then(function(json){
+							return { json: json, httpStatus: status };
+						});
+					})
+					.then(function(res){
+						var payload = res && res.json ? res.json : null;
+						var httpStatus = res && res.httpStatus ? res.httpStatus : 0;
+						var debug = (payload && payload.data && payload.data.debug) ? payload.data.debug : {};
+						debug.http_status = debug.http_status || httpStatus;
+						var options = (payload && payload.success && payload.data && Array.isArray(payload.data.options)) ? payload.data.options : [];
+						var currentProactiveMethodKey = bookingServicepartnerSelect ? bookingServicepartnerSelect.getAttribute('data-method-key') : '';
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
 								row.servicepartner_options = options;
 								row.servicepartner_fetch = debug;
-								if (!res.success) {
-									row.error = (res.data && res.data.message) ? res.data.message : (row.error || 'Henting av servicepartnere feilet.');
+								if (!payload || !payload.success) {
+									row.error = (payload && payload.data && payload.data.message) ? payload.data.message : (row.error || 'Henting av servicepartnere feilet.');
 								}
 							}
 							return row;
 						});
 						renderEstimateResults(latestEstimateResults);
 						if (currentMode === 'booking' && bookingResultsContent) {
-							var select = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
-							if (select) {
+							var retrySelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+							if (retrySelect) {
+								var previousRetryValue = retrySelect.value || '';
 								var optionsHtml = '<option value="">Velg servicepartner…</option>';
 								options.forEach(function(opt){
 									var value = (opt && opt.value) ? String(opt.value) : '';
 									var label = (opt && opt.label) ? String(opt.label) : value;
 									if (!value) { return; }
-									optionsHtml += '<option value="'+esc(value)+'">'+esc(label)+'</option>';
+									optionsHtml += '<option value="'+esc(value)+'"'+(previousRetryValue === value ? ' selected' : '')+'>'+esc(label)+'</option>';
 								});
-								select.innerHTML = optionsHtml;
+								retrySelect.innerHTML = optionsHtml;
+								var retryStatusMessage = bookingResultsContent.querySelector('.lp-servicepartner-refresh-status[data-method-key="'+methodKey+'"]');
+								if (!retryStatusMessage) {
+									retryStatusMessage = document.createElement('div');
+									retryStatusMessage.className = 'lp-servicepartner-refresh-status';
+									retryStatusMessage.setAttribute('data-method-key', methodKey);
+									retryStatusMessage.style.fontSize = '12px';
+									retrySelect.parentNode.appendChild(retryStatusMessage);
+								}
+								if (payload && payload.success) {
+									retryStatusMessage.style.color = options.length ? '#125228' : '#8a4b00';
+									retryStatusMessage.textContent = options.length ? ('Fant ' + options.length + ' servicepartnere.') : 'Ingen hentesteder/servicepartnere funnet for valgt metode og adresse.';
+								}
+							}
+						}
+						if (currentMode === 'booking' && bookingServicepartnerSelect && currentProactiveMethodKey === methodKey) {
+							var previousProactiveValue = bookingServicepartnerSelect.value || '';
+							renderProactiveServicepartnerOptions(methodKey, options, previousProactiveValue);
+							if (payload && payload.success) {
+								if (options.length) {
+									setProactiveServicepartnerHelp('Fant ' + options.length + ' servicepartnere.', '#125228');
+								} else {
+									setProactiveServicepartnerHelp('Ingen hentesteder/servicepartnere funnet for valgt metode og adresse.', '#8a4b00');
+								}
+							} else {
+								var message = (payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil';
+								var statusText = debug.http_status ? ' (HTTP ' + debug.http_status + ')' : '';
+								var debugText = debug.error_message ? ' — ' + debug.error_message : '';
+								setProactiveServicepartnerHelp('Kunne ikke hente servicepartnere: ' + message + statusText + debugText, '#b32d2e');
+								if (bookingResultsContent) {
+									var retrySelectForStatus = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+									if (retrySelectForStatus) {
+										var statusMessage = bookingResultsContent.querySelector('.lp-servicepartner-refresh-status[data-method-key="'+methodKey+'"]');
+										if (!statusMessage) {
+											statusMessage = document.createElement('div');
+											statusMessage.className = 'lp-servicepartner-refresh-status';
+											statusMessage.setAttribute('data-method-key', methodKey);
+											statusMessage.style.color = '#b32d2e';
+											statusMessage.style.fontSize = '12px';
+											retrySelectForStatus.parentNode.appendChild(statusMessage);
+										}
+										statusMessage.textContent = 'Kunne ikke hente servicepartnere: ' + message + statusText + debugText;
+									}
+								}
 							}
 						}
 						return options;
@@ -812,6 +964,9 @@
 							return row;
 						});
 						renderEstimateResults(latestEstimateResults);
+						if (currentMode === 'booking' && bookingServicepartnerSelect && bookingServicepartnerSelect.getAttribute('data-method-key') === methodKey) {
+							setProactiveServicepartnerHelp('Kunne ikke hente servicepartnere: Teknisk feil ved henting av servicepartnere. (HTTP 0)', '#b32d2e');
+						}
 						return [];
 					});
 			}
@@ -1043,6 +1198,7 @@
 					runBookingBtn.style.display = currentMode === 'booking' ? '' : 'none';
 				}
 				updateBookingServicesSelector();
+				updateProactiveBookingServicepartner();
 			}
 
 			function fetchPrinters(){
@@ -1191,10 +1347,22 @@
 					});
 					htmlParts.push('<div style="color:#b32d2e;">Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.</div>');
 					htmlParts.push('<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><select class="lp-servicepartner-select" data-method-key="' + esc(methodKey) + '" style="min-width:220px;">' + optionsHtml + '</select><button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="' + esc(methodKey) + '">Hent servicepartnere</button></div>');
+					if (data.servicepartner_fetch) {
+						var fetchDebug = data.servicepartner_fetch || {};
+						var debugMessage = 'Servicepartner debug — HTTP: ' + (fetchDebug.http_status || '—') + ', melding: ' + (fetchDebug.error_message || '—') + ', URL: ' + (fetchDebug.request_url || '—');
+						if (fetchDebug.raw_response_body) {
+							debugMessage += ', respons: ' + shortRaw(fetchDebug.raw_response_body, 300);
+						}
+						htmlParts.push('<div style="margin-top:4px;color:#646970;font-size:12px;">' + esc(debugMessage) + '</div>');
+					}
 				}
 				if (data.requires_sms_service) {
 					var smsLabel = (method && method.sms_service_name) ? ' (' + esc(method.sms_service_name) + ')' : '';
 					htmlParts.push('<label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="lp-sms-service-toggle" data-method-key="' + esc(methodKey) + '">Bruk SMS Varsling' + smsLabel + '</label>');
+				}
+				if (data.servicepartner_fetch && !data.requires_servicepartner) {
+					var standaloneDebug = data.servicepartner_fetch || {};
+					htmlParts.push('<div style="margin-top:4px;color:#646970;font-size:12px;">' + esc('Servicepartner debug — HTTP: ' + (standaloneDebug.http_status || '—') + ', melding: ' + (standaloneDebug.error_message || '—') + ', URL: ' + (standaloneDebug.request_url || '—')) + '</div>');
 				}
 				if (data.requires_servicepartner || data.requires_sms_service) {
 					htmlParts.push('<button type="button" class="button button-primary button-small lp-booking-method-retry" data-method-key="' + esc(methodKey) + '">Prøv booking igjen</button>');
@@ -1231,6 +1399,7 @@
 						}
 						renderShippingOptions(res.data.options || []);
 						updateBookingServicesSelector();
+						updateProactiveBookingServicepartner();
 					})
 					.catch(function(){
 						shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved henting av fraktvalg.</span>';
@@ -1354,6 +1523,13 @@
 				runBooking(methodData);
 			}
 
+			function getProactiveSelectedServicepartner(methodKey){
+				if (!bookingServicepartnerSection || !bookingServicepartnerSelect) { return ''; }
+				if (bookingServicepartnerSection.style.display === 'none') { return ''; }
+				if ((bookingServicepartnerSelect.getAttribute('data-method-key') || '') !== methodKey) { return ''; }
+				return bookingServicepartnerSelect.value || '';
+			}
+
 			function runBooking(preselectedMethod){
 				if (currentMode !== 'booking') { return; }
 				var colli = collectColliData();
@@ -1369,6 +1545,10 @@
 
 				var method = selectedResult.method;
 				var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+				var proactiveServicepartner = getProactiveSelectedServicepartner(methodKey);
+				if (proactiveServicepartner) {
+					method.servicepartner = proactiveServicepartner;
+				}
 				if (bookingResultsContent) {
 					var servicepartnerSelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 					if (servicepartnerSelect) {
@@ -1378,6 +1558,9 @@
 					if (smsServiceToggle) {
 						method.use_sms_service = !!smsServiceToggle.checked;
 					}
+				}
+				if (!method.servicepartner && getProactiveMethodKey() === methodKey) {
+					setProactiveServicepartnerHelp('Valgt metode ser ut til å kreve hentested/servicepartner.', '#8a4b00');
 				}
 				var notifyEmailToConsignee = bookingNotifyCheckbox ? !!bookingNotifyCheckbox.checked : false;
 				if (notifyEmailToConsignee && (!currentRecipient || !currentRecipient.email)) {
@@ -1472,6 +1655,30 @@
 				shippingOptionsList.addEventListener('change', function(e){
 					if (e.target && e.target.classList && e.target.classList.contains('lp-shipping-option')) {
 						updateBookingServicesSelector();
+						updateProactiveBookingServicepartner();
+					}
+				});
+			}
+			if (bookingServicepartnerRefreshBtn) {
+				bookingServicepartnerRefreshBtn.addEventListener('click', function(e){
+					e.preventDefault();
+					var methodKey = bookingServicepartnerSelect ? (bookingServicepartnerSelect.getAttribute('data-method-key') || '') : '';
+					if (!methodKey) { return; }
+					fetchServicepartnersForMethod(methodKey);
+				});
+			}
+			if (bookingServicepartnerSelect) {
+				bookingServicepartnerSelect.addEventListener('change', function(){
+					var methodKey = bookingServicepartnerSelect.getAttribute('data-method-key') || '';
+					var value = bookingServicepartnerSelect.value || '';
+					latestEstimateResults = latestEstimateResults.map(function(row){
+						if (methodKeyForRow(row) === methodKey) {
+							row.selected_servicepartner = value;
+						}
+						return row;
+					});
+					if (value) {
+						setProactiveServicepartnerHelp('Servicepartner valgt.', '#125228');
 					}
 				});
 			}
@@ -1594,6 +1801,7 @@
 							}
 							renderExistingBookingState(currentBookingState);
 							updateBookingServicesSelector();
+							updateProactiveBookingServicepartner();
 						}
 						content.style.display = 'block';
 					})
@@ -1640,6 +1848,7 @@
 				if (bookingServicesHelp) {
 					bookingServicesHelp.textContent = '';
 				}
+				clearProactiveServicepartnerState();
 				if (runBookingBtn) {
 					runBookingBtn.disabled = false;
 					runBookingBtn.textContent = 'Book shipment';
