@@ -485,6 +485,7 @@ class LP_Cargonizer_Connector {
 			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
 			'use_sms_service' => !empty($method_payload['use_sms_service']),
 			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
+			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
 		), $method_payload);
 
 		$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(

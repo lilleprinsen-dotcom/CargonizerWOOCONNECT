@@ -524,6 +524,7 @@ class LP_Cargonizer_Api_Service {
 		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
+		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
 		if (!class_exists('SimpleXMLElement')) {
 			return '';
 		}
@@ -532,12 +533,6 @@ class LP_Cargonizer_Api_Service {
 		$consignment = $xml->addChild('consignment');
 		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
 		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
-		if ($use_sms_service && $sms_service_id !== '') {
-			$services_node = $consignment->addChild('services');
-			$service_node = $services_node->addChild('service');
-			$service_node->addAttribute('id', (string) $sms_service_id);
-		}
-
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
 		$consignee->addChild('name', (string) (isset($recipient['name']) ? $recipient['name'] : ''));
@@ -549,6 +544,25 @@ class LP_Cargonizer_Api_Service {
 		if ($servicepartner !== '') {
 			$service_partner = $parts->addChild('service_partner');
 			$service_partner->addChild('number', (string) $servicepartner);
+		}
+
+		$all_service_ids = array();
+		foreach ($selected_service_ids as $selected_service_id) {
+			$clean_service_id = sanitize_text_field((string) $selected_service_id);
+			if ($clean_service_id !== '') {
+				$all_service_ids[] = $clean_service_id;
+			}
+		}
+		if ($use_sms_service && $sms_service_id !== '') {
+			$all_service_ids[] = $sms_service_id;
+		}
+		$all_service_ids = array_values(array_unique($all_service_ids));
+		if (!empty($all_service_ids)) {
+			$services_node = $consignment->addChild('services');
+			foreach ($all_service_ids as $service_id) {
+				$service_node = $services_node->addChild('service');
+				$service_node->addAttribute('id', (string) $service_id);
+			}
 		}
 
 		$items = $consignment->addChild('items');
