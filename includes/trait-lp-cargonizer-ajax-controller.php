@@ -648,7 +648,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		if (empty($servicepartner_result['options'])) {
 			wp_send_json_error(array(
-				'message' => $servicepartner_result['error_message'] !== '' ? $servicepartner_result['error_message'] : 'Ingen servicepartnere returnert fra API for denne kombinasjonen av agreement, product, country og postcode',
+				'message' => $servicepartner_result['error_message'] !== '' ? $servicepartner_result['error_message'] : 'Ingen servicepartnere returnert fra API.',
 				'debug' => $servicepartner_result,
 			), 200);
 		}

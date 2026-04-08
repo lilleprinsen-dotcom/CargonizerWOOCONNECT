@@ -360,6 +360,7 @@ class LP_Cargonizer_Api_Service {
 		$postcode = isset($method['postcode']) ? $this->sanitize_postcode($method['postcode']) : '';
 		$city = isset($method['city']) ? sanitize_text_field((string) $method['city']) : '';
 		$address = isset($method['address']) ? sanitize_text_field((string) $method['address']) : '';
+		$name = isset($method['name']) ? sanitize_text_field((string) $method['name']) : '';
 
 		$result = array(
 			'success' => false,
@@ -371,55 +372,152 @@ class LP_Cargonizer_Api_Service {
 			'carrier_family' => 'unknown',
 			'omitted_params' => array(),
 			'custom_params_debug' => array(),
+			'attempts' => array(),
+			'winning_attempt' => null,
+			'winning_attempt_label' => '',
+			'last_nonempty_http_status' => 0,
+			'parser_debug' => array(),
 		);
 
-		if ($agreement_id === '' || $product_id === '') {
-			$result['error_message'] = 'Mangler agreement_id eller product_id.';
+		if ($country === '' || $postcode === '') {
+			$result['error_message'] = 'Mangler country eller postcode.';
+			if ($country === '') {
+				$result['omitted_params'][] = 'country';
+			}
+			if ($postcode === '') {
+				$result['omitted_params'][] = 'postcode';
+			}
 			return $result;
 		}
 
-		$query = array(
-			'transport_agreement_id' => $agreement_id,
-			'product' => $product_id,
-		);
-
-		if ($country !== '') {
-			$query['country'] = $country;
-		} else {
-			$result['omitted_params'][] = 'country';
-		}
-		if ($postcode !== '') {
-			$query['postcode'] = $postcode;
-		} else {
-			$result['omitted_params'][] = 'postcode';
-		}
-		if ($carrier_id !== '') {
-			$query['carrier'] = $carrier_id;
-		} else {
+		if ($carrier_id === '' && $agreement_id === '') {
+			$result['error_message'] = 'Mangler carrier_id eller agreement_id.';
 			$result['omitted_params'][] = 'carrier';
-		}
-		if ($city !== '') {
-			$query['city'] = $city;
-		} else {
-			$result['omitted_params'][] = 'city';
-		}
-		if ($address !== '') {
-			$query['address'] = $address;
-		} else {
-			$result['omitted_params'][] = 'address';
+			$result['omitted_params'][] = 'transport_agreement_id';
+			return $result;
 		}
 
 		$custom = $this->detect_servicepartner_custom_params($method);
 		$result['carrier_family'] = isset($custom['carrier_family']) ? (string) $custom['carrier_family'] : 'unknown';
-		if (!empty($custom['params']) && is_array($custom['params'])) {
-			foreach ($custom['params'] as $custom_key => $custom_value) {
-				$query['custom[params][' . $custom_key . ']'] = $custom_value;
+		$result['custom_params_debug'] = isset($custom['debug']) && is_array($custom['debug']) ? $custom['debug'] : array();
+		$custom_params = isset($custom['params']) && is_array($custom['params']) ? $custom['params'] : array();
+
+		$base_query = array(
+			'carrier' => $carrier_id,
+			'transport_agreement_id' => $agreement_id,
+			'product' => $product_id,
+			'country' => $country,
+			'postcode' => $postcode,
+			'city' => $city,
+			'address' => $address,
+			'name' => $name,
+		);
+
+		$attempts = array(
+			array('label' => 'A', 'fields' => array('carrier', 'product', 'transport_agreement_id', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'B', 'fields' => array('carrier', 'product', 'transport_agreement_id', 'country', 'postcode', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'C', 'fields' => array('carrier', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'D', 'fields' => array('carrier', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'E', 'fields' => array('carrier', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'F', 'fields' => array('carrier', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'G', 'fields' => array('carrier', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'H', 'fields' => array('carrier', 'country', 'postcode', 'address', 'name'), 'use_custom' => false),
+		);
+
+		$last_error_message = '';
+		$last_request_url = '';
+		$last_raw_response_body = '';
+		$last_http_status = 0;
+
+		foreach ($attempts as $attempt_definition) {
+			$attempt_result = $this->execute_servicepartner_lookup_attempt(
+				$attempt_definition['label'],
+				$base_query,
+				$attempt_definition['fields'],
+				!empty($attempt_definition['use_custom']),
+				$custom_params,
+				$result['carrier_family']
+			);
+
+			$result['attempts'][] = $attempt_result['attempt_debug'];
+			$result['omitted_params'] = $attempt_result['attempt_debug']['omitted_params'];
+			$result['request_url'] = $attempt_result['attempt_debug']['request_url'];
+			$result['http_status'] = $attempt_result['attempt_debug']['http_status'];
+			$result['raw_response_body'] = $attempt_result['raw_response_body'];
+			$result['parser_debug'] = $attempt_result['attempt_debug']['parser_result_summary'];
+
+			if (!empty($attempt_result['attempt_debug']['http_status'])) {
+				$result['last_nonempty_http_status'] = (int) $attempt_result['attempt_debug']['http_status'];
+			}
+
+			$last_request_url = $attempt_result['attempt_debug']['request_url'];
+			$last_raw_response_body = $attempt_result['raw_response_body'];
+			$last_http_status = (int) $attempt_result['attempt_debug']['http_status'];
+
+			if (!empty($attempt_result['options'])) {
+				$result['success'] = true;
+				$result['options'] = $attempt_result['options'];
+				$result['winning_attempt'] = count($result['attempts']) - 1;
+				$result['winning_attempt_label'] = $attempt_definition['label'];
+				$result['error_message'] = '';
+				return $result;
+			}
+
+			if ($attempt_result['error_message'] !== '') {
+				$last_error_message = $attempt_result['error_message'];
+			}
+
+			if ($attempt_result['is_terminal_error']) {
+				break;
 			}
 		}
-		$result['custom_params_debug'] = isset($custom['debug']) && is_array($custom['debug']) ? $custom['debug'] : array();
+
+		$result['request_url'] = $last_request_url;
+		$result['raw_response_body'] = $last_raw_response_body;
+		$result['http_status'] = $last_http_status;
+		$result['error_message'] = $last_error_message !== '' ? $last_error_message : 'Ingen servicepartnere returnert fra API etter progressive fallback-forsøk.';
+
+		return $result;
+	}
+
+	private function execute_servicepartner_lookup_attempt($label, $base_query, $included_fields, $use_custom_params, $custom_params, $carrier_family) {
+		$query = array();
+		$omitted_params = array();
+
+		foreach ($base_query as $param_name => $param_value) {
+			if (!in_array($param_name, $included_fields, true)) {
+				$omitted_params[] = $param_name;
+				continue;
+			}
+			if ($param_value === '') {
+				$omitted_params[] = $param_name;
+				continue;
+			}
+			$query[$param_name] = $param_value;
+		}
+
+		$custom_params_used = array();
+		if ($use_custom_params && !empty($custom_params)) {
+			foreach ($custom_params as $custom_key => $custom_value) {
+				$query['custom[params][' . $custom_key . ']'] = $custom_value;
+				$custom_params_used[$custom_key] = $custom_value;
+			}
+		}
 
 		$request_url = add_query_arg($query, 'https://api.cargonizer.no/service_partners.xml');
-		$result['request_url'] = $request_url;
+
+		$attempt_debug = array(
+			'label' => $label,
+			'query_args' => $query,
+			'request_url' => $request_url,
+			'http_status' => 0,
+			'raw_response_excerpt' => '',
+			'parsed_option_count' => 0,
+			'carrier_family' => $carrier_family,
+			'custom_params_used' => $custom_params_used,
+			'omitted_params' => array_values(array_unique($omitted_params)),
+			'parser_result_summary' => array(),
+		);
 
 		$response = wp_remote_get($request_url, array(
 			'timeout' => 30,
@@ -427,66 +525,122 @@ class LP_Cargonizer_Api_Service {
 		));
 
 		if (is_wp_error($response)) {
-			$result['error_message'] = $response->get_error_message();
-			return $result;
+			$attempt_debug['parser_result_summary'] = array('error' => $response->get_error_message());
+			return array(
+				'attempt_debug' => $attempt_debug,
+				'raw_response_body' => '',
+				'options' => array(),
+				'error_message' => $response->get_error_message(),
+				'is_terminal_error' => false,
+			);
 		}
 
-		$status = wp_remote_retrieve_response_code($response);
-		$body = wp_remote_retrieve_body($response);
-		$result['http_status'] = $status;
-		$result['raw_response_body'] = $body;
+		$http_status = (int) wp_remote_retrieve_response_code($response);
+		$body = (string) wp_remote_retrieve_body($response);
+		$attempt_debug['http_status'] = $http_status;
+		$attempt_debug['raw_response_excerpt'] = substr($body, 0, 500);
 
-		if ($status < 200 || $status >= 300 || $body === '') {
+		if ($http_status < 200 || $http_status >= 300 || $body === '') {
 			$error_details = $this->parse_response_error_details($body);
-			$result['error_message'] = $error_details['message'] !== '' ? $error_details['message'] : ($body === '' ? 'Tom respons fra API.' : 'Uventet API-respons.');
-			return $result;
+			$error_message = $error_details['message'] !== '' ? $error_details['message'] : ($body === '' ? 'Tom respons fra API.' : 'Uventet API-respons.');
+			$attempt_debug['parser_result_summary'] = array('error' => $error_message);
+			$is_terminal_error = in_array($http_status, array(401, 403), true);
+			if (!$is_terminal_error && $http_status >= 400 && $http_status < 500 && ($http_status !== 404 && $http_status !== 422)) {
+				$is_terminal_error = true;
+			}
+			return array(
+				'attempt_debug' => $attempt_debug,
+				'raw_response_body' => $body,
+				'options' => array(),
+				'error_message' => $error_message,
+				'is_terminal_error' => $is_terminal_error,
+			);
 		}
+
+		$parsed = $this->parse_servicepartner_options_from_xml($body);
+		$attempt_debug['parsed_option_count'] = count($parsed['options']);
+		$attempt_debug['parser_result_summary'] = $parsed['parser_debug'];
+
+		return array(
+			'attempt_debug' => $attempt_debug,
+			'raw_response_body' => $body,
+			'options' => $parsed['options'],
+			'error_message' => $parsed['error_message'],
+			'is_terminal_error' => !empty($parsed['is_terminal_error']),
+		);
+	}
+
+	private function parse_servicepartner_options_from_xml($body) {
+		$parsed = array(
+			'options' => array(),
+			'error_message' => '',
+			'parser_debug' => array(
+				'xpath_match' => '',
+				'candidate_nodes' => 0,
+				'produced_options' => 0,
+			),
+			'is_terminal_error' => false,
+		);
 
 		$xml = $this->safe_simplexml_load_string($body);
 		if ($xml === false) {
-			$result['error_message'] = 'Kunne ikke parse XML-respons fra servicepartner-endepunktet.';
-			return $result;
+			$parsed['error_message'] = 'Kunne ikke parse XML-respons fra servicepartner-endepunktet.';
+			$parsed['parser_debug']['error'] = $parsed['error_message'];
+			$parsed['is_terminal_error'] = true;
+			return $parsed;
 		}
 
-		$options = array();
-		$nodes = $xml->xpath('//service_partner') ?: array();
-		if (empty($nodes)) {
-			$nodes = $xml->xpath('//servicepartner') ?: array();
+		$node_paths = array('//service_partner', '//servicepartner', '//option');
+		$candidate_nodes = array();
+		$matched_xpath = '';
+		foreach ($node_paths as $path) {
+			$nodes = $xml->xpath($path) ?: array();
+			if (!empty($nodes)) {
+				$candidate_nodes = $nodes;
+				$matched_xpath = $path;
+				break;
+			}
 		}
-		foreach ($nodes as $node) {
-			$value = trim((string) $this->xml_value($node, array('id', 'code', 'number', 'value')));
-			$label = trim((string) $this->xml_value($node, array('name', 'title', 'description', 'display_name')));
+
+		$parsed['parser_debug']['xpath_match'] = $matched_xpath;
+		$parsed['parser_debug']['candidate_nodes'] = count($candidate_nodes);
+
+		foreach ($candidate_nodes as $node) {
+			$value = $this->xml_value_or_attribute($node, array('number', 'id', 'code', 'value'));
+			$label = $this->xml_value_or_attribute($node, array('name', 'title', 'display_name', 'description'));
 			if ($value === '') {
 				continue;
 			}
 			if ($label === '') {
 				$label = $value;
 			}
-			$options[] = array('value' => $value, 'label' => $label);
+			$parsed['options'][] = array(
+				'value' => $value,
+				'label' => $label,
+			);
 		}
 
-		if (empty($options)) {
-			$fallback_nodes = $xml->xpath('//option') ?: array();
-			foreach ($fallback_nodes as $node) {
-				$value = trim((string) $this->xml_value($node, array('id', 'code', 'value')));
-				$label = trim((string) $this->xml_value($node, array('name', 'title', 'label')));
-				if ($value === '') {
-					continue;
-				}
-				if ($label === '') {
-					$label = $value;
-				}
-				$options[] = array('value' => $value, 'label' => $label);
+		$parsed['parser_debug']['produced_options'] = count($parsed['options']);
+		if (empty($parsed['options'])) {
+			$parsed['error_message'] = 'Ingen servicepartnere returnert fra API etter progressive fallback-forsøk.';
+		}
+
+		return $parsed;
+	}
+
+	private function xml_value_or_attribute($node, $possible_keys = array()) {
+		$value = $this->xml_value($node, $possible_keys);
+		if ($value !== '') {
+			return $value;
+		}
+
+		foreach ($possible_keys as $key) {
+			if (isset($node[$key]) && trim((string) $node[$key]) !== '') {
+				return trim((string) $node[$key]);
 			}
 		}
 
-		$result['success'] = true;
-		$result['options'] = $options;
-		if (empty($options)) {
-			$result['error_message'] = 'Ingen servicepartnere returnert fra API for denne kombinasjonen av agreement, product, country, postcode, city og address';
-		}
-
-		return $result;
+		return '';
 	}
 
 	public function detect_servicepartner_custom_params($method) {
@@ -496,7 +650,9 @@ class LP_Cargonizer_Api_Service {
 		$product_name = strtolower(sanitize_text_field(isset($method['product_name']) ? (string) $method['product_name'] : ''));
 
 		$params = array();
-		$debug = array();
+		$debug = array(
+			'detected_carrier_family' => 'unknown',
+		);
 
 		$is_bring = strpos($carrier_id, 'bring') !== false || strpos($carrier_name, 'bring') !== false || strpos($carrier_id, 'bring2') !== false || strpos($carrier_name, 'bring2') !== false;
 		$is_postnord = strpos($carrier_id, 'postnord') !== false || strpos($carrier_name, 'postnord') !== false || strpos($carrier_id, 'tollpost_globe') !== false || strpos($carrier_name, 'tollpost_globe') !== false;
@@ -508,39 +664,41 @@ class LP_Cargonizer_Api_Service {
 
 		if ($is_bring) {
 			$carrier_family = 'bring';
+			$debug['detected_carrier_family'] = 'bring';
 			if ($is_locker_product) {
 				$params['pickupPointType'] = 'locker';
 				$debug['pickupPointType'] = array(
 					'value' => 'locker',
-					'source' => 'auto_detected_from_carrier_product',
+					'reason' => 'locker-like product for Bring/bring2',
 				);
 			} elseif ($is_pickup_product) {
 				$params['pickupPointType'] = 'manned';
 				$debug['pickupPointType'] = array(
 					'value' => 'manned',
-					'source' => 'auto_detected_from_carrier_product',
+					'reason' => 'pickup-point product for Bring/bring2 without locker indicators',
 				);
 			} else {
 				$debug['pickupPointType'] = array(
 					'value' => '',
-					'source' => 'omitted_no_safe_mapping',
+					'reason' => 'omitted because product is not safely mappable to locker or manned',
 				);
 			}
 		}
 
 		if ($is_postnord) {
 			$carrier_family = 'postnord';
+			$debug['detected_carrier_family'] = 'postnord';
 			$is_box_style = strpos($product_name, 'mypack small') !== false || strpos($product_id, 'mypack_small') !== false || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false || $is_locker_product;
 			if ($is_box_style) {
 				$params['typeId'] = '2';
 				$debug['typeId'] = array(
 					'value' => '2',
-					'source' => 'auto_detected_from_box_style_product',
+					'reason' => 'box/locker-style PostNord product (including MyPack Small)',
 				);
 			} else {
 				$debug['typeId'] = array(
 					'value' => '',
-					'source' => 'omitted_no_safe_mapping',
+					'reason' => 'omitted because product is not box/locker-style',
 				);
 			}
 		}
@@ -548,7 +706,7 @@ class LP_Cargonizer_Api_Service {
 		if ($carrier_family === 'unknown') {
 			$debug['custom_params'] = array(
 				'value' => '',
-				'source' => 'omitted_unknown_carrier_family',
+				'reason' => 'omitted because carrier family is not Bring/bring2 or PostNord/tollpost_globe',
 			);
 		}
 
