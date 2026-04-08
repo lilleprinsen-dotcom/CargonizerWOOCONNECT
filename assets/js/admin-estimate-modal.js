@@ -440,8 +440,9 @@
 				(options || []).forEach(function(opt){
 					var value = (opt && opt.value) ? String(opt.value) : '';
 					var label = (opt && opt.label) ? String(opt.label) : value;
+					var customerNumber = (opt && opt.customer_number) ? String(opt.customer_number) : '';
 					if (!value) { return; }
-					html += '<option value="' + esc(value) + '"' + (selectedValue === value ? ' selected' : '') + '>' + esc(label) + '</option>';
+					html += '<option value="' + esc(value) + '" data-customer-number="' + esc(customerNumber) + '"' + (selectedValue === value ? ' selected' : '') + '>' + esc(label) + '</option>';
 				});
 				bookingServicepartnerSelect.innerHTML = html;
 				bookingServicepartnerSelect.setAttribute('data-method-key', methodKey || '');
@@ -452,7 +453,9 @@
 				var parts = debug.attempts.map(function(attempt, idx){
 					var label = (attempt && (attempt.label || attempt.name)) ? String(attempt.label || attempt.name) : String.fromCharCode(65 + idx);
 					var count = 0;
-					if (attempt && typeof attempt.option_count !== 'undefined') {
+					if (attempt && typeof attempt.parsed_option_count !== 'undefined') {
+						count = parseInt(attempt.parsed_option_count, 10);
+					} else if (attempt && typeof attempt.option_count !== 'undefined') {
 						count = parseInt(attempt.option_count, 10);
 					} else if (attempt && typeof attempt.count !== 'undefined') {
 						count = parseInt(attempt.count, 10);
@@ -463,6 +466,13 @@
 					return label + '=' + count + ' treff';
 				});
 				return parts.length ? ('Forsøk: ' + parts.join(', ')) : '';
+			}
+
+			function getSelectedServicepartnerCustomerNumber(selectEl){
+				if (!selectEl || !selectEl.options) { return ''; }
+				var index = typeof selectEl.selectedIndex === 'number' ? selectEl.selectedIndex : -1;
+				if (index < 0 || !selectEl.options[index]) { return ''; }
+				return selectEl.options[index].getAttribute('data-customer-number') || '';
 			}
 
 			function getFetchFailureDetails(payload, debug){
@@ -813,8 +823,9 @@
 					options.forEach(function(opt){
 						var value = (opt && opt.value) ? String(opt.value) : '';
 						var label = (opt && opt.label) ? String(opt.label) : value;
+						var customerNumber = (opt && opt.customer_number) ? String(opt.customer_number) : '';
 						if (!value) { return; }
-						optionsHtml += '<option value="'+esc(value)+'" '+(currentValue === value ? 'selected' : '')+'>'+esc(label)+'</option>';
+						optionsHtml += '<option value="'+esc(value)+'" data-customer-number="'+esc(customerNumber)+'" '+(currentValue === value ? 'selected' : '')+'>'+esc(label)+'</option>';
 					});
 				}
 				var infoParts = [];
@@ -967,8 +978,9 @@
 								options.forEach(function(opt){
 									var value = (opt && opt.value) ? String(opt.value) : '';
 									var label = (opt && opt.label) ? String(opt.label) : value;
+									var customerNumber = (opt && opt.customer_number) ? String(opt.customer_number) : '';
 									if (!value) { return; }
-									optionsHtml += '<option value="'+esc(value)+'"'+(previousRetryValue === value ? ' selected' : '')+'>'+esc(label)+'</option>';
+									optionsHtml += '<option value="'+esc(value)+'" data-customer-number="'+esc(customerNumber)+'"'+(previousRetryValue === value ? ' selected' : '')+'>'+esc(label)+'</option>';
 								});
 								retrySelect.innerHTML = optionsHtml;
 								var selectedFromProactive = getProactiveSelectedServicepartner(methodKey);
@@ -1056,7 +1068,16 @@
 				});
 				Object.keys(methodData).forEach(function(key){ form.append('methods[0]['+key+']', methodData[key]); });
 				if (selectedServicepartner) {
+					var selectedCustomerNumber = '';
+					if (resultsContent) {
+						var selectedServicepartnerSelect = resultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+						selectedCustomerNumber = getSelectedServicepartnerCustomerNumber(selectedServicepartnerSelect);
+					}
 					form.append('methods[0][servicepartner]', selectedServicepartner);
+					if (selectedCustomerNumber) {
+						form.append('methods[0][servicepartner_customer_number]', selectedCustomerNumber);
+						methodData.servicepartner_customer_number = selectedCustomerNumber;
+					}
 					methodData.servicepartner = selectedServicepartner;
 				}
 				if (useSmsService) {
@@ -1409,8 +1430,9 @@
 					options.forEach(function(opt){
 						var value = (opt && opt.value) ? String(opt.value) : '';
 						var label = (opt && opt.label) ? String(opt.label) : value;
+						var customerNumber = (opt && opt.customer_number) ? String(opt.customer_number) : '';
 						if (!value) { return; }
-						optionsHtml += '<option value="' + esc(value) + '">' + esc(label) + '</option>';
+						optionsHtml += '<option value="' + esc(value) + '" data-customer-number="' + esc(customerNumber) + '">' + esc(label) + '</option>';
 					});
 					htmlParts.push('<div style="color:#b32d2e;">Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.</div>');
 					htmlParts.push('<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><select class="lp-servicepartner-select" data-method-key="' + esc(methodKey) + '" style="min-width:220px;">' + optionsHtml + '</select><button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="' + esc(methodKey) + '">Hent servicepartnere</button></div>');
@@ -1627,6 +1649,14 @@
 					selectedServicepartner = getProactiveSelectedServicepartner(methodKey);
 				}
 				method.servicepartner = selectedServicepartner || '';
+				method.servicepartner_customer_number = '';
+				if (bookingResultsContent) {
+					var selectedServicepartnerSelectForBooking = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+					method.servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(selectedServicepartnerSelectForBooking);
+				}
+				if (!method.servicepartner_customer_number && bookingServicepartnerSelect && (bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey) {
+					method.servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(bookingServicepartnerSelect);
+				}
 				var proactiveVisibleForMethod = !!(bookingServicepartnerSection && bookingServicepartnerSection.style.display !== 'none' && bookingServicepartnerSelect && (bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey);
 				var proactiveOptionsCount = (bookingServicepartnerSelect && bookingServicepartnerSelect.options) ? bookingServicepartnerSelect.options.length : 0;
 				if (proactiveVisibleForMethod && methodLikelyNeedsServicepartner(method) && proactiveOptionsCount > 1 && !method.servicepartner) {
@@ -1800,6 +1830,7 @@
 				latestEstimateResults = latestEstimateResults.map(function(row){
 					if (methodKeyForRow(row) === methodKey) {
 						row.selected_servicepartner = select.value || '';
+						row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(select);
 					}
 					return row;
 				});
@@ -1814,6 +1845,7 @@
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
 								row.selected_servicepartner = value;
+								row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(select);
 							}
 							return row;
 						});
