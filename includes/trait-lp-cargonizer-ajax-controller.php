@@ -499,12 +499,23 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
-		$printers = $this->fetch_printers();
+		$printer_result = $this->fetch_printers();
 		$default_printer_id = get_user_meta(get_current_user_id(), 'lp_cargonizer_default_printer_id', true);
 		$default_printer_id = is_scalar($default_printer_id) ? sanitize_text_field((string) $default_printer_id) : '';
 
+		if (empty($printer_result['success'])) {
+			$error = array(
+				'message' => !empty($printer_result['message']) ? (string) $printer_result['message'] : 'Kunne ikke hente printere.',
+				'http_status' => isset($printer_result['http_status']) ? (int) $printer_result['http_status'] : 0,
+			);
+			if (array_key_exists('raw', $printer_result)) {
+				$error['raw'] = $printer_result['raw'];
+			}
+			wp_send_json_error($error, 200);
+		}
+
 		wp_send_json_success(array(
-			'printers' => $printers,
+			'printers' => isset($printer_result['printers']) && is_array($printer_result['printers']) ? $printer_result['printers'] : array(),
 			'default_printer_id' => $default_printer_id,
 		));
 	}
