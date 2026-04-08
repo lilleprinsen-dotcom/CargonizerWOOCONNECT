@@ -287,6 +287,79 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return $payload;
 	}
 
+	private function resolve_booking_estimated_shipping_price($booking_result, $recipient, $packages, $method_payload) {
+		$selection = array(
+			'estimated_shipping_price' => 'ikke tilgjengelig',
+			'estimated_shipping_price_source' => 'missing',
+		);
+
+		if (isset($booking_result['gross_cost']) && (string) $booking_result['gross_cost'] !== '') {
+			$selection['estimated_shipping_price'] = (string) $booking_result['gross_cost'];
+			$selection['estimated_shipping_price_source'] = 'gross_cost';
+			return $selection;
+		}
+
+		if (isset($booking_result['net_cost']) && (string) $booking_result['net_cost'] !== '') {
+			$selection['estimated_shipping_price'] = (string) $booking_result['net_cost'];
+			$selection['estimated_shipping_price_source'] = 'net_cost';
+			return $selection;
+		}
+
+		$fallback_price = $this->fetch_booking_estimate_fallback_price($recipient, $packages, $method_payload);
+		if (isset($fallback_price['gross_amount']) && $fallback_price['gross_amount'] !== '') {
+			$selection['estimated_shipping_price'] = $fallback_price['gross_amount'];
+			$selection['estimated_shipping_price_source'] = 'estimate_gross_amount';
+		} elseif (isset($fallback_price['net_amount']) && $fallback_price['net_amount'] !== '') {
+			$selection['estimated_shipping_price'] = $fallback_price['net_amount'];
+			$selection['estimated_shipping_price_source'] = 'estimate_net_amount';
+		} elseif (isset($fallback_price['estimated_cost']) && $fallback_price['estimated_cost'] !== '') {
+			$selection['estimated_shipping_price'] = $fallback_price['estimated_cost'];
+			$selection['estimated_shipping_price_source'] = 'estimate_estimated_cost';
+		}
+
+		return $selection;
+	}
+
+	private function fetch_booking_estimate_fallback_price($recipient, $packages, $method_payload) {
+		$empty_result = array(
+			'estimated_cost' => '',
+			'gross_amount' => '',
+			'net_amount' => '',
+			'fallback_price' => '',
+		);
+
+		$xml = $this->build_estimate_request_xml(array(
+			'recipient' => is_array($recipient) ? $recipient : array(),
+			'packages' => is_array($packages) ? $packages : array(),
+			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
+			'use_sms_service' => !empty($method_payload['use_sms_service']),
+			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
+			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
+		), $method_payload);
+
+		if ($xml === '') {
+			return $empty_result;
+		}
+
+		$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
+			'timeout' => 40,
+			'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
+			'body' => $xml,
+		));
+
+		if (is_wp_error($response)) {
+			return $empty_result;
+		}
+
+		$status = wp_remote_retrieve_response_code($response);
+		if ($status < 200 || $status >= 300) {
+			return $empty_result;
+		}
+
+		$body = wp_remote_retrieve_body($response);
+		return $this->parse_estimate_price_fields($body);
+	}
+
 	public function ajax_book_shipment() {
 		if (!current_user_can('manage_woocommerce')) {
 			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
@@ -430,17 +503,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['created_by_user_id'] = (string) get_current_user_id();
 		$booking_state['created_by_user_login'] = $current_user && isset($current_user->user_login) ? (string) $current_user->user_login : '';
 		$booking_state['created_by_display_name'] = $current_user && isset($current_user->display_name) ? (string) $current_user->display_name : '';
-		$estimated_shipping_price = 'ikke tilgjengelig';
-		$estimated_shipping_price_source = 'missing';
-		if (isset($booking_result['gross_cost']) && (string) $booking_result['gross_cost'] !== '') {
-			$estimated_shipping_price = (string) $booking_result['gross_cost'];
-			$estimated_shipping_price_source = 'gross_cost';
-		} elseif (isset($booking_result['net_cost']) && (string) $booking_result['net_cost'] !== '') {
-			$estimated_shipping_price = (string) $booking_result['net_cost'];
-			$estimated_shipping_price_source = 'net_cost';
-		}
-		$booking_state['estimated_shipping_price'] = $estimated_shipping_price;
-		$booking_state['estimated_shipping_price_source'] = $estimated_shipping_price_source;
+		$estimated_price_selection = $this->resolve_booking_estimated_shipping_price($booking_result, $recipient, $clean_packages, $method_payload);
+		$booking_state['estimated_shipping_price'] = isset($estimated_price_selection['estimated_shipping_price']) ? (string) $estimated_price_selection['estimated_shipping_price'] : 'ikke tilgjengelig';
+		$booking_state['estimated_shipping_price_source'] = isset($estimated_price_selection['estimated_shipping_price_source']) ? (string) $estimated_price_selection['estimated_shipping_price_source'] : 'missing';
 
 		$posted_printer_choice = isset($_POST['printer_choice']) ? wp_unslash($_POST['printer_choice']) : '';
 		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
@@ -481,17 +546,23 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$tracking_link = $booking_state['tracking_url'] !== ''
 			? '<a href="' . esc_url($booking_state['tracking_url']) . '" target="_blank" rel="noopener noreferrer">' . esc_html($booking_state['tracking_url']) . '</a>'
 			: 'ikke tilgjengelig';
-		$order->add_order_note(
-			sprintf(
-				'Cargonizer booking opprettet av %1$s. Consignment: %2$s. Metode: %3$s. Estimert fraktpris: %4$s. Tracking: %5$s. Tracking URL: %6$s',
-				$creator_name !== '' ? $creator_name : 'ukjent bruker',
-				$booking_state['consignment_number'] !== '' ? $booking_state['consignment_number'] : 'ukjent',
-				$this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
-				$booking_state['estimated_shipping_price'],
-				$tracking_link,
-				$booking_state['tracking_url'] !== '' ? $booking_state['tracking_url'] : 'ikke tilgjengelig'
-			)
+		$order_note_lines = array(
+			'Cargonizer booking opprettet',
+			'Opprettet av: ' . ($creator_name !== '' ? $creator_name : 'ukjent bruker'),
+			'Consignment: ' . ($booking_state['consignment_number'] !== '' ? $booking_state['consignment_number'] : 'ukjent'),
+			'Fraktmetode: ' . $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
+			'Estimert fraktpris: ' . $booking_state['estimated_shipping_price'],
+			'Tracking: ' . $tracking_link,
 		);
+		if (!empty($booking_state['print']['attempted'])) {
+			$print_status = !empty($booking_state['print']['success']) ? 'OK' : 'Feilet';
+			$print_message = isset($booking_state['print']['message']) ? trim((string) $booking_state['print']['message']) : '';
+			if ($print_message !== '') {
+				$print_status .= ' - ' . $print_message;
+			}
+			$order_note_lines[] = 'Utskrift: ' . $print_status;
+		}
+		$order->add_order_note(implode("\n", $order_note_lines));
 		$booking_count = $this->get_booking_count_from_state($booking_state);
 
 		wp_send_json_success(array(
@@ -676,6 +747,15 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$has_allowed_methods = false;
 		$method_pricing = $this->get_enabled_method_pricing();
 		foreach ($methods as $method) {
+			$selected_service_ids = array();
+			if (isset($method['selected_service_ids']) && is_array($method['selected_service_ids'])) {
+				foreach ($method['selected_service_ids'] as $selected_service_id) {
+					$clean_service_id = sanitize_text_field((string) $selected_service_id);
+					if ($clean_service_id !== '') {
+						$selected_service_ids[] = $clean_service_id;
+					}
+				}
+			}
 			$method_payload = array(
 				'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
@@ -690,6 +770,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
+				'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 				'is_manual' => !empty($method['is_manual']),
 				'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
 			);
@@ -930,6 +1011,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'servicepartner' => $method_payload['servicepartner'],
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
+				'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
 			), $method_payload);
 
 			$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
@@ -1118,6 +1200,15 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$results = array();
 		foreach ($methods as $method) {
+			$selected_service_ids = array();
+			if (isset($method['selected_service_ids']) && is_array($method['selected_service_ids'])) {
+				foreach ($method['selected_service_ids'] as $selected_service_id) {
+					$clean_service_id = sanitize_text_field((string) $selected_service_id);
+					if ($clean_service_id !== '') {
+						$selected_service_ids[] = $clean_service_id;
+					}
+				}
+			}
 			$method_payload = array(
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
@@ -1131,6 +1222,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
+				'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 				'is_manual' => !empty($method['is_manual']),
 			);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
