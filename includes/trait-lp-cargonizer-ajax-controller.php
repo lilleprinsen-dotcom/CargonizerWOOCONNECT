@@ -84,6 +84,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			),
 			'items' => $items,
 			'packages' => $packages,
+			'booking_state' => $this->get_order_booking_state($order_id),
 		);
 
 		if ($data['recipient']['name'] === '') {
@@ -172,6 +173,267 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		wp_send_json_success(array(
 			'options' => $servicepartner_result['options'],
 			'debug' => $servicepartner_result,
+		));
+	}
+
+	public function ajax_get_printers() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_PRINTERS)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$printers = $this->fetch_printers();
+		$default_printer_id = get_user_meta(get_current_user_id(), 'lp_cargonizer_default_printer_id', true);
+		$default_printer_id = is_scalar($default_printer_id) ? sanitize_text_field((string) $default_printer_id) : '';
+
+		wp_send_json_success(array(
+			'printers' => $printers,
+			'default_printer_id' => $default_printer_id,
+		));
+	}
+
+	private function get_default_booking_state() {
+		return array(
+			'booked' => false,
+		);
+	}
+
+	private function get_order_booking_state($order_id) {
+		$state = get_post_meta($order_id, '_lp_cargonizer_booking_state', true);
+		if (!is_array($state) || empty($state)) {
+			return $this->get_default_booking_state();
+		}
+		return $state;
+	}
+
+	private function save_order_booking_state($order_id, $state) {
+		update_post_meta($order_id, '_lp_cargonizer_booking_state', $state);
+	}
+
+	private function get_current_user_default_printer_id() {
+		$value = get_user_meta(get_current_user_id(), 'lp_cargonizer_default_printer_id', true);
+		return is_scalar($value) ? sanitize_text_field((string) $value) : '';
+	}
+
+	private function resolve_effective_printer_choice($printer_choice) {
+		$choice = sanitize_text_field((string) $printer_choice);
+		if ($choice === '__default__') {
+			return $this->get_current_user_default_printer_id();
+		}
+		return $choice;
+	}
+
+	public function ajax_book_shipment() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_BOOK)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$order = $order_id ? wc_get_order($order_id) : false;
+		if (!$order) {
+			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+		}
+
+		$current_state = $this->get_order_booking_state($order_id);
+		if (!empty($current_state['booked'])) {
+			wp_send_json_error(array('message' => 'Ordren er allerede booket i Cargonizer.'), 409);
+		}
+
+		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
+		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
+		$printer_choice = isset($_POST['printer_choice']) ? sanitize_text_field(wp_unslash($_POST['printer_choice'])) : '';
+		$enabled_map = $this->get_enabled_method_map();
+
+		if (empty($packages) || empty($methods)) {
+			wp_send_json_error(array('message' => 'Mangler kolli eller fraktvalg.'), 400);
+		}
+		if (count($methods) !== 1) {
+			wp_send_json_error(array('message' => 'Du må velge nøyaktig én fraktmetode for booking.'), 400);
+		}
+
+		$clean_packages = array();
+		foreach ($packages as $package) {
+			$clean_packages[] = array(
+				'name' => isset($package['name']) ? sanitize_text_field($package['name']) : '',
+				'description' => isset($package['description']) ? sanitize_text_field($package['description']) : '',
+				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
+				'length' => isset($package['length']) ? (float) $package['length'] : 0,
+				'width' => isset($package['width']) ? (float) $package['width'] : 0,
+				'height' => isset($package['height']) ? (float) $package['height'] : 0,
+			);
+		}
+
+		$recipient = array(
+			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
+			'address_1' => $order->get_shipping_address_1(),
+			'address_2' => $order->get_shipping_address_2(),
+			'postcode' => $order->get_shipping_postcode(),
+			'city' => $order->get_shipping_city(),
+			'country' => $order->get_shipping_country(),
+			'email' => $order->get_billing_email(),
+			'phone' => $order->get_billing_phone(),
+		);
+		if ($recipient['name'] === '') {
+			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+
+		$method = reset($methods);
+		$method_payload = array(
+			'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
+			'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
+			'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
+			'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
+			'agreement_number' => isset($method['agreement_number']) ? sanitize_text_field($method['agreement_number']) : '',
+			'carrier_id' => isset($method['carrier_id']) ? sanitize_text_field($method['carrier_id']) : '',
+			'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
+			'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
+			'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+			'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
+			'use_sms_service' => !empty($method['use_sms_service']),
+			'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
+			'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
+			'is_manual' => !empty($method['is_manual']),
+			'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
+		);
+		if ($method_payload['key'] === '') {
+			$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+		}
+		$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+		if (!isset($enabled_map[$method_key])) {
+			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert i Cargonizer-innstillingene.'), 400);
+		}
+		if ($method_payload['sms_service_id'] === '') {
+			$sms_service = $this->find_sms_service_for_method($method);
+			$method_payload['sms_service_id'] = $sms_service['service_id'];
+			$method_payload['sms_service_name'] = $sms_service['service_name'];
+		}
+
+		$booking_xml = $this->build_booking_consignment_xml(array(
+			'recipient' => $recipient,
+			'packages' => $clean_packages,
+			'order_number' => $order->get_order_number(),
+			'servicepartner' => $method_payload['servicepartner'],
+			'use_sms_service' => $method_payload['use_sms_service'],
+			'sms_service_id' => $method_payload['sms_service_id'],
+		), $method_payload, array(
+			'transfer' => true,
+			'booking_request' => false,
+		));
+
+		$booking_result = $this->create_booking_consignment($booking_xml);
+		if (empty($booking_result['success'])) {
+			$combined_error_text = strtolower(trim(
+				(isset($booking_result['error_code']) ? $booking_result['error_code'] : '') . ' ' .
+				(isset($booking_result['parsed_error_message']) ? $booking_result['parsed_error_message'] : '') . ' ' .
+				(isset($booking_result['error_details']) ? $booking_result['error_details'] : '') . ' ' .
+				(isset($booking_result['error']) ? $booking_result['error'] : '')
+			));
+			$requires_servicepartner = $this->estimate_requires_servicepartner($combined_error_text);
+			$requires_sms_service = $this->estimate_requires_sms_service($combined_error_text);
+			$servicepartner_fetch = array();
+			$servicepartner_options = array();
+			if ($requires_servicepartner) {
+				$servicepartner_lookup_method = $method_payload;
+				$servicepartner_lookup_method['country'] = isset($recipient['country']) ? $recipient['country'] : '';
+				$servicepartner_lookup_method['postcode'] = isset($recipient['postcode']) ? $recipient['postcode'] : '';
+				$servicepartner_fetch = $this->fetch_servicepartner_options($servicepartner_lookup_method);
+				$servicepartner_options = isset($servicepartner_fetch['options']) && is_array($servicepartner_fetch['options']) ? $servicepartner_fetch['options'] : array();
+			}
+
+			wp_send_json_error(array(
+				'message' => isset($booking_result['error']) && $booking_result['error'] !== '' ? $booking_result['error'] : 'Booking feilet.',
+				'error_code' => isset($booking_result['error_code']) ? $booking_result['error_code'] : '',
+				'error_type' => isset($booking_result['error_type']) ? $booking_result['error_type'] : '',
+				'error_details' => isset($booking_result['error_details']) ? $booking_result['error_details'] : '',
+				'parsed_error_message' => isset($booking_result['parsed_error_message']) ? $booking_result['parsed_error_message'] : '',
+				'requires_servicepartner' => $requires_servicepartner,
+				'requires_sms_service' => $requires_sms_service,
+				'servicepartner_options' => $servicepartner_options,
+				'servicepartner_fetch' => $servicepartner_fetch,
+			), 400);
+		}
+
+		$effective_printer_id = $this->resolve_effective_printer_choice($printer_choice);
+		$printer_label = $effective_printer_id;
+		if ($effective_printer_id !== '') {
+			$printers_lookup = $this->fetch_printers();
+			$printers = isset($printers_lookup['printers']) && is_array($printers_lookup['printers']) ? $printers_lookup['printers'] : array();
+			foreach ($printers as $printer_row) {
+				if (!is_array($printer_row)) {
+					continue;
+				}
+				$candidate_id = isset($printer_row['id']) ? sanitize_text_field((string) $printer_row['id']) : '';
+				if ($candidate_id === $effective_printer_id) {
+					$printer_label = isset($printer_row['label']) ? sanitize_text_field((string) $printer_row['label']) : $effective_printer_id;
+					break;
+				}
+			}
+		}
+
+		$booking_state = array(
+			'booked' => true,
+			'consignment_number' => isset($booking_result['consignment_number']) ? (string) $booking_result['consignment_number'] : '',
+			'consignment_id' => isset($booking_result['consignment_id']) ? (string) $booking_result['consignment_id'] : '',
+			'piece_numbers' => isset($booking_result['piece_numbers']) && is_array($booking_result['piece_numbers']) ? $booking_result['piece_numbers'] : array(),
+			'piece_ids' => isset($booking_result['piece_ids']) && is_array($booking_result['piece_ids']) ? $booking_result['piece_ids'] : array(),
+			'tracking_url' => isset($booking_result['tracking_url']) ? (string) $booking_result['tracking_url'] : '',
+			'consignment_pdf_url' => isset($booking_result['consignment_pdf_url']) ? (string) $booking_result['consignment_pdf_url'] : '',
+			'waybill_pdf_url' => isset($booking_result['waybill_pdf_url']) ? (string) $booking_result['waybill_pdf_url'] : '',
+			'method_key' => $method_key,
+			'agreement_id' => $method_payload['agreement_id'],
+			'product_id' => $method_payload['product_id'],
+			'servicepartner' => $method_payload['servicepartner'],
+			'sms_service_id' => $method_payload['sms_service_id'],
+			'created_at_gmt' => gmdate('Y-m-d H:i:s'),
+			'print' => array(
+				'attempted' => false,
+				'success' => false,
+				'printer_id' => '',
+				'printer_label' => '',
+				'message' => '',
+				'raw_response' => '',
+			),
+		);
+
+		if ($effective_printer_id !== '' && !empty($booking_state['consignment_pdf_url'])) {
+			$booking_state['print']['attempted'] = true;
+			$booking_state['print']['printer_id'] = $effective_printer_id;
+			$booking_state['print']['printer_label'] = $printer_label;
+
+			$pdf_fetch = $this->fetch_authenticated_binary_url($booking_state['consignment_pdf_url']);
+			if (empty($pdf_fetch['success'])) {
+				$booking_state['print']['success'] = false;
+				$booking_state['print']['message'] = isset($pdf_fetch['message']) ? $pdf_fetch['message'] : 'Kunne ikke hente consignment-pdf.';
+				$booking_state['print']['raw_response'] = isset($pdf_fetch['raw_response']) ? $pdf_fetch['raw_response'] : '';
+			} else {
+				$print_result = $this->print_pdf_to_printer($effective_printer_id, isset($pdf_fetch['binary_body']) ? $pdf_fetch['binary_body'] : '');
+				$booking_state['print']['success'] = !empty($print_result['success']);
+				$booking_state['print']['message'] = isset($print_result['message']) ? $print_result['message'] : '';
+				$booking_state['print']['raw_response'] = isset($print_result['raw_response']) ? $print_result['raw_response'] : '';
+			}
+		}
+
+		$this->save_order_booking_state($order_id, $booking_state);
+
+		$method_label = $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']);
+		$order->add_order_note(
+			'Cargonizer booking opprettet. Consignment: ' .
+			(isset($booking_state['consignment_number']) ? $booking_state['consignment_number'] : '') .
+			', metode: ' . $method_label
+		);
+
+		wp_send_json_success(array(
+			'message' => 'Shipment booked successfully.',
+			'booking' => $booking_state,
 		));
 	}
 

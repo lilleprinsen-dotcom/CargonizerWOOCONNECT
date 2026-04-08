@@ -21,6 +21,8 @@ class LP_Cargonizer_Connector {
 	const NONCE_ACTION_ESTIMATE_BASELINE = 'lp_cargonizer_run_bulk_estimate_baseline';
 	const NONCE_ACTION_OPTIMIZE_DSV = 'lp_cargonizer_optimize_dsv_estimates';
 	const NONCE_ACTION_SERVICEPARTNERS = 'lp_cargonizer_fetch_servicepartners';
+	const NONCE_ACTION_PRINTERS = 'lp_cargonizer_get_printers';
+	const NONCE_ACTION_BOOK = 'lp_cargonizer_book_shipment';
 	/** @var LP_Cargonizer_Settings_Service */
 	private $settings_service;
 	/** @var LP_Cargonizer_Api_Service */
@@ -67,6 +69,8 @@ class LP_Cargonizer_Connector {
 		add_action('wp_ajax_lp_cargonizer_run_bulk_estimate_baseline', array($this, 'ajax_run_bulk_estimate_baseline'));
 		add_action('wp_ajax_lp_cargonizer_optimize_dsv_estimates', array($this, 'ajax_optimize_dsv_estimates'));
 		add_action('wp_ajax_lp_cargonizer_get_servicepartner_options', array($this, 'ajax_get_servicepartner_options'));
+		add_action('wp_ajax_lp_cargonizer_get_printers', array($this, 'ajax_get_printers'));
+		add_action('wp_ajax_lp_cargonizer_book_shipment', array($this, 'ajax_book_shipment'));
 	}
 
 	public function sanitize_settings($input) {
@@ -119,6 +123,34 @@ class LP_Cargonizer_Connector {
 
 	private function fetch_transport_agreements() {
 		return $this->api_service->fetch_transport_agreements();
+	}
+
+	private function fetch_printers() {
+		return $this->api_service->fetch_printers();
+	}
+
+	private function parse_printers_response($body) {
+		return $this->api_service->parse_printers_response($body);
+	}
+
+	private function build_booking_consignment_xml($payload, $method, $options = array()) {
+		return $this->api_service->build_booking_consignment_xml($payload, $method, $options);
+	}
+
+	private function create_booking_consignment($xml) {
+		return $this->api_service->create_booking_consignment($xml);
+	}
+
+	private function parse_booking_consignment_response($body) {
+		return $this->api_service->parse_booking_consignment_response($body);
+	}
+
+	private function fetch_authenticated_binary_url($url) {
+		return $this->api_service->fetch_authenticated_binary_url($url);
+	}
+
+	private function print_pdf_to_printer($printer_id, $pdf_binary) {
+		return $this->api_service->print_pdf_to_printer($printer_id, $pdf_binary);
 	}
 
 
