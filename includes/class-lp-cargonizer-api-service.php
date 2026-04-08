@@ -416,12 +416,14 @@ class LP_Cargonizer_Api_Service {
 		$attempts = array(
 			array('label' => 'A', 'fields' => array('carrier', 'product', 'transport_agreement_id', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => true),
 			array('label' => 'B', 'fields' => array('carrier', 'product', 'transport_agreement_id', 'country', 'postcode', 'address', 'name'), 'use_custom' => true),
-			array('label' => 'C', 'fields' => array('carrier', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => true),
-			array('label' => 'D', 'fields' => array('carrier', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => true),
-			array('label' => 'E', 'fields' => array('carrier', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => false),
-			array('label' => 'F', 'fields' => array('carrier', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => false),
-			array('label' => 'G', 'fields' => array('carrier', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => false),
-			array('label' => 'H', 'fields' => array('carrier', 'country', 'postcode', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'C', 'fields' => array('transport_agreement_id', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'D', 'fields' => array('transport_agreement_id', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'E', 'fields' => array('carrier', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'F', 'fields' => array('carrier', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => true),
+			array('label' => 'G', 'fields' => array('carrier', 'product', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'H', 'fields' => array('carrier', 'product', 'country', 'postcode', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'I', 'fields' => array('carrier', 'country', 'postcode', 'city', 'address', 'name'), 'use_custom' => false),
+			array('label' => 'J', 'fields' => array('carrier', 'country', 'postcode', 'address', 'name'), 'use_custom' => false),
 		);
 
 		$last_error_message = '';
@@ -517,6 +519,7 @@ class LP_Cargonizer_Api_Service {
 			'custom_params_used' => $custom_params_used,
 			'omitted_params' => array_values(array_unique($omitted_params)),
 			'parser_result_summary' => array(),
+			'overfiltering_likely' => false,
 		);
 
 		$response = wp_remote_get($request_url, array(
@@ -560,6 +563,7 @@ class LP_Cargonizer_Api_Service {
 		$parsed = $this->parse_servicepartner_options_from_xml($body);
 		$attempt_debug['parsed_option_count'] = count($parsed['options']);
 		$attempt_debug['parser_result_summary'] = $parsed['parser_debug'];
+		$attempt_debug['overfiltering_likely'] = !empty($parsed['parser_debug']['xml_parsed']) && !empty($parsed['parser_debug']['candidate_nodes_found']) && $attempt_debug['parsed_option_count'] === 0;
 
 		return array(
 			'attempt_debug' => $attempt_debug,
@@ -575,8 +579,13 @@ class LP_Cargonizer_Api_Service {
 			'options' => array(),
 			'error_message' => '',
 			'parser_debug' => array(
+				'xml_parsed' => false,
 				'xpath_match' => '',
+				'matched_xpath' => '',
 				'candidate_nodes' => 0,
+				'candidate_nodes_found' => false,
+				'container_xpath_match' => '',
+				'node_shape_supported' => true,
 				'produced_options' => 0,
 			),
 			'is_terminal_error' => false,
@@ -590,7 +599,18 @@ class LP_Cargonizer_Api_Service {
 			return $parsed;
 		}
 
-		$node_paths = array('//service_partner', '//servicepartner', '//option');
+		$parsed['parser_debug']['xml_parsed'] = true;
+
+		$node_paths = array(
+			'//*[local-name()="service_partner"]',
+			'//*[local-name()="service-partner"]',
+			'//*[local-name()="servicepartner"]',
+			'//*[local-name()="option"]',
+			'//*[local-name()="service_partners"]/*[local-name()="service_partner"]',
+			'//*[local-name()="service-partners"]/*[local-name()="service-partner"]',
+			'//*[local-name()="service_partners"]/*[local-name()="servicepartner"]',
+			'//*[local-name()="service-partners"]/*[local-name()="servicepartner"]',
+		);
 		$candidate_nodes = array();
 		$matched_xpath = '';
 		foreach ($node_paths as $path) {
@@ -603,20 +623,83 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		$parsed['parser_debug']['xpath_match'] = $matched_xpath;
+		$parsed['parser_debug']['matched_xpath'] = $matched_xpath;
 		$parsed['parser_debug']['candidate_nodes'] = count($candidate_nodes);
+		$parsed['parser_debug']['candidate_nodes_found'] = !empty($candidate_nodes);
+
+		$container_paths = array(
+			'//*[local-name()="service_partners"]',
+			'//*[local-name()="service-partners"]',
+		);
+		foreach ($container_paths as $container_path) {
+			$container_nodes = $xml->xpath($container_path) ?: array();
+			if (!empty($container_nodes)) {
+				$parsed['parser_debug']['container_xpath_match'] = $container_path;
+				break;
+			}
+		}
+
+		if ($parsed['parser_debug']['container_xpath_match'] !== '' && empty($candidate_nodes)) {
+			$parsed['parser_debug']['node_shape_supported'] = false;
+		}
 
 		foreach ($candidate_nodes as $node) {
 			$value = $this->xml_value_or_attribute($node, array('number', 'id', 'code', 'value'));
-			$label = $this->xml_value_or_attribute($node, array('name', 'title', 'display_name', 'description'));
 			if ($value === '') {
 				continue;
 			}
-			if ($label === '') {
+
+			$name = $this->xml_value_or_attribute($node, array('name', 'title', 'display_name', 'description'));
+			$address1 = $this->xml_value_or_attribute($node, array('address1', 'address_1', 'street', 'address'));
+			$address2 = $this->xml_value_or_attribute($node, array('address2', 'address_2'));
+			$postcode = $this->xml_value_or_attribute($node, array('postcode', 'postalcode', 'zip'));
+			$city = $this->xml_value_or_attribute($node, array('city', 'post_area', 'municipality'));
+			$country = $this->xml_value_or_attribute($node, array('country', 'country_code'));
+			$customer_number = $this->xml_value_or_attribute($node, array('customer-number', 'customer_number', 'customernumber'));
+
+			$label_parts = array();
+			if ($name !== '') {
+				$label_parts[] = $name;
+			}
+			$location_parts = array();
+			if ($address1 !== '') {
+				$location_parts[] = $address1;
+			}
+			if ($postcode !== '' || $city !== '') {
+				$location_parts[] = trim($postcode . ' ' . $city);
+			}
+
+			$label = '';
+			if (!empty($label_parts) && !empty($location_parts)) {
+				$label = $label_parts[0] . ' – ' . implode(', ', $location_parts);
+			} elseif (!empty($label_parts)) {
+				$label = $label_parts[0];
+			} elseif (!empty($location_parts)) {
+				$label = implode(', ', $location_parts);
+			} else {
 				$label = $value;
 			}
-			$parsed['options'][] = array(
+
+			$option = array(
 				'value' => $value,
 				'label' => $label,
+				'number' => $value,
+				'name' => $name,
+				'address1' => $address1,
+				'address2' => $address2,
+				'postcode' => $postcode,
+				'city' => $city,
+				'country' => $country,
+			);
+			if ($customer_number !== '') {
+				$option['customer_number'] = $customer_number;
+			}
+
+			$parsed['options'][] = array(
+				'value' => $option['value'],
+				'label' => $option['label'],
+				'customer_number' => isset($option['customer_number']) ? $option['customer_number'] : '',
+				'raw' => $option,
 			);
 		}
 
@@ -658,29 +741,24 @@ class LP_Cargonizer_Api_Service {
 		$is_postnord = strpos($carrier_id, 'postnord') !== false || strpos($carrier_name, 'postnord') !== false || strpos($carrier_id, 'tollpost_globe') !== false || strpos($carrier_name, 'tollpost_globe') !== false;
 
 		$is_locker_product = strpos($product_name, 'locker') !== false || strpos($product_id, 'locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_id, 'pakkeboks') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_id, 'parcel_locker') !== false || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false;
-		$is_pickup_product = strpos($product_name, 'pickup') !== false || strpos($product_id, 'pickup') !== false || strpos($product_name, 'servicepoint') !== false || strpos($product_id, 'servicepoint') !== false || strpos($product_name, 'service point') !== false || strpos($product_name, 'hentested') !== false || strpos($product_id, 'hentested') !== false || strpos($product_name, 'hentepakke') !== false || strpos($product_id, 'hentepakke') !== false || strpos($product_name, 'mypack') !== false || strpos($product_id, 'mypack') !== false;
+		$is_bring_exact_locker_mapping = in_array($product_id, array('bring_pickup_point_9000', 'bring_pickup_point_9300', 'pickuppoint_9000', 'pickuppoint_9300'), true);
+		$is_postnord_box_mapping = in_array($product_id, array('mypack_small', 'mypack_small_home'), true);
 
 		$carrier_family = 'unknown';
 
 		if ($is_bring) {
 			$carrier_family = 'bring';
 			$debug['detected_carrier_family'] = 'bring';
-			if ($is_locker_product) {
+			if ($is_locker_product || $is_bring_exact_locker_mapping) {
 				$params['pickupPointType'] = 'locker';
 				$debug['pickupPointType'] = array(
 					'value' => 'locker',
-					'reason' => 'locker-like product for Bring/bring2',
-				);
-			} elseif ($is_pickup_product) {
-				$params['pickupPointType'] = 'manned';
-				$debug['pickupPointType'] = array(
-					'value' => 'manned',
-					'reason' => 'pickup-point product for Bring/bring2 without locker indicators',
+					'reason' => $is_bring_exact_locker_mapping ? 'exact Bring product mapping to locker pickup points' : 'explicit locker-like signal for Bring/bring2',
 				);
 			} else {
 				$debug['pickupPointType'] = array(
 					'value' => '',
-					'reason' => 'omitted because product is not safely mappable to locker or manned',
+					'reason' => 'omitted to avoid over-filtering; no strong locker signal or exact mapping detected',
 				);
 			}
 		}
@@ -688,17 +766,17 @@ class LP_Cargonizer_Api_Service {
 		if ($is_postnord) {
 			$carrier_family = 'postnord';
 			$debug['detected_carrier_family'] = 'postnord';
-			$is_box_style = strpos($product_name, 'mypack small') !== false || strpos($product_id, 'mypack_small') !== false || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false || $is_locker_product;
+			$is_box_style = strpos($product_name, 'mypack small') !== false || $is_postnord_box_mapping || strpos($product_id, 'box') !== false || strpos($product_name, 'box') !== false || $is_locker_product;
 			if ($is_box_style) {
 				$params['typeId'] = '2';
 				$debug['typeId'] = array(
 					'value' => '2',
-					'reason' => 'box/locker-style PostNord product (including MyPack Small)',
+					'reason' => $is_postnord_box_mapping ? 'exact PostNord mapping (MyPack Small)' : 'explicit box/locker-style signal for PostNord',
 				);
 			} else {
 				$debug['typeId'] = array(
 					'value' => '',
-					'reason' => 'omitted because product is not box/locker-style',
+					'reason' => 'omitted to avoid over-filtering; no strong box/locker signal',
 				);
 			}
 		}
@@ -717,6 +795,19 @@ class LP_Cargonizer_Api_Service {
 		);
 	}
 
+	private function extract_servicepartner_selection($payload, $method) {
+		$selection_value = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
+		$customer_number = isset($payload['servicepartner_customer_number']) ? sanitize_text_field((string) $payload['servicepartner_customer_number']) : '';
+		if ($customer_number === '' && isset($method['servicepartner_customer_number'])) {
+			$customer_number = sanitize_text_field((string) $method['servicepartner_customer_number']);
+		}
+
+		return array(
+			'number' => $selection_value,
+			'customer_number' => $customer_number,
+		);
+	}
+
 	public function sanitize_country_code($value) {
 		$country = strtoupper(sanitize_text_field((string) $value));
 		if ($country === '' || strlen($country) > 2) {
@@ -732,7 +823,7 @@ class LP_Cargonizer_Api_Service {
 	public function build_estimate_request_xml($payload, $method) {
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
-		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
+		$servicepartner_selection = $this->extract_servicepartner_selection($payload, $method);
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
@@ -752,9 +843,12 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
 		$consignee->addChild('country', (string) (isset($recipient['country']) ? $recipient['country'] : ''));
-		if ($servicepartner !== '') {
+		if ($servicepartner_selection['number'] !== '') {
 			$service_partner = $parts->addChild('service_partner');
-			$service_partner->addChild('number', (string) $servicepartner);
+			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
+			if ($servicepartner_selection['customer_number'] !== '') {
+				$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
+			}
 		}
 
 		$all_service_ids = array();
@@ -826,7 +920,7 @@ class LP_Cargonizer_Api_Service {
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$order_number = isset($payload['order_number']) ? sanitize_text_field((string) $payload['order_number']) : '';
-		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
+		$servicepartner_selection = $this->extract_servicepartner_selection($payload, $method);
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
@@ -870,9 +964,12 @@ class LP_Cargonizer_Api_Service {
 			$consignee->addChild('mobile', $mobile);
 		}
 
-		if ($servicepartner !== '') {
+		if ($servicepartner_selection['number'] !== '') {
 			$service_partner = $parts->addChild('service_partner');
-			$service_partner->addChild('number', (string) $servicepartner);
+			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
+			if ($servicepartner_selection['customer_number'] !== '') {
+				$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
+			}
 		}
 
 		$items = $consignment->addChild('items');
