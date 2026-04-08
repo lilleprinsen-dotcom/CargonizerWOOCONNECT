@@ -514,9 +514,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$error = array(
 				'message' => !empty($printer_result['message']) ? (string) $printer_result['message'] : 'Kunne ikke hente printere.',
 				'http_status' => isset($printer_result['http_status']) ? (int) $printer_result['http_status'] : 0,
+				'raw_excerpt' => '',
 			);
 			if (array_key_exists('raw', $printer_result)) {
-				$error['raw'] = $printer_result['raw'];
+				$error['raw_excerpt'] = substr((string) $printer_result['raw'], 0, 300);
 			}
 			wp_send_json_error($error, 200);
 		}

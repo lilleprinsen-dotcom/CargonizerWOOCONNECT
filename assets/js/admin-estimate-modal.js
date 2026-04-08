@@ -39,6 +39,7 @@
 			var latestEstimateResults = [];
 			var currentMode = 'estimate';
 			var currentBookingState = null;
+			var printerLoadWarningMessage = '';
 
 			function esc(s){
 				s = (s === null || s === undefined) ? '' : String(s);
@@ -976,6 +977,7 @@
 
 			function fetchPrinters(){
 				if (!bookingPrinterChoice) { return Promise.resolve(null); }
+				printerLoadWarningMessage = '';
 				bookingPrinterChoice.innerHTML = '<option value="">Laster printere…</option>';
 				if (bookingPrinterHelp) {
 					bookingPrinterHelp.textContent = '';
@@ -988,15 +990,17 @@
 					.then(function(res){
 						if (res && res.success === false) {
 							bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+							printerLoadWarningMessage = (res.data && res.data.message) ? String(res.data.message) : 'Kunne ikke hente printere.';
 							if (bookingPrinterHelp) {
-								bookingPrinterHelp.textContent = (res.data && res.data.message) ? res.data.message : 'Kunne ikke hente printere.';
+								bookingPrinterHelp.textContent = printerLoadWarningMessage;
 							}
 							return null;
 						}
 						if (!res || !res.success || !res.data) {
 							bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+							printerLoadWarningMessage = 'Kunne ikke hente printere.';
 							if (bookingPrinterHelp) {
-								bookingPrinterHelp.textContent = 'Kunne ikke hente printere.';
+								bookingPrinterHelp.textContent = printerLoadWarningMessage;
 							}
 							return null;
 						}
@@ -1005,8 +1009,9 @@
 					})
 					.catch(function(){
 						bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+						printerLoadWarningMessage = 'Teknisk feil ved henting av printere.';
 						if (bookingPrinterHelp) {
-							bookingPrinterHelp.textContent = 'Teknisk feil ved henting av printere.';
+							bookingPrinterHelp.textContent = printerLoadWarningMessage;
 						}
 						return null;
 					});
@@ -1082,6 +1087,22 @@
 				var data = errorData || {};
 				var methodKey = ((method && method.agreement_id) ? method.agreement_id : '') + '|' + ((method && method.product_id) ? method.product_id : '');
 				var htmlParts = ['<div style="color:#b32d2e;font-weight:600;">' + esc(data.message || 'Booking feilet.') + '</div>'];
+				var debugLineParts = [];
+				if (data.error_code) {
+					debugLineParts.push('code: ' + String(data.error_code));
+				}
+				if (data.error_type) {
+					debugLineParts.push('type: ' + String(data.error_type));
+				}
+				if (data.parsed_error_message) {
+					debugLineParts.push('parsed: ' + String(data.parsed_error_message));
+				}
+				if (debugLineParts.length) {
+					htmlParts.push('<div style="margin-top:4px;color:#646970;font-size:12px;">' + esc(debugLineParts.join(' / ')) + '</div>');
+				}
+				if (printerLoadWarningMessage) {
+					htmlParts.push('<div style="margin-top:8px;color:#646970;background:#f6f7f7;border:1px solid #dcdcde;padding:6px 8px;">' + esc(printerLoadWarningMessage) + '</div>');
+				}
 				if (data.requires_servicepartner) {
 					var options = Array.isArray(data.servicepartner_options) ? data.servicepartner_options : [];
 					var optionsHtml = '<option value="">Velg servicepartner…</option>';
@@ -1493,6 +1514,7 @@
 				latestEstimateResults = [];
 				currentRecipient = {};
 				currentBookingState = null;
+				printerLoadWarningMessage = '';
 				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
 				if (bookingResultsContent) {
