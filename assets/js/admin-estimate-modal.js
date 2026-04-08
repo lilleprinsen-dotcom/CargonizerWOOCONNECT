@@ -410,17 +410,68 @@
 				return errorText.indexOf('servicepartner må angis') !== -1 || errorText.indexOf('servicepartner maa angis') !== -1 || errorText.indexOf('servicepartner must be specified') !== -1 || errorText.indexOf('missing servicepartner') !== -1;
 			}
 
-			function methodLikelyNeedsServicepartner(method){
-				if (!method) { return false; }
-				if (method.delivery_to_pickup_point === true) { return true; }
-				var haystack = ((method.product_id || '') + ' ' + (method.product_name || '')).toLowerCase();
-				var hints = ['pickup', 'servicepoint', 'service point', 'hentested', 'locker', 'pakkeboks', 'parcel_pickup_point', 'mypack', 'hentepakke'];
-				for (var i = 0; i < hints.length; i++) {
-					if (haystack.indexOf(hints[i]) !== -1) {
+			function methodHasAnyTextMatch(method, phrases){
+				var haystack = ((method && method.product_id ? method.product_id : '') + ' ' + (method && method.product_name ? method.product_name : '')).toLowerCase();
+				for (var i = 0; i < phrases.length; i++) {
+					if (haystack.indexOf(phrases[i]) !== -1) {
 						return true;
 					}
 				}
 				return false;
+			}
+
+			function methodMatchesExactProductId(method, ids){
+				var productId = (method && method.product_id ? String(method.product_id) : '').toLowerCase();
+				return !!productId && ids.indexOf(productId) !== -1;
+			}
+
+			function isMethodExplicitlyHomeDelivery(method){
+				if (!method) { return false; }
+				var strictHomeIds = [
+					'mypack_home',
+					'mypack_small_home',
+					'postnord_mypack_home',
+					'postnord_mypack_small_home'
+				];
+				var explicitHomePhrases = ['home attended', 'home groupage', 'mypack home', 'home small', 'home'];
+				if (method.delivery_to_home === true) { return true; }
+				if (methodMatchesExactProductId(method, strictHomeIds)) { return true; }
+				return methodHasAnyTextMatch(method, explicitHomePhrases);
+			}
+
+			function isMethodExplicitlyPickupPoint(method){
+				if (!method) { return false; }
+				var strictPickupIds = [
+					'mypack_collect',
+					'mypack_small',
+					'mypack_service_point',
+					'postnord_service_point',
+					'postnord_parcel_locker',
+					'postnord_mypack_collect',
+					'postnord_mypack_service_point',
+					'postnord_mypack_small',
+					'bring_pickup_point_9000',
+					'bring_pickup_point_9300',
+					'pickuppoint_9000',
+					'pickuppoint_9300',
+					'parcel_pickup_point'
+				];
+				var explicitPickupPhrases = ['service point', 'pickup point', 'parcel locker', 'pakkeboks', 'hentested'];
+				var productMatchesPickupId = methodMatchesExactProductId(method, strictPickupIds);
+				if (method.delivery_to_pickup_point === true && method.delivery_to_home === true) {
+					return productMatchesPickupId;
+				}
+				if (method.delivery_to_pickup_point === true) { return true; }
+				if (productMatchesPickupId) { return true; }
+				return methodHasAnyTextMatch(method, explicitPickupPhrases);
+			}
+
+			function methodLikelyNeedsServicepartner(method){
+				if (!method) { return false; }
+				if (isMethodExplicitlyHomeDelivery(method) && !isMethodExplicitlyPickupPoint(method)) {
+					return false;
+				}
+				return isMethodExplicitlyPickupPoint(method);
 			}
 
 			function getProactiveMethodKey(){
