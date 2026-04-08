@@ -270,6 +270,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 			'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
 			'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
+			'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
+			'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? sanitize_text_field($method['servicepartner_selection_source']) : '',
+			'servicepartner_user_selected' => !empty($method['servicepartner_user_selected']),
 			'use_sms_service' => !empty($method['use_sms_service']),
 			'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 			'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
@@ -285,6 +288,26 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$payload['is_manual_norgespakke'] = $this->is_manual_norgespakke_method($payload);
 
 		return $payload;
+	}
+
+	private function should_attempt_servicepartner_autoselection($method_payload) {
+		if (!is_array($method_payload)) {
+			return false;
+		}
+		$is_pickup_like = $this->is_method_explicitly_pickup_point($method_payload);
+		$is_home_delivery = $this->is_method_explicitly_home_delivery($method_payload);
+		return $is_pickup_like && !$is_home_delivery;
+	}
+
+	private function apply_servicepartner_resolution_to_method_payload($method_payload, $selection) {
+		if (!is_array($method_payload)) {
+			$method_payload = array();
+		}
+		$method_payload['servicepartner'] = isset($selection['servicepartner']) ? sanitize_text_field((string) $selection['servicepartner']) : '';
+		$method_payload['servicepartner_customer_number'] = isset($selection['servicepartner_customer_number']) ? sanitize_text_field((string) $selection['servicepartner_customer_number']) : '';
+		$method_payload['servicepartner_selection_source'] = isset($selection['servicepartner_selection_source']) ? sanitize_text_field((string) $selection['servicepartner_selection_source']) : 'none';
+		$method_payload['servicepartner_auto_selected'] = !empty($selection['servicepartner_auto_selected']);
+		return $method_payload;
 	}
 
 	private function resolve_booking_estimated_shipping_price($booking_result, $recipient, $packages, $method_payload) {
@@ -332,6 +355,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'recipient' => is_array($recipient) ? $recipient : array(),
 			'packages' => is_array($packages) ? $packages : array(),
 			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
+			'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
 			'use_sms_service' => !empty($method_payload['use_sms_service']),
 			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
@@ -430,6 +454,25 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
 		}
 
+		$servicepartner_selection_debug = array(
+			'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
+			'servicepartner_auto_selected' => false,
+			'selected_servicepartner' => $method_payload['servicepartner'],
+			'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+			'auto_selection_reason' => $method_payload['servicepartner'] !== '' ? 'manual_selection_present' : 'not_attempted',
+		);
+		if ($this->should_attempt_servicepartner_autoselection($method_payload) && $method_payload['servicepartner'] === '') {
+			$resolved_selection = $this->resolve_default_servicepartner_selection($method_payload, $recipient);
+			$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
+			$servicepartner_selection_debug = array(
+				'servicepartner_selection_source' => isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none',
+				'servicepartner_auto_selected' => !empty($resolved_selection['servicepartner_auto_selected']),
+				'selected_servicepartner' => isset($resolved_selection['servicepartner']) ? $resolved_selection['servicepartner'] : '',
+				'selected_servicepartner_customer_number' => isset($resolved_selection['servicepartner_customer_number']) ? $resolved_selection['servicepartner_customer_number'] : '',
+				'auto_selection_reason' => isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '',
+			);
+		}
+
 		$xml = $this->build_booking_consignment_xml(array(
 			'recipient' => $recipient,
 			'packages' => $clean_packages,
@@ -476,9 +519,14 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'error_details' => isset($booking_result['error_details']) ? $booking_result['error_details'] : '',
 				'parsed_error_message' => isset($booking_result['parsed_error_message']) ? $booking_result['parsed_error_message'] : '',
 				'requires_servicepartner' => $requires_servicepartner,
-				'requires_sms_service' => $requires_sms_service,
+			'requires_sms_service' => $requires_sms_service,
 				'servicepartner_options' => $servicepartner_options,
 				'servicepartner_fetch' => $servicepartner_fetch,
+				'servicepartner_selection_source' => $servicepartner_selection_debug['servicepartner_selection_source'],
+				'servicepartner_auto_selected' => $servicepartner_selection_debug['servicepartner_auto_selected'],
+				'selected_servicepartner' => $servicepartner_selection_debug['selected_servicepartner'],
+				'selected_servicepartner_customer_number' => $servicepartner_selection_debug['selected_servicepartner_customer_number'],
+				'auto_selection_reason' => $servicepartner_selection_debug['auto_selection_reason'],
 			), 200);
 		}
 
@@ -495,6 +543,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['agreement_id'] = $method_payload['agreement_id'];
 		$booking_state['product_id'] = $method_payload['product_id'];
 		$booking_state['servicepartner'] = $method_payload['servicepartner'];
+		$booking_state['servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+		$booking_state['servicepartner_selection_source'] = $servicepartner_selection_debug['servicepartner_selection_source'];
+		$booking_state['servicepartner_auto_selected'] = $servicepartner_selection_debug['servicepartner_auto_selected'];
+		$booking_state['auto_selection_reason'] = $servicepartner_selection_debug['auto_selection_reason'];
 		$booking_state['sms_service_id'] = $method_payload['sms_service_id'];
 		$booking_state['selected_service_ids'] = isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array();
 		$booking_state['notify_email_to_consignee'] = $notify_email_to_consignee;
@@ -771,6 +823,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
 				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
+				'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
+				'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? sanitize_text_field($method['servicepartner_selection_source']) : '',
+				'servicepartner_user_selected' => !empty($method['servicepartner_user_selected']),
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
@@ -826,6 +881,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
 				'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
 				'selected_servicepartner' => $method_payload['servicepartner'],
+				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
+				'servicepartner_auto_selected' => false,
+				'auto_selection_reason' => $method_payload['servicepartner'] !== '' ? 'manual_selection_present' : '',
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'sms_service_name' => $method_payload['sms_service_name'],
@@ -903,9 +962,31 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
 					'packages' => $clean_packages,
 					'selected_servicepartner' => $method_payload['servicepartner'],
+					'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+					'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 					'use_sms_service' => $method_payload['use_sms_service'],
 				),
 			);
+
+			$auto_servicepartner_attempted = false;
+			if ($this->should_attempt_servicepartner_autoselection($method_payload) && $method_payload['servicepartner'] === '') {
+				$auto_servicepartner_attempted = true;
+				$resolved_selection = $this->resolve_default_servicepartner_selection($method_payload, $recipient);
+				$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
+				$item['selected_servicepartner'] = $method_payload['servicepartner'];
+				$item['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+				$item['servicepartner_selection_source'] = isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none';
+				$item['servicepartner_auto_selected'] = !empty($resolved_selection['servicepartner_auto_selected']);
+				$item['auto_selection_reason'] = isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '';
+				$item['request_summary']['selected_servicepartner'] = $method_payload['servicepartner'];
+				$item['request_summary']['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+				$item['request_summary']['servicepartner_selection_source'] = $item['servicepartner_selection_source'];
+				$item['servicepartner_fetch'] = isset($resolved_selection['servicepartner_fetch']) ? $resolved_selection['servicepartner_fetch'] : array();
+				$item['servicepartner_options'] = isset($resolved_selection['servicepartner_options']) ? $resolved_selection['servicepartner_options'] : array();
+				if ($item['servicepartner_auto_selected']) {
+					$item['human_error'] = 'Nærmeste servicepartner ble valgt automatisk.';
+				}
+			}
 
 
 			if ($this->is_manual_norgespakke_method($method_payload)) {
@@ -1013,6 +1094,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'recipient' => $recipient,
 				'packages' => $clean_packages,
 				'servicepartner' => $method_payload['servicepartner'],
+				'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
@@ -1062,12 +1144,25 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				}
 				if ($this->estimate_requires_servicepartner($combined_error_text)) {
 					$item['requires_servicepartner'] = true;
-					$servicepartner_lookup_method = $method_payload;
-					$servicepartner_lookup_method['country'] = isset($recipient['country']) ? $recipient['country'] : '';
-					$servicepartner_lookup_method['postcode'] = isset($recipient['postcode']) ? $recipient['postcode'] : '';
-					$servicepartner_result = $this->fetch_servicepartner_options($servicepartner_lookup_method);
-					$item['servicepartner_fetch'] = $servicepartner_result;
-					$item['servicepartner_options'] = isset($servicepartner_result['options']) && is_array($servicepartner_result['options']) ? $servicepartner_result['options'] : array();
+					if (!$auto_servicepartner_attempted && $this->should_attempt_servicepartner_autoselection($method_payload) && $method_payload['servicepartner'] === '') {
+						$auto_servicepartner_attempted = true;
+						$resolved_selection = $this->resolve_default_servicepartner_selection($method_payload, $recipient);
+						$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
+						$item['selected_servicepartner'] = $method_payload['servicepartner'];
+						$item['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+						$item['servicepartner_selection_source'] = isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none';
+						$item['servicepartner_auto_selected'] = !empty($resolved_selection['servicepartner_auto_selected']);
+						$item['auto_selection_reason'] = isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '';
+						$item['servicepartner_fetch'] = isset($resolved_selection['servicepartner_fetch']) ? $resolved_selection['servicepartner_fetch'] : array();
+						$item['servicepartner_options'] = isset($resolved_selection['servicepartner_options']) ? $resolved_selection['servicepartner_options'] : array();
+					} else {
+						$servicepartner_lookup_method = $method_payload;
+						$servicepartner_lookup_method['country'] = isset($recipient['country']) ? $recipient['country'] : '';
+						$servicepartner_lookup_method['postcode'] = isset($recipient['postcode']) ? $recipient['postcode'] : '';
+						$servicepartner_result = $this->fetch_servicepartner_options($servicepartner_lookup_method);
+						$item['servicepartner_fetch'] = $servicepartner_result;
+						$item['servicepartner_options'] = isset($servicepartner_result['options']) && is_array($servicepartner_result['options']) ? $servicepartner_result['options'] : array();
+					}
 				}
 				if ($this->estimate_requires_sms_service($combined_error_text)) {
 					$item['requires_sms_service'] = true;
@@ -1223,6 +1318,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
 				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
+				'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
@@ -1268,6 +1364,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
 				'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
 				'selected_servicepartner' => $method_payload['servicepartner'],
+				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
+				'servicepartner_auto_selected' => false,
+				'auto_selection_reason' => $method_payload['servicepartner'] !== '' ? 'manual_selection_present' : '',
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'sms_service_name' => $method_payload['sms_service_name'],
@@ -1344,9 +1444,23 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
 					'packages' => $clean_packages,
 					'selected_servicepartner' => $method_payload['servicepartner'],
+					'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+					'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 					'use_sms_service' => $method_payload['use_sms_service'],
 				),
 			);
+
+			if ($this->should_attempt_servicepartner_autoselection($method_payload) && $method_payload['servicepartner'] === '') {
+				$resolved_selection = $this->resolve_default_servicepartner_selection($method_payload, $recipient);
+				$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
+				$item['selected_servicepartner'] = $method_payload['servicepartner'];
+				$item['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+				$item['servicepartner_selection_source'] = isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none';
+				$item['servicepartner_auto_selected'] = !empty($resolved_selection['servicepartner_auto_selected']);
+				$item['auto_selection_reason'] = isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '';
+				$item['servicepartner_fetch'] = isset($resolved_selection['servicepartner_fetch']) ? $resolved_selection['servicepartner_fetch'] : array();
+				$item['servicepartner_options'] = isset($resolved_selection['servicepartner_options']) ? $resolved_selection['servicepartner_options'] : array();
+			}
 
 			$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
 			$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
