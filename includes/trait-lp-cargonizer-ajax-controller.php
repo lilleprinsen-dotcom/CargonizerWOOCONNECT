@@ -247,7 +247,14 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
 		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_BOOK)) {
-			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+			wp_send_json_error(array(
+				'message' => 'Ugyldig nonce.',
+				'debug' => array(
+					'received_nonce' => $nonce,
+					'expected_action' => self::NONCE_ACTION_BOOK,
+					'has_nonce' => $nonce !== '',
+				),
+			), 403);
 		}
 
 		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
