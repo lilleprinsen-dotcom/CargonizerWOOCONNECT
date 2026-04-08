@@ -26,9 +26,19 @@
 			var selectAllShippingBtn = document.getElementById('lp-cargonizer-select-all-shipping');
 			var resultsContent = document.getElementById('lp-cargonizer-results-content');
 			var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
+			var modalTitle = document.getElementById('lp-cargonizer-modal-title');
+			var estimatePriceResults = document.getElementById('lp-cargonizer-estimate-price-results');
+			var bookingPrinterSection = document.getElementById('lp-cargonizer-booking-printer-section');
+			var bookingPrinterChoice = document.getElementById('lp-cargonizer-booking-printer-choice');
+			var bookingPrinterHelp = document.getElementById('lp-cargonizer-booking-printer-help');
+			var bookingResultsSection = document.getElementById('lp-cargonizer-booking-results');
+			var bookingResultsContent = document.getElementById('lp-cargonizer-booking-results-content');
+			var runBookingBtn = document.getElementById('lp-cargonizer-run-booking');
 			var currentOrderId = null;
 			var currentRecipient = {};
 			var latestEstimateResults = [];
+			var currentMode = 'estimate';
+			var currentBookingState = null;
 
 			function esc(s){
 				s = (s === null || s === undefined) ? '' : String(s);
@@ -711,6 +721,19 @@
 							return row;
 						});
 						renderEstimateResults(latestEstimateResults);
+						if (currentMode === 'booking' && bookingResultsContent) {
+							var select = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+							if (select) {
+								var optionsHtml = '<option value="">Velg servicepartner…</option>';
+								options.forEach(function(opt){
+									var value = (opt && opt.value) ? String(opt.value) : '';
+									var label = (opt && opt.label) ? String(opt.label) : value;
+									if (!value) { return; }
+									optionsHtml += '<option value="'+esc(value)+'">'+esc(label)+'</option>';
+								});
+								select.innerHTML = optionsHtml;
+							}
+						}
 						return options;
 					})
 					.catch(function(){
@@ -929,6 +952,165 @@
 				resultsContent.innerHTML = okTableHtml + failedSectionHtml;
 			}
 
+			function setModalMode(mode){
+				currentMode = (mode === 'booking') ? 'booking' : 'estimate';
+				if (modalTitle) {
+					modalTitle.textContent = currentMode === 'booking' ? 'Book shipment' : 'Estimer fraktkostnad';
+				}
+				if (estimatePriceResults) {
+					estimatePriceResults.style.display = currentMode === 'booking' ? 'none' : 'block';
+				}
+				if (bookingPrinterSection) {
+					bookingPrinterSection.style.display = currentMode === 'booking' ? 'block' : 'none';
+				}
+				if (bookingResultsSection) {
+					bookingResultsSection.style.display = currentMode === 'booking' ? 'block' : 'none';
+				}
+				if (runEstimateBtn) {
+					runEstimateBtn.style.display = currentMode === 'booking' ? 'none' : '';
+				}
+				if (runBookingBtn) {
+					runBookingBtn.style.display = currentMode === 'booking' ? '' : 'none';
+				}
+			}
+
+			function fetchPrinters(){
+				if (!bookingPrinterChoice) { return Promise.resolve(null); }
+				bookingPrinterChoice.innerHTML = '<option value="">Laster printere…</option>';
+				if (bookingPrinterHelp) {
+					bookingPrinterHelp.textContent = '';
+				}
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_get_printers');
+				form.append('nonce', (config.nonces && config.nonces.printers ? config.nonces.printers : ''));
+				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (!res || !res.success || !res.data) {
+							var message = (res && res.data && res.data.message) ? res.data.message : 'Kunne ikke hente printere.';
+							bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+							if (bookingPrinterHelp) {
+								bookingPrinterHelp.textContent = message;
+							}
+							return null;
+						}
+						populatePrinterChoice(res.data.printers || [], res.data.default_printer_id || '');
+						return res.data;
+					})
+					.catch(function(){
+						bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+						if (bookingPrinterHelp) {
+							bookingPrinterHelp.textContent = 'Teknisk feil ved henting av printere.';
+						}
+						return null;
+					});
+			}
+
+			function populatePrinterChoice(printers, defaultPrinterId){
+				if (!bookingPrinterChoice) { return; }
+				var printerList = Array.isArray(printers) ? printers : [];
+				var defaultId = String(defaultPrinterId || '');
+				var defaultPrinter = null;
+				printerList.forEach(function(printer){
+					var printerId = (printer && printer.id) ? String(printer.id) : '';
+					if (!defaultPrinter && defaultId !== '' && printerId === defaultId) {
+						defaultPrinter = printer;
+					}
+				});
+				var html = '';
+				if (defaultPrinter) {
+					var defaultLabel = (defaultPrinter && defaultPrinter.label) ? String(defaultPrinter.label) : defaultId;
+					html += '<option value="__default__">Bruk standard printer (' + esc(defaultLabel) + ')</option>';
+				}
+				html += '<option value="">Ingen utskrift</option>';
+				printerList.forEach(function(printer){
+					var printerId = (printer && printer.id) ? String(printer.id) : '';
+					var printerLabel = (printer && printer.label) ? String(printer.label) : printerId;
+					if (!printerId) { return; }
+					html += '<option value="' + esc(printerId) + '">' + esc(printerLabel) + '</option>';
+				});
+				bookingPrinterChoice.innerHTML = html;
+				bookingPrinterChoice.value = defaultPrinter ? '__default__' : '';
+				if (bookingPrinterHelp) {
+					bookingPrinterHelp.textContent = defaultPrinter
+						? 'Standardvalg bruker din lagrede standardprinter, eller velg en eksplisitt override.'
+						: 'Ingen standardprinter funnet. Velg printer for override, eller behold Ingen utskrift.';
+				}
+			}
+
+			function getSelectedSingleMethodForBooking(){
+				var methods = getSelectedMethods();
+				if (methods.length === 0) {
+					return { error: 'Velg nøyaktig én fraktmetode før booking (ingen valgt).' };
+				}
+				if (methods.length > 1) {
+					return { error: 'Velg nøyaktig én fraktmetode før booking (flere valgt).' };
+				}
+				return { method: methods[0] };
+			}
+
+			function renderBookingSuccess(booking, method){
+				var bookingData = booking || {};
+				var methodLabel = '';
+				if (method && (method.product_name || method.agreement_name)) {
+					methodLabel = [method.agreement_name || '', method.product_name || ''].filter(function(v){ return !!v; }).join(' - ');
+				}
+				var pieceNumbers = Array.isArray(bookingData.piece_numbers) ? bookingData.piece_numbers.filter(function(v){ return v !== null && v !== undefined && v !== ''; }) : [];
+				var printData = bookingData.print || {};
+				var printHtml = '<div>Ingen utskrift sendt</div>';
+				if (printData.attempted && printData.success) {
+					printHtml = '<div style="color:#125228;">Label print queued on ' + esc(printData.printer_label || printData.printer_id || 'valgt printer') + '</div>';
+				} else if (printData.attempted && !printData.success) {
+					printHtml = '<div style="color:#b32d2e;">Booking fullført, men utskrift feilet: ' + esc(printData.message || 'Ukjent printfeil') + '</div>';
+				}
+				return '' +
+					'<div style="color:#125228;font-weight:600;">Booking fullført.</div>' +
+					'<div><strong>Consignment number:</strong> ' + esc(bookingData.consignment_number || '—') + '</div>' +
+					'<div><strong>Piece numbers:</strong> ' + esc(pieceNumbers.length ? pieceNumbers.join(', ') : '—') + '</div>' +
+					'<div><strong>Tracking URL:</strong> ' + (bookingData.tracking_url ? '<a href="' + esc(bookingData.tracking_url) + '" target="_blank" rel="noopener noreferrer">' + esc(bookingData.tracking_url) + '</a>' : '—') + '</div>' +
+					(methodLabel ? '<div><strong>Fraktmetode:</strong> ' + esc(methodLabel) + '</div>' : '') +
+					printHtml;
+			}
+
+			function renderBookingError(errorData, method){
+				var data = errorData || {};
+				var methodKey = ((method && method.agreement_id) ? method.agreement_id : '') + '|' + ((method && method.product_id) ? method.product_id : '');
+				var htmlParts = ['<div style="color:#b32d2e;font-weight:600;">' + esc(data.message || 'Booking feilet.') + '</div>'];
+				if (data.requires_servicepartner) {
+					var options = Array.isArray(data.servicepartner_options) ? data.servicepartner_options : [];
+					var optionsHtml = '<option value="">Velg servicepartner…</option>';
+					options.forEach(function(opt){
+						var value = (opt && opt.value) ? String(opt.value) : '';
+						var label = (opt && opt.label) ? String(opt.label) : value;
+						if (!value) { return; }
+						optionsHtml += '<option value="' + esc(value) + '">' + esc(label) + '</option>';
+					});
+					htmlParts.push('<div style="color:#b32d2e;">Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.</div>');
+					htmlParts.push('<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><select class="lp-servicepartner-select" data-method-key="' + esc(methodKey) + '" style="min-width:220px;">' + optionsHtml + '</select><button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="' + esc(methodKey) + '">Hent servicepartnere</button></div>');
+				}
+				if (data.requires_sms_service) {
+					var smsLabel = (method && method.sms_service_name) ? ' (' + esc(method.sms_service_name) + ')' : '';
+					htmlParts.push('<label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="lp-sms-service-toggle" data-method-key="' + esc(methodKey) + '">Bruk SMS Varsling' + smsLabel + '</label>');
+				}
+				if (data.requires_servicepartner || data.requires_sms_service) {
+					htmlParts.push('<button type="button" class="button button-primary button-small lp-booking-method-retry" data-method-key="' + esc(methodKey) + '">Prøv booking igjen</button>');
+				}
+				bookingResultsContent.innerHTML = htmlParts.join('');
+			}
+
+			function renderExistingBookingState(bookingState){
+				if (!bookingResultsContent) { return; }
+				if (!bookingState || !bookingState.booked) {
+					bookingResultsContent.innerHTML = 'Ingen booking kjørt enda.';
+					return;
+				}
+				bookingResultsContent.innerHTML = '<div style="color:#8a4b00;font-weight:600;">Ordren er allerede booket.</div>' + renderBookingSuccess(bookingState, null);
+				if (runBookingBtn) {
+					runBookingBtn.disabled = true;
+					runBookingBtn.textContent = 'Allerede booket';
+				}
+			}
+
 
 			function fetchShippingOptions(){
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
@@ -1054,6 +1236,89 @@
 						runEstimateBtn.textContent = 'Estimer fraktpris';
 					});
 			}
+
+			function retryBookingForSingleMethod(methodKey, selectedServicepartner, useSmsService){
+				var methodData = getMethodDataByKey(methodKey);
+				if (!methodData) { return; }
+				if (selectedServicepartner) {
+					methodData.servicepartner = selectedServicepartner;
+				}
+				if (useSmsService) {
+					methodData.use_sms_service = true;
+				}
+				runBooking(methodData);
+			}
+
+			function runBooking(preselectedMethod){
+				if (currentMode !== 'booking') { return; }
+				if (currentBookingState && currentBookingState.booked) {
+					renderExistingBookingState(currentBookingState);
+					return;
+				}
+				var colli = collectColliData();
+				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
+					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før booking.</span>';
+					return;
+				}
+				var selectedResult = preselectedMethod ? { method: preselectedMethod } : getSelectedSingleMethodForBooking();
+				if (!selectedResult.method) {
+					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">' + esc(selectedResult.error || 'Valideringsfeil ved valg av fraktmetode.') + '</span>';
+					return;
+				}
+
+				var method = selectedResult.method;
+				var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+				if (bookingResultsContent) {
+					var servicepartnerSelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+					if (servicepartnerSelect) {
+						method.servicepartner = servicepartnerSelect.value || '';
+					}
+					var smsServiceToggle = bookingResultsContent.querySelector('.lp-sms-service-toggle[data-method-key="'+methodKey+'"]');
+					if (smsServiceToggle) {
+						method.use_sms_service = !!smsServiceToggle.checked;
+					}
+				}
+				var printerChoice = bookingPrinterChoice ? (bookingPrinterChoice.value || '') : '';
+				runBookingBtn.disabled = true;
+				runBookingBtn.textContent = 'Booker...';
+				bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
+
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_book_shipment');
+				form.append('nonce', (config.nonces && config.nonces.booking ? config.nonces.booking : ''));
+				form.append('order_id', currentOrderId);
+				colli.payload.packages.forEach(function(pkg, idx){
+					Object.keys(pkg).forEach(function(key){
+						form.append('packages['+idx+']['+key+']', pkg[key]);
+					});
+				});
+				Object.keys(method).forEach(function(key){
+					form.append('methods[0]['+key+']', method[key]);
+				});
+				form.append('printer_choice', printerChoice);
+
+				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (res && res.success && res.data && res.data.booking) {
+							currentBookingState = res.data.booking;
+							bookingResultsContent.innerHTML = renderBookingSuccess(res.data.booking, method);
+							runBookingBtn.disabled = true;
+							runBookingBtn.textContent = 'Booket';
+							return;
+						}
+						var errorData = (res && res.data) ? res.data : { message: 'Booking feilet.' };
+						renderBookingError(errorData, method);
+						runBookingBtn.disabled = false;
+						runBookingBtn.textContent = 'Book shipment';
+					})
+					.catch(function(){
+						bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved booking.</span>';
+						runBookingBtn.disabled = false;
+						runBookingBtn.textContent = 'Book shipment';
+					});
+			}
+
 			function openModal(){ modal.style.display = 'block'; }
 			function closeModal(){ modal.style.display = 'none'; }
 
@@ -1067,6 +1332,9 @@
 
 			addBtn.addEventListener('click', function(){ createColli({}); });
 			runEstimateBtn.addEventListener('click', runEstimate);
+			if (runBookingBtn) {
+				runBookingBtn.addEventListener('click', function(){ runBooking(); });
+			}
 			if (selectAllShippingBtn) {
 				selectAllShippingBtn.addEventListener('click', toggleSelectAllShippingOptions);
 			}
@@ -1115,28 +1383,33 @@
 				});
 			});
 
-			document.addEventListener('click', function(e){
-				var btn = e.target.closest('.lp-cargonizer-estimate-open');
-				if (!btn) { return; }
-				e.preventDefault();
-				currentOrderId = btn.getAttribute('data-order-id') || getOrderIdFromCurrentUrl();
-				openModal();
-				loading.style.display = 'block';
-				errorBox.style.display = 'none';
-				content.style.display = 'none';
-				colliList.innerHTML = '';
-				colliValidation.style.display = 'none';
-				latestEstimateResults = [];
-				currentRecipient = {};
-				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
-				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
+			if (bookingResultsContent) {
+				bookingResultsContent.addEventListener('click', function(e){
+					var refreshBtn = e.target.closest('.lp-servicepartner-refresh');
+					if (refreshBtn) {
+						e.preventDefault();
+						fetchServicepartnersForMethod(refreshBtn.getAttribute('data-method-key') || '');
+						return;
+					}
+					var retryBtn = e.target.closest('.lp-booking-method-retry');
+					if (!retryBtn) { return; }
+					e.preventDefault();
+					var methodKey = retryBtn.getAttribute('data-method-key') || '';
+					var select = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+					var selectedServicepartner = select ? (select.value || '') : '';
+					var smsToggle = bookingResultsContent.querySelector('.lp-sms-service-toggle[data-method-key="'+methodKey+'"]');
+					var useSmsService = smsToggle ? !!smsToggle.checked : false;
+					retryBookingForSingleMethod(methodKey, selectedServicepartner, useSmsService);
+				});
+			}
 
+			function loadOrderData(){
 				var form = new FormData();
 				form.append('action', 'lp_cargonizer_get_order_estimate_data');
 				form.append('nonce', (config.nonces && config.nonces.orderData ? config.nonces.orderData : ''));
 				form.append('order_id', currentOrderId);
 
-				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
 						loading.style.display = 'none';
@@ -1149,6 +1422,7 @@
 
 						var d = res.data;
 						currentRecipient = d.recipient || {};
+						currentBookingState = d.booking_state || null;
 						overview.innerHTML = '<h3 style="margin:0 0 8px 0;">Oversikt over sendingen</h3>' +
 							'<div><strong>Ordre:</strong> #' + esc(d.order.number) + '</div>' +
 							'<div><strong>Dato:</strong> ' + esc(d.order.date) + '</div>' +
@@ -1173,7 +1447,10 @@
 
 						collectColliData();
 						fetchShippingOptions();
-
+						if (currentMode === 'booking') {
+							fetchPrinters();
+							renderExistingBookingState(currentBookingState);
+						}
 						content.style.display = 'block';
 					})
 					.catch(function(){
@@ -1181,6 +1458,49 @@
 						errorBox.textContent = 'Teknisk feil ved henting av ordredata.';
 						errorBox.style.display = 'block';
 					});
+			}
+
+			function openForMode(mode, orderId){
+				currentOrderId = orderId || getOrderIdFromCurrentUrl();
+				setModalMode(mode);
+				openModal();
+				loading.style.display = 'block';
+				errorBox.style.display = 'none';
+				content.style.display = 'none';
+				colliList.innerHTML = '';
+				colliValidation.style.display = 'none';
+				latestEstimateResults = [];
+				currentRecipient = {};
+				currentBookingState = null;
+				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
+				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
+				if (bookingResultsContent) {
+					bookingResultsContent.innerHTML = 'Ingen booking kjørt enda.';
+				}
+				if (bookingPrinterChoice) {
+					bookingPrinterChoice.innerHTML = '<option value="">Ingen utskrift</option>';
+				}
+				if (bookingPrinterHelp) {
+					bookingPrinterHelp.textContent = '';
+				}
+				if (runBookingBtn) {
+					runBookingBtn.disabled = false;
+					runBookingBtn.textContent = 'Book shipment';
+				}
+				loadOrderData();
+			}
+
+			document.addEventListener('click', function(e){
+				var btn = e.target.closest('.lp-cargonizer-estimate-open');
+				if (btn) {
+					e.preventDefault();
+					openForMode('estimate', btn.getAttribute('data-order-id') || '');
+					return;
+				}
+				var bookingBtn = e.target.closest('.lp-cargonizer-book-open');
+				if (!bookingBtn) { return; }
+				e.preventDefault();
+				openForMode('booking', bookingBtn.getAttribute('data-order-id') || '');
 			});
 		
 })();
