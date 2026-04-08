@@ -14,84 +14,103 @@ class LP_Cargonizer_Api_Service {
 
 	public function get_auth_headers() {
 		$settings = call_user_func($this->settings_provider);
+		if (!is_array($settings)) {
+			$settings = array();
+		}
+
+		$api_key = isset($settings['api_key']) ? (string) $settings['api_key'] : '';
+		$sender_id = isset($settings['sender_id']) ? (string) $settings['sender_id'] : '';
 
 		return array(
-			'X-Cargonizer-Key'    => $settings['api_key'],
-			'X-Cargonizer-Sender' => $settings['sender_id'],
+			'X-Cargonizer-Key'    => $api_key,
+			'X-Cargonizer-Sender' => $sender_id,
 			'Accept'              => 'application/xml',
 		);
 	}
 
 	public function fetch_transport_agreements() {
-		$url = 'https://api.cargonizer.no/transport_agreements.xml';
+		try {
+			$url = 'https://api.cargonizer.no/transport_agreements.xml';
 
-		$response = wp_remote_get($url, array(
-			'timeout' => 30,
-			'headers' => $this->get_auth_headers(),
-		));
+			$response = wp_remote_get($url, array(
+				'timeout' => 30,
+				'headers' => $this->get_auth_headers(),
+			));
 
-		if (is_wp_error($response)) {
+			if (is_wp_error($response)) {
+				return array(
+					'success' => false,
+					'message' => 'WP Error: ' . $response->get_error_message(),
+					'status'  => 0,
+					'raw'     => '',
+					'data'    => array(),
+				);
+			}
+
+			$status = wp_remote_retrieve_response_code($response);
+			$body   = wp_remote_retrieve_body($response);
+
+			if ($status < 200 || $status >= 300) {
+				return array(
+					'success' => false,
+					'message' => 'Ugyldig respons fra Cargonizer. HTTP-status: ' . $status,
+					'status'  => $status,
+					'raw'     => $body,
+					'data'    => array(),
+				);
+			}
+
+			if (empty($body)) {
+				return array(
+					'success' => false,
+					'message' => 'Tom respons fra Cargonizer.',
+					'status'  => $status,
+					'raw'     => '',
+					'data'    => array(),
+				);
+			}
+
+			$xml = $this->safe_simplexml_load_string($body);
+
+			if ($xml === false) {
+				$error_messages = $this->collect_libxml_error_messages();
+				$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
+
+				return array(
+					'success' => false,
+					'message' => 'Kunne ikke parse XML-respons: ' . $error_suffix,
+					'status'  => $status,
+					'raw'     => $body,
+					'data'    => array(),
+				);
+			}
+
+			$parsed = $this->parse_transport_agreements($xml);
+
+			return array(
+				'success' => true,
+				'message' => 'Autentisering OK og fraktmetoder hentet.',
+				'status'  => $status,
+				'raw'     => $body,
+				'data'    => $parsed,
+			);
+		} catch (Throwable $exception) {
 			return array(
 				'success' => false,
-				'message' => 'WP Error: ' . $response->get_error_message(),
+				'message' => 'Uventet feil ved henting av fraktmetoder: ' . $exception->getMessage(),
 				'status'  => 0,
 				'raw'     => '',
 				'data'    => array(),
 			);
 		}
-
-		$status = wp_remote_retrieve_response_code($response);
-		$body   = wp_remote_retrieve_body($response);
-
-		if ($status < 200 || $status >= 300) {
-			return array(
-				'success' => false,
-				'message' => 'Ugyldig respons fra Cargonizer. HTTP-status: ' . $status,
-				'status'  => $status,
-				'raw'     => $body,
-				'data'    => array(),
-			);
-		}
-
-		if (empty($body)) {
-			return array(
-				'success' => false,
-				'message' => 'Tom respons fra Cargonizer.',
-				'status'  => $status,
-				'raw'     => '',
-				'data'    => array(),
-			);
-		}
-
-		$xml = $this->safe_simplexml_load_string($body);
-
-		if ($xml === false) {
-			$error_messages = $this->collect_libxml_error_messages();
-			$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
-
-			return array(
-				'success' => false,
-				'message' => 'Kunne ikke parse XML-respons: ' . $error_suffix,
-				'status'  => $status,
-				'raw'     => $body,
-				'data'    => array(),
-			);
-		}
-
-		$parsed = $this->parse_transport_agreements($xml);
-
-		return array(
-			'success' => true,
-			'message' => 'Autentisering OK og fraktmetoder hentet.',
-			'status'  => $status,
-			'raw'     => $body,
-			'data'    => $parsed,
-		);
 	}
 
 	public function parse_transport_agreements($xml) {
 		$result = array();
 		$agreements = array();
+		if (!is_object($xml) || !method_exists($xml, 'children')) {
+			return $result;
+		}
 
 		foreach ($xml->children() as $child) {
 			$agreements[] = $child;
@@ -262,7 +281,10 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		$options = array();
-		$nodes = $xml->xpath('//servicepartner') ?: array();
+		$nodes = $xml->xpath('//service_partner') ?: array();
+		if (empty($nodes)) {
+			$nodes = $xml->xpath('//servicepartner') ?: array();
+		}
 		foreach ($nodes as $node) {
 			$value = trim((string) $this->xml_value($node, array('id', 'code', 'number', 'value')));
 			$label = trim((string) $this->xml_value($node, array('name', 'title', 'description', 'display_name')));
@@ -359,8 +381,6 @@ class LP_Cargonizer_Api_Service {
 		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
-		$package_count = count($packages);
-
 		if (!class_exists('SimpleXMLElement')) {
 			return '';
 		}
@@ -369,14 +389,11 @@ class LP_Cargonizer_Api_Service {
 		$consignment = $xml->addChild('consignment');
 		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
 		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
-		if ($servicepartner !== '') {
-			$consignment->addChild('servicepartner', (string) $servicepartner);
-		}
 		if ($use_sms_service && $sms_service_id !== '') {
 			$services_node = $consignment->addChild('services');
-			$services_node->addChild('service', (string) $sms_service_id);
+			$service_node = $services_node->addChild('service');
+			$service_node->addAttribute('id', (string) $sms_service_id);
 		}
-		$consignment->addChild('number_of_packages', (string) max(1, $package_count));
 
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
@@ -386,6 +403,10 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
 		$consignee->addChild('country', (string) (isset($recipient['country']) ? $recipient['country'] : ''));
+		if ($servicepartner !== '') {
+			$service_partner = $parts->addChild('service_partner');
+			$service_partner->addChild('number', (string) $servicepartner);
+		}
 
 		$items = $consignment->addChild('items');
 		if (empty($packages)) {
@@ -406,17 +427,17 @@ class LP_Cargonizer_Api_Service {
 			$item = $items->addChild('item');
 			$item->addAttribute('type', 'package');
 			$item->addAttribute('amount', '1');
-			$item->addChild('description', (string) $description);
-			$item->addChild('weight', (string) max(0, $weight));
-			$item->addChild('volume', (string) max(0, $volume_dm3));
+			$item->addAttribute('description', (string) $description);
+			$item->addAttribute('weight', (string) max(0, $weight));
+			$item->addAttribute('volume', (string) max(0, $volume_dm3));
 			if ($length_xml !== '') {
-				$item->addChild('length', $length_xml);
+				$item->addAttribute('length', $length_xml);
 			}
 			if ($width_xml !== '') {
-				$item->addChild('width', $width_xml);
+				$item->addAttribute('width', $width_xml);
 			}
 			if ($height_xml !== '') {
-				$item->addChild('height', $height_xml);
+				$item->addAttribute('height', $height_xml);
 			}
 
 			$this->log_estimate_package_dimensions(array(
