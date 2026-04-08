@@ -66,6 +66,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			}
 		}
 
+		$settings = $this->get_settings();
 		$data = array(
 			'order' => array(
 				'number' => $order->get_order_number(),
@@ -85,6 +86,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'items' => $items,
 			'packages' => $packages,
 			'booking_state' => $this->load_order_booking_state($order),
+			'booking_defaults' => array(
+				'notify_email_to_consignee' => isset($settings['booking_email_notification_default']) ? (int) $this->sanitize_checkbox_value($settings['booking_email_notification_default']) : 1,
+			),
 		);
 
 		if ($data['recipient']['name'] === '') {
@@ -113,7 +117,15 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'product_id' => '',
 			'servicepartner' => '',
 			'sms_service_id' => '',
+			'selected_service_ids' => array(),
+			'notify_email_to_consignee' => false,
 			'created_at_gmt' => '',
+			'created_by_user_id' => '',
+			'created_by_user_login' => '',
+			'created_by_display_name' => '',
+			'estimated_shipping_price' => '',
+			'estimated_shipping_price_source' => 'missing',
+			'history' => array(),
 			'print' => array(
 				'attempted' => false,
 				'success' => false,
@@ -152,6 +164,19 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			if (is_bool($value)) {
 				$normalized[$key] = (bool) $state[$key];
 			} elseif (is_array($value)) {
+				if ($key === 'history') {
+					$history_rows = is_array($state[$key]) ? $state[$key] : array();
+					$normalized_history = array();
+					foreach ($history_rows as $history_row) {
+						if (!is_array($history_row)) {
+							continue;
+						}
+						$history_row['history'] = array();
+						$normalized_history[] = $this->normalize_booking_state($history_row);
+					}
+					$normalized[$key] = $normalized_history;
+					continue;
+				}
 				$list = is_array($state[$key]) ? $state[$key] : array();
 				$normalized[$key] = array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $list)), 'strlen'));
 			} else {
@@ -173,6 +198,17 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		return $this->normalize_booking_state($raw);
+	}
+
+	private function strip_booking_history_for_snapshot($booking_state) {
+		$snapshot = $this->normalize_booking_state($booking_state);
+		$snapshot['history'] = array();
+		return $snapshot;
+	}
+
+	private function get_booking_count_from_state($booking_state) {
+		$history = isset($booking_state['history']) && is_array($booking_state['history']) ? $booking_state['history'] : array();
+		return !empty($booking_state['booked']) ? (count($history) + 1) : count($history);
 	}
 
 	private function save_order_booking_state($order, $state) {
@@ -213,6 +249,16 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 	}
 
 	private function sanitize_posted_method_payload($method) {
+		$selected_service_ids = array();
+		if (isset($method['selected_service_ids']) && is_array($method['selected_service_ids'])) {
+			foreach ($method['selected_service_ids'] as $selected_service_id) {
+				$clean_service_id = sanitize_text_field((string) $selected_service_id);
+				if ($clean_service_id !== '') {
+					$selected_service_ids[] = $clean_service_id;
+				}
+			}
+		}
+
 		$payload = array(
 			'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
 			'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
@@ -227,6 +273,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'use_sms_service' => !empty($method['use_sms_service']),
 			'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 			'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
+			'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 			'is_manual' => !empty($method['is_manual']),
 			'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
 			'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
@@ -264,9 +311,6 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		$existing_booking_state = $this->load_order_booking_state($order);
-		if (!empty($existing_booking_state['booked'])) {
-			wp_send_json_error(array('message' => 'Ordren er allerede booket i v1. Duplikat-booking er ikke tillatt.'), 409);
-		}
 
 		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
 		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
@@ -284,6 +328,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$clean_packages = $this->sanitize_posted_packages($packages);
 		$method_payload = $this->sanitize_posted_method_payload($methods[0]);
+		$notify_email_to_consignee = isset($_POST['notify_email_to_consignee']) ? (bool) $this->sanitize_checkbox_value(wp_unslash($_POST['notify_email_to_consignee'])) : false;
 		$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 		if (!isset($enabled_map[$method_key])) {
 			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert i Cargonizer-innstillingene.'), 400);
@@ -308,6 +353,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
 		}
+		if ($notify_email_to_consignee && trim((string) $recipient['email']) === '') {
+			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
+		}
 
 		$xml = $this->build_booking_consignment_xml(array(
 			'recipient' => $recipient,
@@ -316,6 +364,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'servicepartner' => $method_payload['servicepartner'],
 			'use_sms_service' => $method_payload['use_sms_service'],
 			'sms_service_id' => $method_payload['sms_service_id'],
+			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
+			'notify_email_to_consignee' => $notify_email_to_consignee,
 		), $method_payload, array(
 			'transfer' => true,
 			'booking_request' => false,
@@ -373,7 +423,24 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['product_id'] = $method_payload['product_id'];
 		$booking_state['servicepartner'] = $method_payload['servicepartner'];
 		$booking_state['sms_service_id'] = $method_payload['sms_service_id'];
+		$booking_state['selected_service_ids'] = isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array();
+		$booking_state['notify_email_to_consignee'] = $notify_email_to_consignee;
 		$booking_state['created_at_gmt'] = gmdate('Y-m-d H:i:s');
+		$current_user = wp_get_current_user();
+		$booking_state['created_by_user_id'] = (string) get_current_user_id();
+		$booking_state['created_by_user_login'] = $current_user && isset($current_user->user_login) ? (string) $current_user->user_login : '';
+		$booking_state['created_by_display_name'] = $current_user && isset($current_user->display_name) ? (string) $current_user->display_name : '';
+		$estimated_shipping_price = 'ikke tilgjengelig';
+		$estimated_shipping_price_source = 'missing';
+		if (isset($booking_result['gross_cost']) && (string) $booking_result['gross_cost'] !== '') {
+			$estimated_shipping_price = (string) $booking_result['gross_cost'];
+			$estimated_shipping_price_source = 'gross_cost';
+		} elseif (isset($booking_result['net_cost']) && (string) $booking_result['net_cost'] !== '') {
+			$estimated_shipping_price = (string) $booking_result['net_cost'];
+			$estimated_shipping_price_source = 'net_cost';
+		}
+		$booking_state['estimated_shipping_price'] = $estimated_shipping_price;
+		$booking_state['estimated_shipping_price_source'] = $estimated_shipping_price_source;
 
 		$posted_printer_choice = isset($_POST['printer_choice']) ? wp_unslash($_POST['printer_choice']) : '';
 		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
@@ -399,18 +466,39 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			}
 		}
 
+		$history = isset($existing_booking_state['history']) && is_array($existing_booking_state['history']) ? $existing_booking_state['history'] : array();
+		if (!empty($existing_booking_state['booked'])) {
+			$prior_snapshot = $this->strip_booking_history_for_snapshot($existing_booking_state);
+			$last_history_snapshot = !empty($history) ? $this->strip_booking_history_for_snapshot($history[count($history) - 1]) : null;
+			if ($last_history_snapshot !== $prior_snapshot) {
+				$history[] = $prior_snapshot;
+			}
+		}
+		$booking_state['history'] = $history;
+
 		$this->save_order_booking_state($order, $booking_state);
+		$creator_name = $booking_state['created_by_display_name'] !== '' ? $booking_state['created_by_display_name'] : $booking_state['created_by_user_login'];
+		$tracking_link = $booking_state['tracking_url'] !== ''
+			? '<a href="' . esc_url($booking_state['tracking_url']) . '" target="_blank" rel="noopener noreferrer">' . esc_html($booking_state['tracking_url']) . '</a>'
+			: 'ikke tilgjengelig';
 		$order->add_order_note(
 			sprintf(
-				'Cargonizer booking opprettet. Consignment: %1$s. Metode: %2$s.',
+				'Cargonizer booking opprettet av %1$s. Consignment: %2$s. Metode: %3$s. Estimert fraktpris: %4$s. Tracking: %5$s. Tracking URL: %6$s',
+				$creator_name !== '' ? $creator_name : 'ukjent bruker',
 				$booking_state['consignment_number'] !== '' ? $booking_state['consignment_number'] : 'ukjent',
-				$this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name'])
+				$this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
+				$booking_state['estimated_shipping_price'],
+				$tracking_link,
+				$booking_state['tracking_url'] !== '' ? $booking_state['tracking_url'] : 'ikke tilgjengelig'
 			)
 		);
+		$booking_count = $this->get_booking_count_from_state($booking_state);
 
 		wp_send_json_success(array(
 			'message' => 'Shipment booked successfully.',
 			'booking' => $booking_state,
+			'booking_count' => $booking_count,
+			'has_previous_bookings' => $booking_count > 1,
 		));
 	}
 

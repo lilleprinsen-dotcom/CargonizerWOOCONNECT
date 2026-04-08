@@ -31,6 +31,11 @@
 			var bookingPrinterSection = document.getElementById('lp-cargonizer-booking-printer-section');
 			var bookingPrinterChoice = document.getElementById('lp-cargonizer-booking-printer-choice');
 			var bookingPrinterHelp = document.getElementById('lp-cargonizer-booking-printer-help');
+			var bookingNotifySection = document.getElementById('lp-cargonizer-booking-notify-section');
+			var bookingNotifyCheckbox = document.getElementById('lp-cargonizer-booking-notify-email');
+			var bookingServicesSection = document.getElementById('lp-cargonizer-booking-services-section');
+			var bookingServicesChoice = document.getElementById('lp-cargonizer-booking-services-choice');
+			var bookingServicesHelp = document.getElementById('lp-cargonizer-booking-services-help');
 			var bookingResultsSection = document.getElementById('lp-cargonizer-booking-results');
 			var bookingResultsContent = document.getElementById('lp-cargonizer-booking-results-content');
 			var runBookingBtn = document.getElementById('lp-cargonizer-run-booking');
@@ -39,6 +44,7 @@
 			var latestEstimateResults = [];
 			var currentMode = 'estimate';
 			var currentBookingState = null;
+			var bookingNotifyDefault = (config.bookingDefaults && Number(config.bookingDefaults.notifyEmailToConsignee) === 0) ? 0 : 1;
 			var printerLoadWarningMessage = '';
 
 			function esc(s){
@@ -49,6 +55,16 @@
 			function toNum(v){
 				var n = parseFloat(v);
 				return isNaN(n) ? 0 : n;
+			}
+
+			function parseDataServices(raw){
+				if (!raw) { return []; }
+				try {
+					var parsed = JSON.parse(raw);
+					return Array.isArray(parsed) ? parsed : [];
+				} catch (e) {
+					return [];
+				}
 			}
 
 			function validateNumberField(input){
@@ -218,7 +234,7 @@
 						});
 					}
 					html += '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;background:#fff;line-height:1.35;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
+						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'" data-services="'+esc(JSON.stringify(Array.isArray(option.services) ? option.services : []))+'">' +
 						'<span style="display:flex;flex-direction:column;gap:3px;">' +
 							'<strong>'+esc(label)+(isManual ? ' <span style="font-weight:400;color:#646970;">(manuell)</span>' : '')+'</strong>' +
 							'<span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—')+'</span>' +
@@ -251,11 +267,19 @@
 				if (selectAllShippingBtn) {
 					selectAllShippingBtn.textContent = shouldSelect ? 'Fjern alle' : 'Velg alle';
 				}
+				updateBookingServicesSelector();
 			}
 
 			function getSelectedMethods(){
 				var selected = [];
+				var selectedAdditionalServiceIds = [];
+				if (currentMode === 'booking' && bookingServicesSection && bookingServicesSection.style.display !== 'none' && bookingServicesChoice) {
+					selectedAdditionalServiceIds = Array.prototype.slice.call(bookingServicesChoice.selectedOptions || []).map(function(option){
+						return option ? String(option.value || '') : '';
+					}).filter(function(value){ return !!value; });
+				}
 				shippingOptionsList.querySelectorAll('.lp-shipping-option:checked').forEach(function(input){
+					var services = parseDataServices(input.getAttribute('data-services') || '');
 					selected.push({
 						key: input.getAttribute('data-method-key') || '',
 						agreement_id: input.getAttribute('data-agreement-id') || '',
@@ -270,11 +294,53 @@
 						is_manual_norgespakke: input.getAttribute('data-is-manual-norgespakke') === '1',
 						sms_service_id: input.getAttribute('data-sms-service-id') || '',
 						sms_service_name: input.getAttribute('data-sms-service-name') || '',
+						services: services,
+						selected_service_ids: selectedAdditionalServiceIds,
 						delivery_to_pickup_point: input.getAttribute('data-delivery-to-pickup-point') === '1',
 						delivery_to_home: input.getAttribute('data-delivery-to-home') === '1'
 					});
 				});
 				return selected;
+			}
+
+			function updateBookingServicesSelector(){
+				if (!bookingServicesSection || !bookingServicesChoice || !bookingServicesHelp) { return; }
+				if (currentMode !== 'booking') {
+					bookingServicesSection.style.display = 'none';
+					return;
+				}
+				var selectedMethods = getSelectedMethods();
+				if (selectedMethods.length !== 1) {
+					bookingServicesSection.style.display = 'none';
+					return;
+				}
+				var method = selectedMethods[0] || {};
+				var services = Array.isArray(method.services) ? method.services : [];
+				var selectedBefore = Array.prototype.slice.call(bookingServicesChoice.selectedOptions || []).map(function(option){
+					return option ? String(option.value || '') : '';
+				});
+				var optionsHtml = '';
+				var anySelectable = false;
+				services.forEach(function(service){
+					var serviceId = service && service.service_id ? String(service.service_id) : '';
+					var serviceName = service && service.service_name ? String(service.service_name) : serviceId;
+					if (!serviceId) { return; }
+					var attributes = service && Array.isArray(service.attributes) ? service.attributes : [];
+					var hasRequiredAttributes = attributes.some(function(attribute){
+						var requiredValue = attribute && attribute.required ? String(attribute.required).toLowerCase() : '';
+						return requiredValue === 'true' || requiredValue === '1' || requiredValue === 'yes';
+					});
+					var isSelected = selectedBefore.indexOf(serviceId) !== -1;
+					if (!hasRequiredAttributes) {
+						anySelectable = true;
+					}
+					optionsHtml += '<option value="' + esc(serviceId) + '" ' + (isSelected ? 'selected' : '') + (hasRequiredAttributes ? ' disabled' : '') + '>' +
+						esc(serviceName + (hasRequiredAttributes ? ' (krever parametre – ikke støttet ennå)' : '')) +
+						'</option>';
+				});
+				bookingServicesChoice.innerHTML = optionsHtml || '';
+				bookingServicesHelp.textContent = anySelectable ? 'Hold Ctrl/Cmd for å velge flere tjenester.' : (services.length ? 'Ingen tjenester kan velges uten parameterstøtte.' : 'Ingen tilleggstjenester tilgjengelig for valgt metode.');
+				bookingServicesSection.style.display = services.length ? 'block' : 'none';
 			}
 
 
@@ -964,6 +1030,9 @@
 				if (bookingPrinterSection) {
 					bookingPrinterSection.style.display = currentMode === 'booking' ? 'block' : 'none';
 				}
+				if (bookingNotifySection) {
+					bookingNotifySection.style.display = currentMode === 'booking' ? 'block' : 'none';
+				}
 				if (bookingResultsSection) {
 					bookingResultsSection.style.display = currentMode === 'booking' ? 'block' : 'none';
 				}
@@ -973,6 +1042,7 @@
 				if (runBookingBtn) {
 					runBookingBtn.style.display = currentMode === 'booking' ? '' : 'none';
 				}
+				updateBookingServicesSelector();
 			}
 
 			function fetchPrinters(){
@@ -1074,12 +1144,19 @@
 				} else if (printData.attempted && !printData.success) {
 					printHtml = '<div style="color:#b32d2e;">Booking fullført, men utskrift feilet: ' + esc(printData.message || 'Ukjent printfeil') + '</div>';
 				}
+				var selectedServiceIds = Array.isArray(bookingData.selected_service_ids) ? bookingData.selected_service_ids.filter(function(v){ return v !== null && v !== undefined && v !== ''; }) : [];
+				var createdByUser = bookingData.created_by_display_name || bookingData.created_by_user_login || '—';
+				var estimatedPrice = bookingData.estimated_shipping_price || 'ikke tilgjengelig';
 				return '' +
 					'<div style="color:#125228;font-weight:600;">Booking fullført.</div>' +
 					'<div><strong>Consignment number:</strong> ' + esc(bookingData.consignment_number || '—') + '</div>' +
 					'<div><strong>Piece numbers:</strong> ' + esc(pieceNumbers.length ? pieceNumbers.join(', ') : '—') + '</div>' +
 					'<div><strong>Tracking URL:</strong> ' + (bookingData.tracking_url ? '<a href="' + esc(bookingData.tracking_url) + '" target="_blank" rel="noopener noreferrer">' + esc(bookingData.tracking_url) + '</a>' : '—') + '</div>' +
 					(methodLabel ? '<div><strong>Fraktmetode:</strong> ' + esc(methodLabel) + '</div>' : '') +
+					'<div><strong>Opprettet av:</strong> ' + esc(createdByUser) + '</div>' +
+					'<div><strong>Estimert fraktpris:</strong> ' + esc(estimatedPrice) + '</div>' +
+					'<div><strong>Valgte tilleggstjenester:</strong> ' + esc(selectedServiceIds.length ? selectedServiceIds.join(', ') : 'Ingen') + '</div>' +
+					'<div><strong>E-postvarsling til mottaker:</strong> ' + esc(bookingData.notify_email_to_consignee ? 'Ja' : 'Nei') + '</div>' +
 					printHtml;
 			}
 
@@ -1131,11 +1208,11 @@
 					bookingResultsContent.innerHTML = 'Ingen booking kjørt enda.';
 					return;
 				}
-				bookingResultsContent.innerHTML = '<div style="color:#8a4b00;font-weight:600;">Ordren er allerede booket.</div>' + renderBookingSuccess(bookingState, null);
-				if (runBookingBtn) {
-					runBookingBtn.disabled = true;
-					runBookingBtn.textContent = 'Allerede booket';
-				}
+				var history = Array.isArray(bookingState.history) ? bookingState.history : [];
+				var warningHtml = history.length
+					? '<div style="margin-bottom:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;font-weight:600;">Ordren har tidligere booking(er). Du kan fortsatt opprette en ny booking. Tidligere bookinghistorikk beholdes.</div>'
+					: '';
+				bookingResultsContent.innerHTML = warningHtml + '<div style="color:#8a4b00;font-weight:600;">Siste booking:</div>' + renderBookingSuccess(bookingState, null);
 			}
 
 
@@ -1153,6 +1230,7 @@
 							return;
 						}
 						renderShippingOptions(res.data.options || []);
+						updateBookingServicesSelector();
 					})
 					.catch(function(){
 						shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved henting av fraktvalg.</span>';
@@ -1278,10 +1356,6 @@
 
 			function runBooking(preselectedMethod){
 				if (currentMode !== 'booking') { return; }
-				if (currentBookingState && currentBookingState.booked) {
-					renderExistingBookingState(currentBookingState);
-					return;
-				}
 				var colli = collectColliData();
 				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
 					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før booking.</span>';
@@ -1304,6 +1378,11 @@
 					if (smsServiceToggle) {
 						method.use_sms_service = !!smsServiceToggle.checked;
 					}
+				}
+				var notifyEmailToConsignee = bookingNotifyCheckbox ? !!bookingNotifyCheckbox.checked : false;
+				if (notifyEmailToConsignee && (!currentRecipient || !currentRecipient.email)) {
+					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.</span>';
+					return;
 				}
 				var printerChoice = bookingPrinterChoice ? (bookingPrinterChoice.value || '') : '';
 				runBookingBtn.disabled = true;
@@ -1335,18 +1414,27 @@
 					});
 				});
 				Object.keys(method).forEach(function(key){
+					if (Array.isArray(method[key])) {
+						method[key].forEach(function(value, idx){
+							form.append('methods[0]['+key+']['+idx+']', value);
+						});
+						return;
+					}
 					form.append('methods[0]['+key+']', method[key]);
 				});
 				form.append('printer_choice', printerChoice);
+				form.append('notify_email_to_consignee', notifyEmailToConsignee ? '1' : '0');
 
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
 						if (res && res.success && res.data && res.data.booking) {
 							currentBookingState = res.data.booking;
-							bookingResultsContent.innerHTML = renderBookingSuccess(res.data.booking, method);
-							runBookingBtn.disabled = true;
-							runBookingBtn.textContent = 'Booket';
+							var history = Array.isArray(res.data.booking.history) ? res.data.booking.history : [];
+							var warning = history.length ? '<div style="margin-bottom:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;font-weight:600;">Ordren har tidligere booking(er). Du kan fortsatt opprette en ny booking. Tidligere bookinghistorikk beholdes.</div>' : '';
+							bookingResultsContent.innerHTML = warning + renderBookingSuccess(res.data.booking, method);
+							runBookingBtn.disabled = false;
+							runBookingBtn.textContent = 'Book shipment';
 							return;
 						}
 						var errorData = (res && res.data) ? res.data : { message: 'Booking feilet.' };
@@ -1379,6 +1467,13 @@
 			}
 			if (selectAllShippingBtn) {
 				selectAllShippingBtn.addEventListener('click', toggleSelectAllShippingOptions);
+			}
+			if (shippingOptionsList) {
+				shippingOptionsList.addEventListener('change', function(e){
+					if (e.target && e.target.classList && e.target.classList.contains('lp-shipping-option')) {
+						updateBookingServicesSelector();
+					}
+				});
 			}
 
 
@@ -1465,6 +1560,9 @@
 						var d = res.data;
 						currentRecipient = d.recipient || {};
 						currentBookingState = d.booking_state || null;
+						if (d.booking_defaults && typeof d.booking_defaults.notify_email_to_consignee !== 'undefined') {
+							bookingNotifyDefault = Number(d.booking_defaults.notify_email_to_consignee) === 0 ? 0 : 1;
+						}
 						overview.innerHTML = '<h3 style="margin:0 0 8px 0;">Oversikt over sendingen</h3>' +
 							'<div><strong>Ordre:</strong> #' + esc(d.order.number) + '</div>' +
 							'<div><strong>Dato:</strong> ' + esc(d.order.date) + '</div>' +
@@ -1491,7 +1589,11 @@
 						fetchShippingOptions();
 						if (currentMode === 'booking') {
 							fetchPrinters();
+							if (bookingNotifyCheckbox) {
+								bookingNotifyCheckbox.checked = bookingNotifyDefault === 1;
+							}
 							renderExistingBookingState(currentBookingState);
+							updateBookingServicesSelector();
 						}
 						content.style.display = 'block';
 					})
@@ -1525,6 +1627,18 @@
 				}
 				if (bookingPrinterHelp) {
 					bookingPrinterHelp.textContent = '';
+				}
+				if (bookingNotifyCheckbox) {
+					bookingNotifyCheckbox.checked = bookingNotifyDefault === 1;
+				}
+				if (bookingServicesSection) {
+					bookingServicesSection.style.display = 'none';
+				}
+				if (bookingServicesChoice) {
+					bookingServicesChoice.innerHTML = '';
+				}
+				if (bookingServicesHelp) {
+					bookingServicesHelp.textContent = '';
 				}
 				if (runBookingBtn) {
 					runBookingBtn.disabled = false;
