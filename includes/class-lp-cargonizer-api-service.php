@@ -63,21 +63,15 @@ class LP_Cargonizer_Api_Service {
 			);
 		}
 
-		libxml_use_internal_errors(true);
-		$xml = simplexml_load_string($body);
+		$xml = $this->safe_simplexml_load_string($body);
 
 		if ($xml === false) {
-			$errors = libxml_get_errors();
-			libxml_clear_errors();
-
-			$error_messages = array();
-			foreach ($errors as $error) {
-				$error_messages[] = trim($error->message);
-			}
+			$error_messages = $this->collect_libxml_error_messages();
+			$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
 
 			return array(
 				'success' => false,
-				'message' => 'Kunne ikke parse XML-respons: ' . implode(' | ', $error_messages),
+				'message' => 'Kunne ikke parse XML-respons: ' . $error_suffix,
 				'status'  => $status,
 				'raw'     => $body,
 				'data'    => array(),
@@ -261,10 +255,8 @@ class LP_Cargonizer_Api_Service {
 			return $result;
 		}
 
-		libxml_use_internal_errors(true);
-		$xml = simplexml_load_string($body);
+		$xml = $this->safe_simplexml_load_string($body);
 		if ($xml === false) {
-			libxml_clear_errors();
 			$result['error_message'] = 'Kunne ikke parse XML-respons fra servicepartner-endepunktet.';
 			return $result;
 		}
@@ -368,6 +360,10 @@ class LP_Cargonizer_Api_Service {
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$package_count = count($packages);
+
+		if (!class_exists('SimpleXMLElement')) {
+			return '';
+		}
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
@@ -482,10 +478,8 @@ class LP_Cargonizer_Api_Service {
 			return $details;
 		}
 
-		libxml_use_internal_errors(true);
-		$xml = simplexml_load_string($body);
+		$xml = $this->safe_simplexml_load_string($body);
 		if ($xml === false) {
-			libxml_clear_errors();
 			return $details;
 		}
 
@@ -517,10 +511,8 @@ class LP_Cargonizer_Api_Service {
 			return '';
 		}
 
-		libxml_use_internal_errors(true);
-		$xml = simplexml_load_string($body);
+		$xml = $this->safe_simplexml_load_string($body);
 		if ($xml === false) {
-			libxml_clear_errors();
 			return '';
 		}
 
@@ -556,10 +548,8 @@ class LP_Cargonizer_Api_Service {
 			return $fields;
 		}
 
-		libxml_use_internal_errors(true);
-		$xml = simplexml_load_string($body);
+		$xml = $this->safe_simplexml_load_string($body);
 		if ($xml === false) {
-			libxml_clear_errors();
 			return $fields;
 		}
 
@@ -603,5 +593,33 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		return $fields;
+	}
+
+	private function safe_simplexml_load_string($body) {
+		if (!function_exists('simplexml_load_string')) {
+			return false;
+		}
+
+		if (function_exists('libxml_use_internal_errors')) {
+			libxml_use_internal_errors(true);
+		}
+
+		return simplexml_load_string($body);
+	}
+
+	private function collect_libxml_error_messages() {
+		if (!function_exists('libxml_get_errors') || !function_exists('libxml_clear_errors')) {
+			return array();
+		}
+
+		$errors = libxml_get_errors();
+		libxml_clear_errors();
+
+		$error_messages = array();
+		foreach ($errors as $error) {
+			$error_messages[] = trim($error->message);
+		}
+
+		return $error_messages;
 	}
 }
