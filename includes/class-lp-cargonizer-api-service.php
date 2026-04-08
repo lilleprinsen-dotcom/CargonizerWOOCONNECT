@@ -814,6 +814,96 @@ class LP_Cargonizer_Api_Service {
 		return $result;
 	}
 
+	public function fetch_authenticated_binary_url($url) {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error' => '',
+			'raw_response' => '',
+			'binary' => '',
+		);
+
+		$url = esc_url_raw((string) $url);
+		if ($url === '') {
+			$result['error'] = 'Mangler URL for PDF-henting.';
+			return $result;
+		}
+
+		$response = wp_remote_get($url, array(
+			'timeout' => 40,
+			'headers' => array_merge($this->get_auth_headers(), array(
+				'Accept' => 'application/pdf',
+			)),
+		));
+
+		if (is_wp_error($response)) {
+			$result['error'] = $response->get_error_message();
+			return $result;
+		}
+
+		$result['http_status'] = wp_remote_retrieve_response_code($response);
+		$result['raw_response'] = wp_remote_retrieve_body($response);
+		if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+			$result['error'] = 'HTTP ' . $result['http_status'];
+			return $result;
+		}
+
+		$result['success'] = true;
+		$result['binary'] = $result['raw_response'];
+		return $result;
+	}
+
+	public function print_pdf_to_printer($printer_id, $pdf_binary) {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error' => '',
+			'raw_response' => '',
+		);
+
+		$printer_id = sanitize_text_field((string) $printer_id);
+		if ($printer_id === '') {
+			$result['error'] = 'Mangler printer-id.';
+			return $result;
+		}
+
+		$headers = $this->get_auth_headers();
+		if (isset($headers['X-Cargonizer-Sender'])) {
+			unset($headers['X-Cargonizer-Sender']);
+		}
+		$headers['Content-Type'] = 'application/pdf';
+		$headers['Accept'] = 'application/json';
+
+		$url = add_query_arg(array(
+			'print[printer][id]' => $printer_id,
+		), 'https://api.cargonizer.no/prints');
+
+		$response = wp_remote_post($url, array(
+			'timeout' => 40,
+			'headers' => $headers,
+			'body' => (string) $pdf_binary,
+		));
+
+		if (is_wp_error($response)) {
+			$result['error'] = $response->get_error_message();
+			return $result;
+		}
+
+		$result['http_status'] = wp_remote_retrieve_response_code($response);
+		$result['raw_response'] = wp_remote_retrieve_body($response);
+
+		if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+			$result['error'] = 'HTTP ' . $result['http_status'];
+			if ($result['raw_response'] !== '') {
+				$result['error'] .= ': ' . $result['raw_response'];
+			}
+			return $result;
+		}
+
+		$result['success'] = true;
+		return $result;
+	}
+
 	public function normalize_positive_decimal_for_xml($value) {
 		if (is_string($value)) {
 			$value = str_replace(',', '.', $value);
