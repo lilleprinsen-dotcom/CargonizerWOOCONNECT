@@ -338,13 +338,14 @@ class LP_Cargonizer_Estimator_Service {
 	public function build_packages_summary($packages) {
 		$summary = array();
 		if (!is_array($packages)) { return $summary; }
-		foreach ($packages as $index => $package) {
+		foreach ($packages as $package) {
 			$summary[] = array(
-				'package_number' => $index + 1,
-				'weight' => isset($package['weight']) ? number_format((float) $package['weight'], 2, '.', '') : '0.00',
-				'length' => isset($package['length']) ? number_format((float) $package['length'], 2, '.', '') : '0.00',
-				'width' => isset($package['width']) ? number_format((float) $package['width'], 2, '.', '') : '0.00',
-				'height' => isset($package['height']) ? number_format((float) $package['height'], 2, '.', '') : '0.00',
+				'name' => isset($package['name']) ? (string) $package['name'] : '',
+				'description' => isset($package['description']) ? (string) $package['description'] : '',
+				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
+				'length' => isset($package['length']) ? (float) $package['length'] : 0,
+				'width' => isset($package['width']) ? (float) $package['width'] : 0,
+				'height' => isset($package['height']) ? (float) $package['height'] : 0,
 			);
 		}
 		return $summary;

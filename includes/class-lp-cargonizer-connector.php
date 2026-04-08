@@ -30,14 +30,28 @@ class LP_Cargonizer_Connector {
 
 	public function __construct() {
 		$this->settings_service = new LP_Cargonizer_Settings_Service(self::OPTION_KEY, self::MANUAL_NORGESPAKKE_KEY);
-		$this->api_service = new LP_Cargonizer_Api_Service(array($this, 'get_settings'));
+		$this->api_service = new LP_Cargonizer_Api_Service(function () {
+			return $this->get_settings();
+		});
 		$this->estimator_service = new LP_Cargonizer_Estimator_Service(array(
-			'sanitize_price_source' => array($this, 'sanitize_price_source'),
-			'sanitize_rounding_mode' => array($this, 'sanitize_rounding_mode'),
-			'sanitize_discount_percent' => array($this, 'sanitize_discount_percent'),
-			'sanitize_non_negative_number' => array($this, 'sanitize_non_negative_number'),
-			'sanitize_checkbox_value' => array($this, 'sanitize_checkbox_value'),
-			'run_consignment_estimate_for_packages' => array($this, 'run_consignment_estimate_for_packages'),
+			'sanitize_price_source' => function ($value) {
+				return $this->sanitize_price_source($value);
+			},
+			'sanitize_rounding_mode' => function ($value) {
+				return $this->sanitize_rounding_mode($value);
+			},
+			'sanitize_discount_percent' => function ($value) {
+				return $this->sanitize_discount_percent($value);
+			},
+			'sanitize_non_negative_number' => function ($value) {
+				return $this->sanitize_non_negative_number($value);
+			},
+			'sanitize_checkbox_value' => function ($value) {
+				return $this->sanitize_checkbox_value($value);
+			},
+			'run_consignment_estimate_for_packages' => function () {
+				return call_user_func_array(array($this, 'run_consignment_estimate_for_packages'), func_get_args());
+			},
 		));
 	}
 
