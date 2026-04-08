@@ -272,6 +272,7 @@
 					selectAllShippingBtn.textContent = shouldSelect ? 'Fjern alle' : 'Velg alle';
 				}
 				updateBookingServicesSelector();
+				updateProactiveBookingServicepartner();
 			}
 
 			function getSelectedMethods(){
@@ -379,7 +380,11 @@
 				}
 				renderProactiveServicepartnerOptions(methodKey, existingOptions, existingSelected);
 				if (existingOptions.length) {
-					setProactiveServicepartnerHelp('Fant ' + existingOptions.length + ' servicepartnere.', '#125228');
+					if (existingSelected) {
+						setProactiveServicepartnerHelp('Fant ' + existingOptions.length + ' servicepartnere.', '#125228');
+					} else {
+						setProactiveServicepartnerHelp('Velg utleveringssted / servicepartner før booking.', '#8a4b00');
+					}
 				} else {
 					setProactiveServicepartnerHelp('Henter servicepartnere…', '#646970');
 				}
@@ -442,6 +447,39 @@
 				bookingServicepartnerSelect.setAttribute('data-method-key', methodKey || '');
 			}
 
+			function formatAttemptsSummary(debug){
+				if (!debug || !Array.isArray(debug.attempts) || !debug.attempts.length) { return ''; }
+				var parts = debug.attempts.map(function(attempt, idx){
+					var label = (attempt && (attempt.label || attempt.name)) ? String(attempt.label || attempt.name) : String.fromCharCode(65 + idx);
+					var count = 0;
+					if (attempt && typeof attempt.option_count !== 'undefined') {
+						count = parseInt(attempt.option_count, 10);
+					} else if (attempt && typeof attempt.count !== 'undefined') {
+						count = parseInt(attempt.count, 10);
+					} else if (attempt && Array.isArray(attempt.options)) {
+						count = attempt.options.length;
+					}
+					if (isNaN(count) || count < 0) { count = 0; }
+					return label + '=' + count + ' treff';
+				});
+				return parts.length ? ('Forsøk: ' + parts.join(', ')) : '';
+			}
+
+			function getFetchFailureDetails(payload, debug){
+				var message = (payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil';
+				var statusText = debug && debug.http_status ? ' (HTTP ' + debug.http_status + ')' : '';
+				var attemptLabel = '';
+				if (debug && debug.winning_attempt_label) {
+					attemptLabel = ' Vinnerforsøk: ' + String(debug.winning_attempt_label) + '.';
+				} else if (debug && debug.last_attempt_label) {
+					attemptLabel = ' Siste forsøk: ' + String(debug.last_attempt_label) + '.';
+				}
+				return {
+					text: 'Kunne ikke hente servicepartnere: ' + message + statusText + attemptLabel,
+					attemptsSummary: formatAttemptsSummary(debug)
+				};
+			}
+
 			function setProactiveServicepartnerHelp(message, color){
 				if (!bookingServicepartnerHelp) { return; }
 				bookingServicepartnerHelp.textContent = message || '';
@@ -457,6 +495,22 @@
 					bookingServicepartnerSelect.setAttribute('data-method-key', '');
 				}
 				setProactiveServicepartnerHelp('');
+			}
+
+			function syncServicepartnerSelectors(methodKey, selectedValue, source){
+				if (!methodKey) { return; }
+				var value = selectedValue || '';
+				if (bookingServicepartnerSelect && source !== 'proactive') {
+					if ((bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey) {
+						bookingServicepartnerSelect.value = value;
+					}
+				}
+				if (bookingResultsContent && source !== 'retry') {
+					var retrySelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+					if (retrySelect) {
+						retrySelect.value = value;
+					}
+				}
 			}
 
 			function shortRaw(text, maxLen){
@@ -889,6 +943,15 @@
 							if (methodKeyForRow(row) === methodKey) {
 								row.servicepartner_options = options;
 								row.servicepartner_fetch = debug;
+								var selectedServicepartner = row.selected_servicepartner ? String(row.selected_servicepartner) : '';
+								if (selectedServicepartner) {
+									var stillExists = options.some(function(opt){
+										return opt && opt.value && String(opt.value) === selectedServicepartner;
+									});
+									if (!stillExists) {
+										row.selected_servicepartner = '';
+									}
+								}
 								if (!payload || !payload.success) {
 									row.error = (payload && payload.data && payload.data.message) ? payload.data.message : (row.error || 'Henting av servicepartnere feilet.');
 								}
@@ -908,6 +971,10 @@
 									optionsHtml += '<option value="'+esc(value)+'"'+(previousRetryValue === value ? ' selected' : '')+'>'+esc(label)+'</option>';
 								});
 								retrySelect.innerHTML = optionsHtml;
+								var selectedFromProactive = getProactiveSelectedServicepartner(methodKey);
+								if (selectedFromProactive) {
+									retrySelect.value = selectedFromProactive;
+								}
 								var retryStatusMessage = bookingResultsContent.querySelector('.lp-servicepartner-refresh-status[data-method-key="'+methodKey+'"]');
 								if (!retryStatusMessage) {
 									retryStatusMessage = document.createElement('div');
@@ -925,6 +992,7 @@
 						if (currentMode === 'booking' && bookingServicepartnerSelect && currentProactiveMethodKey === methodKey) {
 							var previousProactiveValue = bookingServicepartnerSelect.value || '';
 							renderProactiveServicepartnerOptions(methodKey, options, previousProactiveValue);
+							syncServicepartnerSelectors(methodKey, bookingServicepartnerSelect.value || '', 'proactive');
 							if (payload && payload.success) {
 								if (options.length) {
 									setProactiveServicepartnerHelp('Fant ' + options.length + ' servicepartnere.', '#125228');
@@ -932,10 +1000,9 @@
 									setProactiveServicepartnerHelp('Ingen hentesteder/servicepartnere funnet for valgt metode og adresse.', '#8a4b00');
 								}
 							} else {
-								var message = (payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil';
-								var statusText = debug.http_status ? ' (HTTP ' + debug.http_status + ')' : '';
-								var debugText = debug.error_message ? ' — ' + debug.error_message : '';
-								setProactiveServicepartnerHelp('Kunne ikke hente servicepartnere: ' + message + statusText + debugText, '#b32d2e');
+								var failureDetails = getFetchFailureDetails(payload, debug);
+								var proactiveFailureText = failureDetails.text + (failureDetails.attemptsSummary ? ' ' + failureDetails.attemptsSummary : '');
+								setProactiveServicepartnerHelp(proactiveFailureText, '#b32d2e');
 								if (bookingResultsContent) {
 									var retrySelectForStatus = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 									if (retrySelectForStatus) {
@@ -948,7 +1015,7 @@
 											statusMessage.style.fontSize = '12px';
 											retrySelectForStatus.parentNode.appendChild(statusMessage);
 										}
-										statusMessage.textContent = 'Kunne ikke hente servicepartnere: ' + message + statusText + debugText;
+										statusMessage.textContent = 'Kunne ikke hente servicepartnere: ' + ((payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil') + (failureDetails.attemptsSummary ? ' ' + failureDetails.attemptsSummary : '');
 									}
 								}
 							}
@@ -1545,22 +1612,31 @@
 
 				var method = selectedResult.method;
 				var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
-				var proactiveServicepartner = getProactiveSelectedServicepartner(methodKey);
-				if (proactiveServicepartner) {
-					method.servicepartner = proactiveServicepartner;
-				}
+				var selectedServicepartner = '';
 				if (bookingResultsContent) {
 					var servicepartnerSelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
-					if (servicepartnerSelect) {
-						method.servicepartner = servicepartnerSelect.value || '';
+					if (servicepartnerSelect && (servicepartnerSelect.value || '')) {
+						selectedServicepartner = servicepartnerSelect.value || '';
 					}
 					var smsServiceToggle = bookingResultsContent.querySelector('.lp-sms-service-toggle[data-method-key="'+methodKey+'"]');
 					if (smsServiceToggle) {
 						method.use_sms_service = !!smsServiceToggle.checked;
 					}
 				}
-				if (!method.servicepartner && getProactiveMethodKey() === methodKey) {
-					setProactiveServicepartnerHelp('Valgt metode ser ut til å kreve hentested/servicepartner.', '#8a4b00');
+				if (!selectedServicepartner) {
+					selectedServicepartner = getProactiveSelectedServicepartner(methodKey);
+				}
+				method.servicepartner = selectedServicepartner || '';
+				var proactiveVisibleForMethod = !!(bookingServicepartnerSection && bookingServicepartnerSection.style.display !== 'none' && bookingServicepartnerSelect && (bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey);
+				var proactiveOptionsCount = (bookingServicepartnerSelect && bookingServicepartnerSelect.options) ? bookingServicepartnerSelect.options.length : 0;
+				if (proactiveVisibleForMethod && methodLikelyNeedsServicepartner(method) && proactiveOptionsCount > 1 && !method.servicepartner) {
+					var guardMessage = 'Velg utleveringssted / servicepartner før booking.';
+					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">' + esc(guardMessage) + '</span>';
+					setProactiveServicepartnerHelp(guardMessage, '#b32d2e');
+					return;
+				}
+				if (proactiveVisibleForMethod && methodLikelyNeedsServicepartner(method) && proactiveOptionsCount <= 1 && !method.servicepartner) {
+					setProactiveServicepartnerHelp('Ingen servicepartnere tilgjengelige fra oppslaget. Booking kan fortsatt feile.', '#8a4b00');
 				}
 				var notifyEmailToConsignee = bookingNotifyCheckbox ? !!bookingNotifyCheckbox.checked : false;
 				if (notifyEmailToConsignee && (!currentRecipient || !currentRecipient.email)) {
@@ -1664,6 +1740,7 @@
 					e.preventDefault();
 					var methodKey = bookingServicepartnerSelect ? (bookingServicepartnerSelect.getAttribute('data-method-key') || '') : '';
 					if (!methodKey) { return; }
+					setProactiveServicepartnerHelp('Henter servicepartnere…', '#646970');
 					fetchServicepartnersForMethod(methodKey);
 				});
 			}
@@ -1677,6 +1754,7 @@
 						}
 						return row;
 					});
+					syncServicepartnerSelectors(methodKey, value, 'proactive');
 					if (value) {
 						setProactiveServicepartnerHelp('Servicepartner valgt.', '#125228');
 					}
@@ -1728,6 +1806,21 @@
 			});
 
 			if (bookingResultsContent) {
+				bookingResultsContent.addEventListener('change', function(e){
+					var select = e.target.closest('.lp-servicepartner-select');
+					if (select) {
+						var methodKey = select.getAttribute('data-method-key') || '';
+						var value = select.value || '';
+						latestEstimateResults = latestEstimateResults.map(function(row){
+							if (methodKeyForRow(row) === methodKey) {
+								row.selected_servicepartner = value;
+							}
+							return row;
+						});
+						syncServicepartnerSelectors(methodKey, value, 'retry');
+						return;
+					}
+				});
 				bookingResultsContent.addEventListener('click', function(e){
 					var refreshBtn = e.target.closest('.lp-servicepartner-refresh');
 					if (refreshBtn) {
