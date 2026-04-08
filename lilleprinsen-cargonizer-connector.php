@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/includes/class-lp-cargonizer-connector.php';
+require_once __DIR__ . '/includes/class-lp-cargonizer-api-service.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-settings-service.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-plugin.php';
 
