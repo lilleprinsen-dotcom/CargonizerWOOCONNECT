@@ -135,6 +135,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 		$settings = $this->get_settings();
 		$settings['available_methods'] = $this->ensure_internal_manual_methods(isset($settings['available_methods']) ? $settings['available_methods'] : array());
+		$current_user_id = get_current_user_id();
+		$current_user_default_printer_id = get_user_meta($current_user_id, 'lp_cargonizer_default_printer_id', true);
+		$current_user_default_printer_id = is_scalar($current_user_default_printer_id) ? sanitize_text_field((string) $current_user_default_printer_id) : '';
 		$result   = null;
 		$method_refresh = null;
 
@@ -161,7 +164,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 			$new_settings = $this->sanitize_settings($new_settings);
 			update_option(self::OPTION_KEY, $new_settings);
+
+			$posted_default_printer_id = isset($_POST['lp_cargonizer_default_printer_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_default_printer_id'])) : '';
+			update_user_meta($current_user_id, 'lp_cargonizer_default_printer_id', $posted_default_printer_id);
+
 			$settings = $this->get_settings();
+			$current_user_default_printer_id = $posted_default_printer_id;
 
 			echo '<div class="notice notice-success"><p>Innstillinger lagret.</p></div>';
 		}
@@ -264,6 +272,53 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<p class="description">
 										Brukes som header: <code>X-Cargonizer-Sender</code>
 									</p>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+
+					<h2>Standard printer for innlogget admin</h2>
+					<p>Denne innstillingen lagres kun på deg som innlogget admin-bruker.</p>
+					<?php
+					$printer_fetch_result = array(
+						'success' => false,
+						'http_status' => 0,
+						'message' => '',
+						'raw' => '',
+						'printers' => array(),
+					);
+					if (!empty($settings['api_key'])) {
+						$printer_fetch_result = $this->fetch_printers();
+					}
+					$available_printers = isset($printer_fetch_result['printers']) && is_array($printer_fetch_result['printers']) ? $printer_fetch_result['printers'] : array();
+					?>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<tr>
+								<th scope="row">
+									<label for="lp_cargonizer_default_printer_id">Standardprinter</label>
+								</th>
+								<td>
+									<select name="lp_cargonizer_default_printer_id" id="lp_cargonizer_default_printer_id">
+										<option value=""><?php echo esc_html('Ingen standardprinter'); ?></option>
+										<?php foreach ($available_printers as $printer) : ?>
+											<?php
+											$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+											if ($printer_id === '') {
+												continue;
+											}
+											$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+											?>
+											<option value="<?php echo esc_attr($printer_id); ?>" <?php selected($current_user_default_printer_id, $printer_id); ?>>
+												<?php echo esc_html($printer_label); ?>
+											</option>
+										<?php endforeach; ?>
+									</select>
+									<?php if (empty($settings['api_key'])) : ?>
+										<p class="description">Legg inn API key for å hente printerliste fra Cargonizer.</p>
+									<?php elseif (empty($printer_fetch_result['success'])) : ?>
+										<p class="description" style="color:#b32d2e;"><?php echo esc_html($printer_fetch_result['message'] !== '' ? $printer_fetch_result['message'] : 'Kunne ikke hente printerliste.'); ?></p>
+									<?php endif; ?>
 								</td>
 							</tr>
 						</tbody>

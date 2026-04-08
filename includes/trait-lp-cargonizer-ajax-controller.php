@@ -175,6 +175,26 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		));
 	}
 
+	public function ajax_get_printers() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_PRINTERS)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$printers = $this->fetch_printers();
+		$default_printer_id = get_user_meta(get_current_user_id(), 'lp_cargonizer_default_printer_id', true);
+		$default_printer_id = is_scalar($default_printer_id) ? sanitize_text_field((string) $default_printer_id) : '';
+
+		wp_send_json_success(array(
+			'printers' => $printers,
+			'default_printer_id' => $default_printer_id,
+		));
+	}
+
 
 	public function ajax_run_bulk_estimate() {
 		if (!current_user_can('manage_woocommerce')) {
