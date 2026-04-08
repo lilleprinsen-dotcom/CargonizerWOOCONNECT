@@ -80,10 +80,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			return;
 		}
 
-		echo '<p style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+		echo '<div class="lp-cargonizer-order-actions" style="clear:both;margin-top:16px;padding-top:12px;border-top:1px solid #eee;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
 			. '<button type="button" class="button lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '">Estimer fraktkostnad</button>'
 			. '<button type="button" class="button lp-cargonizer-book-open" data-order-id="' . esc_attr($order->get_id()) . '">Book shipment</button>'
-			. '</p>';
+			. '</div>';
 	}
 
 	public function render_estimate_modal() {
