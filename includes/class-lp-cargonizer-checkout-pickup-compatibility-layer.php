@@ -560,23 +560,14 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		if (!is_a($rate, 'WC_Shipping_Rate')) {
 			return null;
 		}
-		$value = null;
 		if (method_exists($rate, 'get_meta')) {
-			$value = $rate->get_meta($key, true);
-		} else {
-			$meta_data = method_exists($rate, 'get_meta_data') ? $rate->get_meta_data() : array();
-			if (is_array($meta_data) && isset($meta_data[$key])) {
-				$value = $meta_data[$key];
-			}
+			return $rate->get_meta($key, true);
 		}
-
-		if (is_string($value) && in_array($key, array('krokedil_pickup_points', 'krokedil_selected_pickup_point', 'lp_cargonizer_pickup_rate_context'), true)) {
-			$decoded = json_decode($value, true);
-			if (is_array($decoded)) {
-				return $decoded;
-			}
+		$meta_data = method_exists($rate, 'get_meta_data') ? $rate->get_meta_data() : array();
+		if (is_array($meta_data) && isset($meta_data[$key])) {
+			return $meta_data[$key];
 		}
-		return $value;
+		return null;
 	}
 
 	private function log_pickup_compatibility_debug($message, $context = array(), $level = 'debug') {
