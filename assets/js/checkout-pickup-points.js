@@ -6,6 +6,31 @@
 		return;
 	}
 
+	function triggerCompatibilityUpdate() {
+		$(document.body).trigger('lp_cargonizer_pickup_point_updated');
+		if ($('form.checkout').length) {
+			$(document.body).trigger('update_checkout');
+		}
+		if (window.wc && window.wc.blocksCheckout && typeof window.wc.blocksCheckout.emitEvent === 'function') {
+			window.wc.blocksCheckout.emitEvent('lp-cargonizer-pickup-point-updated');
+		}
+	}
+
+	function refreshCompatibilityPayload() {
+		if (!config.ajaxGetAction) {
+			return;
+		}
+		$.post(config.ajaxUrl, {
+			action: config.ajaxGetAction
+		}).done(function (response) {
+			if (!response || !response.success || !response.data) {
+				return;
+			}
+			window.lpCargonizerPickupPointsState = response.data;
+			$(document.body).trigger('lp_cargonizer_pickup_points_state_ready', [response.data]);
+		});
+	}
+
 	var pendingRequest = null;
 	$(document.body)
 		.off('change.lpCargonizerPickupPoints', '.lp-cargonizer-pickup-point-select')
@@ -32,9 +57,15 @@
 			pickup_point_id: pickupPointId
 		}).done(function () {
 			$select.data('selected-pickup-point-id', pickupPointId);
+			refreshCompatibilityPayload();
 		}).always(function () {
 			$select.prop('disabled', false);
-			$(document.body).trigger('update_checkout');
+			triggerCompatibilityUpdate();
 		});
 	});
+
+	$(document.body).on('updated_checkout wc-blocks_checkout_updated', function () {
+		refreshCompatibilityPayload();
+	});
+	refreshCompatibilityPayload();
 })(jQuery);

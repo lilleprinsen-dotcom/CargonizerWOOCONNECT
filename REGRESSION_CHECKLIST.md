@@ -50,11 +50,13 @@ Run these scenarios with live checkout enabled, at least one pickup-capable meth
 
 3. **Embedded checkout persistence assumptions (Dintero-style)**
    - Complete checkout through a Store API / embedded checkout path.
+   - Verify compatibility endpoint `admin-ajax.php?action=lp_cargonizer_get_checkout_pickup_points` returns pickup-point context for current shipping rates.
    - Verify order meta `_lp_cargonizer_checkout_selection` contains:
      - selected method/rate context
      - `krokedil_pickup_points`
      - `krokedil_selected_pickup_point`
      - `krokedil_selected_pickup_point_id`
+   - Verify changing pickup point dispatches `lp_cargonizer_pickup_point_updated` even when classic checkout markup listeners are not present.
 
 4. **Under-threshold NOK 69 behavior**
    - Set cart subtotal below configured threshold (default NOK 1500).

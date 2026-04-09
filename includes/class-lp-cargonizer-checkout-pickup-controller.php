@@ -27,6 +27,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		wp_localize_script($handle, 'lpCargonizerPickupPointsConfig', array(
 			'ajaxUrl' => admin_url('admin-ajax.php'),
 			'ajaxAction' => self::AJAX_ACTION,
+			'ajaxGetAction' => LP_Cargonizer_Checkout_Pickup_Compatibility_Layer::AJAX_ACTION_GET,
 			'nonce' => wp_create_nonce(self::NONCE_ACTION),
 		));
 	}
