@@ -156,7 +156,20 @@ Request body mirrors consignment XML model. Checkout estimation payload must inc
     "krokedil_pickup_points": [],
     "krokedil_selected_pickup_point": {},
     "krokedil_selected_pickup_point_id": "string"
-  }
+  },
+  "quote_context": {
+    "package_index": 0,
+    "instance_id": "string",
+    "rate_meta": {}
+  },
+  "packages": [
+    {
+      "shipping": {
+        "selected_service_ids": [],
+        "available_service_ids": []
+      }
+    }
+  ]
 }
 ```
 
