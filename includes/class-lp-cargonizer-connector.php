@@ -380,6 +380,18 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->detect_servicepartner_custom_params($method);
 	}
 
+	private function is_method_explicitly_pickup_point($method) {
+		return $this->api_service->is_method_explicitly_pickup_point($method);
+	}
+
+	private function is_method_explicitly_home_delivery($method) {
+		return $this->api_service->is_method_explicitly_home_delivery($method);
+	}
+
+	private function resolve_default_servicepartner_selection($method_payload, $recipient) {
+		return $this->api_service->resolve_default_servicepartner_selection($method_payload, $recipient);
+	}
+
 
 	private function fetch_servicepartner_options($method) {
 		return $this->api_service->fetch_servicepartner_options($method);
