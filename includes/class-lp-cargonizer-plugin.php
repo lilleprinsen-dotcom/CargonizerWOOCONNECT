@@ -36,14 +36,26 @@ class LP_Cargonizer_Plugin {
 
 	public function register_live_shipping_method_class() {
 		if (!class_exists('WC_Shipping_Method')) {
+			$this->log_live_checkout_event('debug', 'Skipped live shipping method class bootstrap: WC_Shipping_Method unavailable.');
 			return;
 		}
 
+		$this->log_live_checkout_event('debug', 'Bootstrapping live shipping method class.');
 		require_once __DIR__ . '/class-lp-cargonizer-live-shipping-method.php';
 	}
 
 	public function register_live_shipping_method_id($methods) {
+		if (!is_array($methods)) {
+			$methods = array();
+		}
+		if (!class_exists('LP_Cargonizer_Live_Checkout')) {
+			$this->log_live_checkout_event('debug', 'Skipped live shipping method registration: LP_Cargonizer_Live_Checkout class unavailable.');
+			return $methods;
+		}
 		$methods[LP_Cargonizer_Live_Checkout::METHOD_ID] = 'LP_Cargonizer_Live_Shipping_Method';
+		$this->log_live_checkout_event('debug', 'Registered live shipping method identifier.', array(
+			'method_id' => LP_Cargonizer_Live_Checkout::METHOD_ID,
+		));
 		return $methods;
 	}
 

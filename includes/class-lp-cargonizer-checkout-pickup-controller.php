@@ -167,35 +167,46 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	public function ajax_set_pickup_point() {
-		check_ajax_referer(self::NONCE_ACTION, 'nonce');
+		try {
+			check_ajax_referer(self::NONCE_ACTION, 'nonce');
 
-		$rate_id = isset($_POST['rate_id']) ? sanitize_text_field(wp_unslash((string) $_POST['rate_id'])) : '';
-		$pickup_point_id = isset($_POST['pickup_point_id']) ? sanitize_text_field(wp_unslash((string) $_POST['pickup_point_id'])) : '';
-		if ($rate_id === '' || $pickup_point_id === '') {
-			wp_send_json_error(array('message' => 'Missing rate or pickup point.'), 400);
+			$rate_id = isset($_POST['rate_id']) ? sanitize_text_field(wp_unslash((string) $_POST['rate_id'])) : '';
+			$pickup_point_id = isset($_POST['pickup_point_id']) ? sanitize_text_field(wp_unslash((string) $_POST['pickup_point_id'])) : '';
+			if ($rate_id === '' || $pickup_point_id === '') {
+				$this->log_live_checkout_event('debug', 'Rejected pickup point update: missing rate or pickup id.');
+				wp_send_json_error(array('message' => 'Missing rate or pickup point.'), 400);
+			}
+
+			$available = $this->find_rate_pickup_point($rate_id, $pickup_point_id);
+			if (empty($available)) {
+				$this->log_live_checkout_event('debug', 'Rejected pickup point update: pickup id not available for selected rate.', array(
+					'rate_id' => $rate_id,
+				));
+				wp_send_json_error(array('message' => 'Pickup point not available for selected rate.'), 400);
+			}
+
+			$map = $this->get_session_map();
+			$map[$rate_id] = array(
+				'id' => $pickup_point_id,
+				'point' => $available,
+				'source' => 'customer_override',
+			);
+			$existing_points = $this->find_rate_pickup_points($rate_id);
+			if (!empty($existing_points)) {
+				$map[$rate_id]['pickup_points'] = $existing_points;
+			}
+			$this->set_session_map($map);
+
+			wp_send_json_success(array(
+				'rate_id' => $rate_id,
+				'pickup_point_id' => $pickup_point_id,
+			));
+		} catch (Throwable $throwable) {
+			$this->log_live_checkout_event('error', 'Pickup point update failed unexpectedly.', array(
+				'error' => $throwable->getMessage(),
+			));
+			wp_send_json_error(array('message' => 'Pickup point could not be updated.'), 500);
 		}
-
-		$available = $this->find_rate_pickup_point($rate_id, $pickup_point_id);
-		if (empty($available)) {
-			wp_send_json_error(array('message' => 'Pickup point not available for selected rate.'), 400);
-		}
-
-		$map = $this->get_session_map();
-		$map[$rate_id] = array(
-			'id' => $pickup_point_id,
-			'point' => $available,
-			'source' => 'customer_override',
-		);
-		$existing_points = $this->find_rate_pickup_points($rate_id);
-		if (!empty($existing_points)) {
-			$map[$rate_id]['pickup_points'] = $existing_points;
-		}
-		$this->set_session_map($map);
-
-		wp_send_json_success(array(
-			'rate_id' => $rate_id,
-			'pickup_point_id' => $pickup_point_id,
-		));
 	}
 
 	private function find_rate_pickup_point($rate_id, $pickup_point_id) {
@@ -252,11 +263,11 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	private function get_shipping_packages_from_session() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 		$package_count = 1;
-		if (WC()->cart && method_exists(WC()->cart, 'get_shipping_packages')) {
+		if (isset(WC()->cart) && WC()->cart && method_exists(WC()->cart, 'get_shipping_packages')) {
 			$packages = WC()->cart->get_shipping_packages();
 			if (is_array($packages) && !empty($packages)) {
 				$package_count = count($packages);
@@ -275,7 +286,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	private function get_chosen_shipping_methods() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 		$chosen = WC()->session->get('chosen_shipping_methods', array());
@@ -283,7 +294,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	private function get_session_map() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 		$value = WC()->session->get(self::SESSION_KEY, array());
@@ -291,10 +302,15 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	private function set_session_map($map) {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
+			$this->log_live_checkout_event('debug', 'Skipped writing pickup selection session map: WC session unavailable.');
 			return;
 		}
 		WC()->session->set(self::SESSION_KEY, is_array($map) ? $map : array());
+	}
+
+	private function has_wc_session() {
+		return function_exists('WC') && WC() && isset(WC()->session) && WC()->session;
 	}
 
 	private function rate_meta($rate, $key) {
@@ -309,5 +325,33 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			return $meta_data[$key];
 		}
 		return null;
+	}
+
+	private function log_live_checkout_event($level, $message, $context = array()) {
+		if (!$this->should_log_live_checkout_events()) {
+			return;
+		}
+		if (!function_exists('wc_get_logger')) {
+			return;
+		}
+		$logger = wc_get_logger();
+		if (!$logger) {
+			return;
+		}
+		$method = method_exists($logger, $level) ? $level : 'info';
+		$logger->$method($message, array(
+			'source' => 'lp-cargonizer-live-checkout',
+			'context' => is_array($context) ? $context : array(),
+		));
+	}
+
+	private function should_log_live_checkout_events() {
+		if (!class_exists('LP_Cargonizer_Settings_Service')) {
+			return false;
+		}
+		$settings_service = new LP_Cargonizer_Settings_Service(LP_Cargonizer_Connector::OPTION_KEY, LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY);
+		$settings = $settings_service->get_settings();
+		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		return !empty($live_settings['debug_logging']);
 	}
 }

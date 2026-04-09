@@ -80,68 +80,69 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 	}
 
 	public function calculate_shipping($package = array()) {
-		if ($this->enabled !== 'yes') {
-			return;
-		}
-
-		$settings = $this->settings_service->get_settings();
-		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
-		if (empty($live_settings['enabled'])) {
-			return;
-		}
-
-		$request_context = $this->resolve_live_quote_request_context($live_settings);
-		if (empty($request_context['allow_remote_quotes'])) {
-			if (!empty($request_context['use_cart_placeholder_rate'])) {
-				$this->add_cart_placeholder_rate();
+		try {
+			if ($this->enabled !== 'yes') {
+				return;
 			}
-			return;
-		}
 
-		$destination = isset($package['destination']) && is_array($package['destination']) ? $package['destination'] : array();
-		$country = strtoupper(isset($destination['country']) ? (string) $destination['country'] : '');
-		if (!empty($live_settings['norway_only_enabled']) && $country !== 'NO') {
-			return;
-		}
-		if (!$this->has_minimum_destination_for_quotes($destination)) {
-			return;
-		}
+			$settings = $this->settings_service->get_settings();
+			$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+			if (empty($live_settings['enabled'])) {
+				return;
+			}
 
-		$methods = $this->get_enabled_live_methods($settings);
-		if (empty($methods)) {
-			return;
-		}
+			$request_context = $this->resolve_live_quote_request_context($live_settings);
+			if (empty($request_context['allow_remote_quotes'])) {
+				if (!empty($request_context['use_cart_placeholder_rate'])) {
+					$this->add_cart_placeholder_rate();
+				}
+				return;
+			}
 
-		$package_result = $this->build_package_result($package);
-		$order_value = $this->get_order_value($package, $live_settings);
-		$eligibility = $this->method_rule_engine->evaluate_methods($methods, $package_result, $order_value);
-		$candidates = isset($eligibility['eligible_methods']) ? $eligibility['eligible_methods'] : array();
-		if (empty($candidates)) {
-			return;
-		}
+			$destination = isset($package['destination']) && is_array($package['destination']) ? $package['destination'] : array();
+			$country = strtoupper(isset($destination['country']) ? (string) $destination['country'] : '');
+			if (!empty($live_settings['norway_only_enabled']) && $country !== 'NO') {
+				return;
+			}
+			if (!$this->has_minimum_destination_for_quotes($destination)) {
+				return;
+			}
 
-		$fallback_behavior = $this->resolve_quote_fallback_behavior($settings, $live_settings);
-		$allow_checkout_with_fallback = $this->should_allow_checkout_with_fallback($settings);
-		$quotes = $this->collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
-		if (empty($quotes)) {
-			$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
-			return;
-		}
+			$methods = $this->get_enabled_live_methods($settings);
+			if (empty($methods)) {
+				return;
+			}
 
-		usort($quotes, function ($left, $right) {
+			$package_result = $this->build_package_result($package);
+			$order_value = $this->get_order_value($package, $live_settings);
+			$eligibility = $this->method_rule_engine->evaluate_methods($methods, $package_result, $order_value);
+			$candidates = isset($eligibility['eligible_methods']) ? $eligibility['eligible_methods'] : array();
+			if (empty($candidates)) {
+				return;
+			}
+
+			$fallback_behavior = $this->resolve_quote_fallback_behavior($settings, $live_settings);
+			$allow_checkout_with_fallback = $this->should_allow_checkout_with_fallback($settings);
+			$quotes = $this->collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
+			if (empty($quotes)) {
+				$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
+				return;
+			}
+
+			usort($quotes, function ($left, $right) {
 			$left_live = isset($left['live_price']) ? (float) $left['live_price'] : INF;
 			$right_live = isset($right['live_price']) ? (float) $right['live_price'] : INF;
 			if ($left_live === $right_live) {
 				return strcmp((string) $left['method_key'], (string) $right['method_key']);
 			}
 			return ($left_live < $right_live) ? -1 : 1;
-		});
+			});
 
-		$rules_by_method = $this->get_rule_overrides_by_method($settings);
-		$this->apply_checkout_price_adjustments($quotes, $order_value, $live_settings, $rules_by_method);
+			$rules_by_method = $this->get_rule_overrides_by_method($settings);
+			$this->apply_checkout_price_adjustments($quotes, $order_value, $live_settings, $rules_by_method);
 
-		$added_rates = 0;
-		foreach ($quotes as $quote) {
+			$added_rates = 0;
+			foreach ($quotes as $quote) {
 			$rate_id = $this->build_checkout_rate_id($quote);
 			$meta_data = array(
 				'transport_agreement_id' => $quote['agreement_id'],
@@ -163,17 +164,28 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				$meta_data['krokedil_selected_pickup_point_id'] = '';
 			}
 
-			$this->add_rate(array(
+				$this->add_rate(array(
 				'id' => $rate_id,
 				'label' => $quote['label'],
 				'cost' => $quote['display_cost'],
 				'meta_data' => $meta_data,
 			));
-			$added_rates++;
-		}
+				$added_rates++;
+			}
+			$this->log_live_checkout_event('debug', 'Calculated live shipping package rates.', array(
+				'candidate_count' => count($candidates),
+				'quote_count' => count($quotes),
+				'added_rates' => $added_rates,
+			));
 
-		if ($added_rates < 1) {
-			$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
+			if ($added_rates < 1) {
+				$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
+			}
+		} catch (Throwable $throwable) {
+			$this->log_live_checkout_event('error', 'Live shipping calculation failed unexpectedly.', array(
+				'error' => $throwable->getMessage(),
+			));
+			return;
 		}
 	}
 
