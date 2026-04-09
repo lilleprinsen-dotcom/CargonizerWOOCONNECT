@@ -2700,3 +2700,24 @@ Returning only transport agreements with the produc Servicepakke
 curl -g -XGET -H'X-Cargonizer-Key: 12345' -H'X-Cargonizer-Sender: 678' \
 'https://api.cargonizer.no/transport_agreements.xml?product_id=bring_servicepakke'
 ```
+
+## Live checkout extension phase policy (added 2026-04-09)
+
+This section governs all work that extends the plugin from admin-only usage to live checkout shipping in WooCommerce.
+
+- Checkout implementation must be strictly additive in this phase. Existing admin estimator, admin modal UX, and admin booking flow must remain intact unless a prompt explicitly authorizes a behavior change.
+- Runtime parity for current admin behavior is mandatory:
+  - keep all current auth behavior unchanged,
+  - keep all current endpoint usage unchanged,
+  - keep all current pricing/estimate/booking logic unchanged,
+  - keep existing booking state storage in `_lp_cargonizer_booking_state` unchanged.
+- The checkout solution must be implemented as one real WooCommerce shipping method/integration that can be added to shipping zones and can return multiple real WooCommerce rates from one engine.
+- Pickup-point capable methods must use a rate-attached pickup point data model that works in embedded checkout experiences.
+- Pickup-point metadata contract must use these keys exactly:
+  - `krokedil_pickup_points`
+  - `krokedil_selected_pickup_point`
+  - `krokedil_selected_pickup_point_id`
+- Both classic checkout and Store API order-save paths must be supported when persisting the selected shipping method + pickup point.
+- Quote requests and pickup-point requests must be cached with safe invalidation.
+- Nearest pickup point must be preselected automatically while still allowing customer override.
+- Any new settings for checkout must be backward-compatible extensions inside `lp_cargonizer_settings` (no breaking rename/removal of existing keys).
