@@ -309,3 +309,21 @@ The codebase now contains additive reusable services intended for both future ch
 
 Important compatibility note:
 - Existing admin estimator/booking/AJAX flows are intentionally unchanged in runtime behavior in this milestone; new services are additive scaffolding only.
+
+## 11) Hardening notes (implemented 2026-04-09)
+
+- Live quote caching now keys on:
+  - method identity (`method_key`, agreement/carrier/product),
+  - resolved package payload,
+  - destination recipient fields,
+  - method-pricing context and relevant live-checkout context.
+- Pickup-point caching now keys on:
+  - destination (`country`, `postcode`, `city`, `address`),
+  - method context (agreement/carrier/product),
+  - applicable `custom[params]` context.
+- Norway destination readiness guard:
+  - live quotes are not requested before country=`NO`, postcode, and city are available.
+  - pickup-point lookups are not requested before country=`NO`, postcode, city, and address are available.
+- Checkout pickup-point UI updates remain asynchronous (`update_checkout`) and do not rely on full page reloads.
+- Fallback behavior remains settings-driven and is applied when live quote collection does not yield any usable checkout rates.
+- High-noise estimate dimension debug logging is now gated behind debug toggles (`debug_logging` / `live_checkout.debug_logging`) or `WP_DEBUG`.
