@@ -21,11 +21,12 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	}
 
 	public function handle_classic_checkout_order_processed($order_id, $posted_data = array(), $order = null) {
-		if (!($order instanceof WC_Order)) {
+		if (!$this->is_wc_order($order)) {
 			$order = $order_id ? wc_get_order($order_id) : false;
 		}
 
-		if (!$order || !is_a($order, 'WC_Order')) {
+		if (!$this->is_wc_order($order)) {
+			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for classic checkout: order instance unavailable.');
 			return;
 		}
 
@@ -33,15 +34,17 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	}
 
 	public function handle_store_api_checkout_order_processed($order) {
-		if (!($order instanceof WC_Order)) {
+		if (!$this->is_wc_order($order)) {
 			if (is_numeric($order)) {
 				$order = wc_get_order((int) $order);
 			} else {
+				$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for Store API: order payload was not resolvable.');
 				return;
 			}
 		}
 
-		if (!$order || !is_a($order, 'WC_Order')) {
+		if (!$this->is_wc_order($order)) {
+			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for Store API: order instance unavailable.');
 			return;
 		}
 
@@ -51,12 +54,20 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	private function persist_for_order($order, $source) {
 		$selected_rates = $this->get_selected_rates_from_session();
 		if (empty($selected_rates)) {
+			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence: no selected rates in session.', array(
+				'source' => $source,
+				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+			));
 			return;
 		}
 
 		$pickup_selection_map = $this->get_pickup_selection_session_map();
 		$shipping_items = $order->get_items('shipping');
 		if (empty($shipping_items)) {
+			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence: order contains no shipping items.', array(
+				'source' => $source,
+				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+			));
 			return;
 		}
 
@@ -73,7 +84,7 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			}
 
 			$method_id = isset($selected_rate['method_id']) ? (string) $selected_rate['method_id'] : '';
-			if ($method_id !== LP_Cargonizer_Live_Shipping_Method::METHOD_ID) {
+			if ($method_id !== LP_Cargonizer_Live_Checkout::METHOD_ID) {
 				continue;
 			}
 
@@ -130,6 +141,10 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 		}
 
 		if (empty($persisted_rows)) {
+			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence: no live checkout rows were eligible for persistence.', array(
+				'source' => $source,
+				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+			));
 			return;
 		}
 
@@ -146,10 +161,15 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 
 		$order->update_meta_data(self::ORDER_META_KEY, $payload);
 		$order->save();
+		$this->log_live_checkout_event('debug', 'Persisted checkout selection metadata for order.', array(
+			'source' => $source,
+			'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+			'package_count' => count($persisted_rows),
+		));
 	}
 
 	private function get_selected_rates_from_session() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 
@@ -213,7 +233,7 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	}
 
 	private function get_pickup_selection_session_map() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 		$value = WC()->session->get(self::PICKUP_SESSION_KEY, array());
@@ -373,5 +393,37 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 		}
 
 		return $value;
+	}
+
+	private function is_wc_order($order) {
+		return $order && class_exists('WC_Order') && is_a($order, 'WC_Order');
+	}
+
+	private function has_wc_session() {
+		return function_exists('WC') && WC() && isset(WC()->session) && WC()->session;
+	}
+
+	private function log_live_checkout_event($level, $message, $context = array()) {
+		if (!$this->should_log_live_checkout_events()) {
+			return;
+		}
+		if (!function_exists('wc_get_logger')) {
+			return;
+		}
+		$logger = wc_get_logger();
+		if (!$logger) {
+			return;
+		}
+		$method = method_exists($logger, $level) ? $level : 'info';
+		$logger->$method($message, array(
+			'source' => 'lp-cargonizer-live-checkout',
+			'context' => is_array($context) ? $context : array(),
+		));
+	}
+
+	private function should_log_live_checkout_events() {
+		$settings = $this->settings_service->get_settings();
+		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		return !empty($live_settings['debug_logging']);
 	}
 }

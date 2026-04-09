@@ -13,8 +13,11 @@ class LP_Cargonizer_Plugin {
 	private $checkout_selection_persistence_service;
 	/** @var LP_Cargonizer_Checkout_Pickup_Compatibility_Layer */
 	private $checkout_pickup_compatibility_layer;
+	/** @var LP_Cargonizer_Settings_Service */
+	private $settings_service;
 
 	public function __construct() {
+		$this->settings_service = new LP_Cargonizer_Settings_Service(LP_Cargonizer_Connector::OPTION_KEY, LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY);
 		$this->connector = new LP_Cargonizer_Connector();
 		$this->checkout_pickup_controller = new LP_Cargonizer_Checkout_Pickup_Controller();
 		$this->checkout_pickup_compatibility_layer = new LP_Cargonizer_Checkout_Pickup_Compatibility_Layer();
@@ -22,6 +25,7 @@ class LP_Cargonizer_Plugin {
 	}
 
 	public function bootstrap() {
+		$this->log_live_checkout_event('debug', 'Bootstrapping Cargonizer plugin services.');
 		$this->connector->register_hooks();
 		$this->checkout_pickup_controller->register_hooks();
 		$this->checkout_pickup_compatibility_layer->register_hooks();
@@ -39,10 +43,31 @@ class LP_Cargonizer_Plugin {
 	}
 
 	public function register_live_shipping_method_id($methods) {
-		if (class_exists('LP_Cargonizer_Live_Shipping_Method')) {
-			$methods[LP_Cargonizer_Live_Shipping_Method::METHOD_ID] = 'LP_Cargonizer_Live_Shipping_Method';
-		}
-
+		$methods[LP_Cargonizer_Live_Checkout::METHOD_ID] = 'LP_Cargonizer_Live_Shipping_Method';
 		return $methods;
+	}
+
+	private function log_live_checkout_event($level, $message, $context = array()) {
+		if (!$this->should_log_live_checkout_events()) {
+			return;
+		}
+		if (!function_exists('wc_get_logger')) {
+			return;
+		}
+		$logger = wc_get_logger();
+		if (!$logger) {
+			return;
+		}
+		$method = method_exists($logger, $level) ? $level : 'info';
+		$logger->$method($message, array(
+			'source' => 'lp-cargonizer-live-checkout',
+			'context' => is_array($context) ? $context : array(),
+		));
+	}
+
+	private function should_log_live_checkout_events() {
+		$settings = $this->settings_service->get_settings();
+		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		return !empty($live_settings['debug_logging']);
 	}
 }

@@ -52,8 +52,11 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 	}
 
 	public function ajax_get_checkout_pickup_points() {
+		check_ajax_referer(LP_Cargonizer_Checkout_Pickup_Controller::NONCE_ACTION, 'nonce');
+
 		$packages = $this->get_shipping_packages_from_session();
 		$payload = array();
+		$session_map = $this->get_pickup_selection_session_map();
 
 		foreach ($packages as $package_index => $shipping_package) {
 			$rates = isset($shipping_package['rates']) && is_array($shipping_package['rates']) ? $shipping_package['rates'] : array();
@@ -69,7 +72,6 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 
 				$rate_id = (string) $rate->get_id();
 				$selected_id = (string) $this->rate_meta($rate, 'krokedil_selected_pickup_point_id');
-				$session_map = $this->get_pickup_selection_session_map();
 				if ($rate_id !== '' && isset($session_map[$rate_id]['id'])) {
 					$session_selected_id = sanitize_text_field((string) $session_map[$rate_id]['id']);
 					if ($session_selected_id !== '') {
