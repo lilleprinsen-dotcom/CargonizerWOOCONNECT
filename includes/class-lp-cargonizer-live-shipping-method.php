@@ -132,7 +132,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 
 		$added_rates = 0;
 		foreach ($quotes as $quote) {
-			$rate_id = $this->id . ':' . $this->instance_id . ':' . sanitize_title($quote['method_key']);
+			$rate_id = $this->build_checkout_rate_id($quote);
 			$meta_data = array(
 				'transport_agreement_id' => $quote['agreement_id'],
 				'carrier_id' => $quote['carrier_id'],
@@ -560,6 +560,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'label' => isset($option['label']) ? (string) $option['label'] : $point_id,
 			);
 		}
+		$points = $this->sort_pickup_points_deterministically($points);
 
 		if ($cache_ttl > 0) {
 			set_transient($cache_key, $points, $cache_ttl);
@@ -603,6 +604,47 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'id' => $selected_id,
 			'point' => $selected_point,
 		);
+	}
+
+	private function sort_pickup_points_deterministically($pickup_points) {
+		$pickup_points = is_array($pickup_points) ? array_values($pickup_points) : array();
+		usort($pickup_points, function ($left, $right) {
+			$left_has_distance = isset($left['distance_meters']) && is_numeric($left['distance_meters']);
+			$right_has_distance = isset($right['distance_meters']) && is_numeric($right['distance_meters']);
+			if ($left_has_distance && $right_has_distance) {
+				$left_distance = (float) $left['distance_meters'];
+				$right_distance = (float) $right['distance_meters'];
+				if ($left_distance !== $right_distance) {
+					return ($left_distance < $right_distance) ? -1 : 1;
+				}
+			} elseif ($left_has_distance !== $right_has_distance) {
+				return $left_has_distance ? -1 : 1;
+			}
+
+			$left_label = isset($left['label']) ? (string) $left['label'] : '';
+			$right_label = isset($right['label']) ? (string) $right['label'] : '';
+			$label_cmp = strcmp($left_label, $right_label);
+			if ($label_cmp !== 0) {
+				return $label_cmp;
+			}
+
+			$left_id = isset($left['id']) ? (string) $left['id'] : '';
+			$right_id = isset($right['id']) ? (string) $right['id'] : '';
+			return strcmp($left_id, $right_id);
+		});
+		return $pickup_points;
+	}
+
+	private function build_checkout_rate_id($quote) {
+		$method_key = isset($quote['method_key']) ? sanitize_title((string) $quote['method_key']) : '';
+		$components = array(
+			'method_key' => isset($quote['method_key']) ? (string) $quote['method_key'] : '',
+			'agreement_id' => isset($quote['agreement_id']) ? (string) $quote['agreement_id'] : '',
+			'carrier_id' => isset($quote['carrier_id']) ? (string) $quote['carrier_id'] : '',
+			'product_id' => isset($quote['product_id']) ? (string) $quote['product_id'] : '',
+		);
+		$stable_suffix = substr(md5(wp_json_encode($components)), 0, 12);
+		return $this->id . ':' . $this->instance_id . ':' . $method_key . '-' . $stable_suffix;
 	}
 
 	private function get_pickup_selection_session_map() {
