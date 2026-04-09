@@ -53,11 +53,13 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 				}
 			}
 
+			$selection = $this->resolve_selection_for_payload($pickup_points, $selected_id);
 			$normalized = array(
 				'pickup_points' => array_values($pickup_points),
-				'selected_pickup_point_id' => $selected_id,
-				'selected_pickup_point' => $this->resolve_point_by_id($pickup_points, $selected_id),
+				'selected_pickup_point_id' => $selection['selected_pickup_point_id'],
+				'selected_pickup_point' => $selection['selected_pickup_point'],
 				'rate_id' => $normalized_rate_id,
+				'rate_context' => $this->extract_minimal_rate_context($rate, $normalized_rate_id),
 			);
 
 			$rate->add_meta_data('lp_cargonizer_pickup_point_context', $normalized, true);
@@ -102,6 +104,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 					$pickup_points = isset($pickup_lookup['points']) && is_array($pickup_lookup['points']) ? $pickup_lookup['points'] : array();
 					$pickup_state = isset($pickup_lookup['state']) ? (string) $pickup_lookup['state'] : 'unavailable';
 					$pickup_message = isset($pickup_lookup['message']) ? (string) $pickup_lookup['message'] : '';
+					$rate_context = $this->extract_minimal_rate_context($rate, $rate_id);
 
 					if (!is_array($pickup_points) || empty($pickup_points)) {
 						if ($rate_id !== '') {
@@ -109,8 +112,8 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 							$session_map[$rate_id] = array(
 								'id' => '',
 								'point' => array(),
-								'pickup_points' => array(),
 								'source' => $existing_source,
+								'rate_context' => $rate_context,
 							);
 						}
 						if ($pickup_state !== 'loading') {
@@ -126,6 +129,8 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 							'krokedil_selected_pickup_point_id' => '',
 							'selected_pickup_point' => array(),
 							'krokedil_selected_pickup_point' => array(),
+							'chosen_rate_id' => $chosen_for_package,
+							'rate_context' => $rate_context,
 							'state' => $pickup_state,
 							'unavailable' => ($pickup_state === 'unavailable'),
 							'error' => ($pickup_state === 'error'),
@@ -140,16 +145,22 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 							$selected_id = $session_selected_id;
 						}
 					}
-					$selected_point = $this->resolve_point_by_id($pickup_points, $selected_id);
-					if (isset($selected_point['id'])) {
-						$selected_id = sanitize_text_field((string) $selected_point['id']);
+					$selection = $this->resolve_selection_for_payload($pickup_points, $selected_id);
+					$selected_id = $selection['selected_pickup_point_id'];
+					$selected_point = $selection['selected_pickup_point'];
+					if (!empty($selection['fell_back'])) {
+						$this->log_pickup_compatibility_debug('Previously selected pickup point was unavailable in compatibility payload and was replaced with deterministic fallback.', array(
+							'rate_id' => $rate_id,
+							'requested_pickup_point_id' => isset($selection['requested_pickup_point_id']) ? (string) $selection['requested_pickup_point_id'] : '',
+							'fallback_pickup_point_id' => $selected_id,
+						));
 					}
 					if ($rate_id !== '') {
 						$session_map[$rate_id] = array(
 							'id' => $selected_id,
 							'point' => $selected_point,
-							'pickup_points' => array_values($pickup_points),
 							'source' => isset($session_map[$rate_id]['source']) ? $session_map[$rate_id]['source'] : 'auto_nearest',
+							'rate_context' => $rate_context,
 						);
 					}
 
@@ -163,6 +174,8 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 						'krokedil_selected_pickup_point_id' => $selected_id,
 						'selected_pickup_point' => $selected_point,
 						'krokedil_selected_pickup_point' => $selected_point,
+						'chosen_rate_id' => $chosen_for_package,
+						'rate_context' => $rate_context,
 						'state' => 'loaded',
 						'unavailable' => false,
 						'error' => false,
@@ -185,6 +198,33 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			), 'error');
 			wp_send_json_success(array('items' => array()));
 		}
+	}
+
+	private function resolve_selection_for_payload($pickup_points, $selected_id) {
+		$requested_id = sanitize_text_field((string) $selected_id);
+		$selected_point = $this->resolve_point_by_id($pickup_points, $requested_id);
+		$resolved_id = isset($selected_point['id']) ? sanitize_text_field((string) $selected_point['id']) : '';
+		$fell_back = ($requested_id !== '' && $resolved_id !== '' && $requested_id !== $resolved_id);
+		return array(
+			'selected_pickup_point_id' => $resolved_id,
+			'selected_pickup_point' => $selected_point,
+			'requested_pickup_point_id' => $requested_id,
+			'fell_back' => $fell_back,
+		);
+	}
+
+	private function extract_minimal_rate_context($rate, $rate_id) {
+		$context = $this->rate_meta($rate, 'lp_cargonizer_pickup_rate_context');
+		if (!is_array($context)) {
+			$context = array();
+		}
+		return array(
+			'rate_id' => (string) $rate_id,
+			'transport_agreement_id' => isset($context['transport_agreement_id']) ? sanitize_text_field((string) $context['transport_agreement_id']) : '',
+			'carrier_id' => isset($context['carrier_id']) ? sanitize_text_field((string) $context['carrier_id']) : '',
+			'product_id' => isset($context['product_id']) ? sanitize_text_field((string) $context['product_id']) : '',
+			'method_key' => isset($context['method_key']) ? sanitize_text_field((string) $context['method_key']) : '',
+		);
 	}
 
 	private function get_pickup_points_for_rate($rate, $rate_id, $destination, $session_map = array()) {

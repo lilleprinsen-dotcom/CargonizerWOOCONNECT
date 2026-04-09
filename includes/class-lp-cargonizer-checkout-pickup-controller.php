@@ -190,11 +190,10 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 				'id' => $pickup_point_id,
 				'point' => $available,
 				'source' => 'customer_override',
+				'rate_context' => array(
+					'rate_id' => $rate_id,
+				),
 			);
-			$existing_points = $this->find_rate_pickup_points($rate_id);
-			if (!empty($existing_points)) {
-				$map[$rate_id]['pickup_points'] = $existing_points;
-			}
 			$this->set_session_map($map);
 
 			wp_send_json_success(array(

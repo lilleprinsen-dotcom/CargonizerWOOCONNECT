@@ -160,6 +160,12 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 					'instance_id' => isset($selected_rate['instance_id']) ? (string) $selected_rate['instance_id'] : '',
 					'rate_meta' => $minimal_rate_meta,
 				),
+				'compatibility_payload' => array(
+					'chosen_rate_id' => $rate_id,
+					'selected_pickup_point_id' => $pickup['selected_pickup_point_id'],
+					'selected_pickup_point' => $pickup['selected_pickup_point'],
+					'rate_context' => $minimal_rate_meta,
+				),
 			);
 		}
 
@@ -179,6 +185,7 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			'pickup_point' => $persisted_rows[0]['pickup_point'],
 			'krokedil' => $persisted_rows[0]['krokedil'],
 			'quote_context' => $persisted_rows[0]['quote_context'],
+			'compatibility_payload' => $persisted_rows[0]['compatibility_payload'],
 			'packages' => $persisted_rows,
 		);
 
@@ -373,6 +380,11 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			$fallback = reset($pickup_points);
 			$selected_point = is_array($fallback) ? $fallback : array();
 			$selected_id = isset($selected_point['id']) ? (string) $selected_point['id'] : '';
+			$this->log_live_checkout_event('debug', 'Persisted pickup selection used deterministic fallback after selected point disappeared.', array(
+				'rate_id' => (string) $rate_id,
+				'requested_pickup_point_id' => isset($rate_meta['krokedil_selected_pickup_point_id']) ? sanitize_text_field((string) $rate_meta['krokedil_selected_pickup_point_id']) : '',
+				'fallback_pickup_point_id' => $selected_id,
+			));
 			if ($selection_source === 'customer_override') {
 				$selection_source = 'customer_override_fallback_unavailable';
 			} else {
