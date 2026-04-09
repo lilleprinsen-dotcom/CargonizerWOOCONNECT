@@ -48,6 +48,7 @@
 			var latestEstimateResults = [];
 			var currentMode = 'estimate';
 			var currentBookingState = null;
+			var currentCheckoutSelection = null;
 			var bookingNotifyDefault = (config.bookingDefaults && Number(config.bookingDefaults.notifyEmailToConsignee) === 0) ? 0 : 1;
 			var printerLoadWarningMessage = '';
 
@@ -68,6 +69,71 @@
 					return Array.isArray(parsed) ? parsed : [];
 				} catch (e) {
 					return [];
+				}
+			}
+
+			function getCheckoutSelectionMethodKey(){
+				var shipping = currentCheckoutSelection && currentCheckoutSelection.shipping ? currentCheckoutSelection.shipping : {};
+				var methodId = shipping.method_id ? String(shipping.method_id) : '';
+				var methodKey = shipping.method_key ? String(shipping.method_key) : '';
+				if (methodId && methodId !== 'lp_cargonizer_live') {
+					return '';
+				}
+				if (methodKey) {
+					return methodKey;
+				}
+				var agreementId = shipping.transport_agreement_id ? String(shipping.transport_agreement_id) : '';
+				var productId = shipping.product_id ? String(shipping.product_id) : '';
+				return agreementId && productId ? (agreementId + '|' + productId) : '';
+			}
+
+			function applyCheckoutSelectionPrefill(){
+				if (!currentCheckoutSelection || currentMode !== 'booking') { return; }
+				var methodKey = getCheckoutSelectionMethodKey();
+				if (!methodKey) { return; }
+				var targetInput = shippingOptionsList.querySelector('.lp-shipping-option[data-method-key="'+methodKey+'"]');
+				if (!targetInput) { return; }
+
+				shippingOptionsList.querySelectorAll('.lp-shipping-option').forEach(function(input){
+					input.checked = false;
+				});
+				targetInput.checked = true;
+
+				updateBookingServicesSelector();
+
+				var shipping = currentCheckoutSelection.shipping || {};
+				var selectedServiceIds = Array.isArray(shipping.selected_service_ids) ? shipping.selected_service_ids.map(function(v){ return String(v || ''); }).filter(Boolean) : [];
+				if (bookingServicesChoice && bookingServicesSection && bookingServicesSection.style.display !== 'none' && selectedServiceIds.length) {
+					Array.prototype.slice.call(bookingServicesChoice.options || []).forEach(function(option){
+						option.selected = selectedServiceIds.indexOf(String(option.value || '')) !== -1;
+					});
+				}
+
+				var pickup = currentCheckoutSelection.pickup_point || {};
+				var selectedPickupId = pickup && pickup.selected_id ? String(pickup.selected_id) : '';
+				if (selectedPickupId) {
+					var activeRow = getResultRowByMethodKey(methodKey);
+					if (activeRow) {
+						activeRow.selected_servicepartner = selectedPickupId;
+						activeRow.servicepartner_selection_source = 'checkout_selection';
+						activeRow.servicepartner_user_selected = false;
+					}
+				}
+
+				updateProactiveBookingServicepartner();
+
+				if (selectedPickupId && bookingServicepartnerSelect && (bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey) {
+					var optionExists = false;
+					Array.prototype.slice.call(bookingServicepartnerSelect.options || []).forEach(function(option){
+						if (String(option.value || '') === selectedPickupId) {
+							optionExists = true;
+						}
+					});
+					if (optionExists) {
+						bookingServicepartnerSelect.value = selectedPickupId;
+						syncServicepartnerSelectors(methodKey, selectedPickupId, 'proactive');
+						setProactiveServicepartnerHelp('Prefylt fra kundens checkout-valg.', '#125228');
+					}
 				}
 			}
 
@@ -1586,6 +1652,7 @@
 							return;
 						}
 						renderShippingOptions(res.data.options || []);
+						applyCheckoutSelectionPrefill();
 						updateBookingServicesSelector();
 						updateProactiveBookingServicepartner();
 					})
@@ -2012,6 +2079,7 @@
 						var d = res.data;
 						currentRecipient = d.recipient || {};
 						currentBookingState = d.booking_state || null;
+						currentCheckoutSelection = d.checkout_selection || null;
 						if (d.booking_defaults && typeof d.booking_defaults.notify_email_to_consignee !== 'undefined') {
 							bookingNotifyDefault = Number(d.booking_defaults.notify_email_to_consignee) === 0 ? 0 : 1;
 						}
@@ -2069,6 +2137,7 @@
 				latestEstimateResults = [];
 				currentRecipient = {};
 				currentBookingState = null;
+				currentCheckoutSelection = null;
 				printerLoadWarningMessage = '';
 				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
