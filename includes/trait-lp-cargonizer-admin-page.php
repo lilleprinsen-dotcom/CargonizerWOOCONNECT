@@ -403,6 +403,38 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return $rules;
 	}
 
+	private function get_live_checkout_last_no_rates_status() {
+		$transient_key = defined('LP_Cargonizer_Live_Shipping_Method::LAST_NO_RATES_STATUS_TRANSIENT')
+			? LP_Cargonizer_Live_Shipping_Method::LAST_NO_RATES_STATUS_TRANSIENT
+			: 'lp_cargonizer_last_no_rates_status';
+		$status = get_transient($transient_key);
+		return is_array($status) ? $status : array();
+	}
+
+	private function get_no_rates_reason_group_label($group) {
+		$group = sanitize_key((string) $group);
+		$labels = array(
+			'destination' => 'Destinasjon',
+			'rules' => 'Regler',
+			'api' => 'API/quote',
+			'pickup_points' => 'Hentepunkt',
+			'configuration' => 'Konfigurasjon/autentisering',
+		);
+		return isset($labels[$group]) ? $labels[$group] : 'Ukjent';
+	}
+
+	private function get_no_rates_reason_code_label($code) {
+		$code = sanitize_key((string) $code);
+		$labels = array(
+			'destination_incomplete' => 'Destinasjon mangler data',
+			'rules_filtered_all' => 'Regler filtrerte bort alle metoder',
+			'quote_api_failure' => 'Ingen brukbare quote-responser',
+			'pickup_point_required_no_points' => 'Pickup-metode manglet hentepunkter',
+			'auth_or_config_problem' => 'Autentisering/konfigurasjon feilet',
+		);
+		return isset($labels[$code]) ? $labels[$code] : ($code !== '' ? $code : 'ukjent');
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -568,6 +600,38 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<li><?php echo esc_html($summary_line); ?></li>
 					<?php endforeach; ?>
 				</ul>
+			</div>
+			<?php
+			$last_no_rates_status = $this->get_live_checkout_last_no_rates_status();
+			$status_reason_group = isset($last_no_rates_status['reason_group']) ? (string) $last_no_rates_status['reason_group'] : '';
+			$status_reason_code = isset($last_no_rates_status['reason_code']) ? (string) $last_no_rates_status['reason_code'] : '';
+			$status_message = isset($last_no_rates_status['message']) ? (string) $last_no_rates_status['message'] : '';
+			$status_occurred_at = isset($last_no_rates_status['occurred_at_gmt']) ? (string) $last_no_rates_status['occurred_at_gmt'] : '';
+			$status_context = isset($last_no_rates_status['context']) && is_array($last_no_rates_status['context']) ? $last_no_rates_status['context'] : array();
+			?>
+			<div style="background:#fff8e5;border:1px solid #f0c36d;padding:14px 16px;margin:16px 0 20px 0;max-width:1100px;">
+				<h2 style="margin-top:0;margin-bottom:8px;">Live checkout – siste «ingen fraktmetoder»-årsak</h2>
+				<?php if (empty($last_no_rates_status)) : ?>
+					<p style="margin:0;">Ingen registrert no-rates-hendelse enda.</p>
+				<?php else : ?>
+					<ul style="margin:0;padding-left:18px;">
+						<li><strong>Kategori:</strong> <?php echo esc_html($this->get_no_rates_reason_group_label($status_reason_group)); ?></li>
+						<li><strong>Årsakskode:</strong> <?php echo esc_html($this->get_no_rates_reason_code_label($status_reason_code)); ?> (<code><?php echo esc_html($status_reason_code); ?></code>)</li>
+						<?php if ($status_message !== '') : ?>
+							<li><strong>Melding:</strong> <?php echo esc_html($status_message); ?></li>
+						<?php endif; ?>
+						<?php if ($status_occurred_at !== '') : ?>
+							<li><strong>Tid (GMT):</strong> <?php echo esc_html($status_occurred_at); ?></li>
+						<?php endif; ?>
+						<?php if (isset($status_context['fallback']['mode'])) : ?>
+							<li><strong>Fallback-modus:</strong> <?php echo esc_html((string) $status_context['fallback']['mode']); ?><?php echo isset($status_context['fallback']['added_count']) ? esc_html(' (rater lagt til: ' . (int) $status_context['fallback']['added_count'] . ')') : ''; ?></li>
+						<?php endif; ?>
+					</ul>
+					<details style="margin-top:8px;">
+						<summary>Kort diagnostikk (JSON)</summary>
+						<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;max-height:220px;overflow:auto;"><?php echo esc_html(wp_json_encode($status_context, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
+					</details>
+				<?php endif; ?>
 			</div>
 
 			<div style="background:#fff;border:1px solid #ddd;padding:20px;margin:20px 0;max-width:900px;">
