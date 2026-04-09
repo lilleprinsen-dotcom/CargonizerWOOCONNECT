@@ -300,6 +300,9 @@ class LP_Cargonizer_Settings_Service {
 	private function get_shipping_profiles_defaults() {
 		return array(
 			'default_profile_slug' => 'default',
+			'shipping_class_map' => array(),
+			'category_map' => array(),
+			'value_rules' => array(),
 			'profiles' => array(
 				array(
 					'slug' => 'default',
@@ -324,6 +327,7 @@ class LP_Cargonizer_Settings_Service {
 
 	private function get_package_resolution_defaults() {
 		return array(
+			'package_build_mode' => 'combined_single',
 			'fallback_sources' => array(
 				'product_dimensions',
 				'product_override',
@@ -389,6 +393,9 @@ class LP_Cargonizer_Settings_Service {
 		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_shipping_profiles_defaults());
 		$output = array(
 			'default_profile_slug' => isset($input['default_profile_slug']) ? sanitize_key((string) $input['default_profile_slug']) : sanitize_key((string) $base['default_profile_slug']),
+			'shipping_class_map' => array(),
+			'category_map' => array(),
+			'value_rules' => array(),
 			'profiles' => array(),
 		);
 
@@ -434,12 +441,64 @@ class LP_Cargonizer_Settings_Service {
 			$output['default_profile_slug'] = isset($output['profiles'][0]['slug']) ? $output['profiles'][0]['slug'] : 'default';
 		}
 
+		$raw_shipping_class_map = isset($input['shipping_class_map']) && is_array($input['shipping_class_map'])
+			? $input['shipping_class_map']
+			: (isset($base['shipping_class_map']) && is_array($base['shipping_class_map']) ? $base['shipping_class_map'] : array());
+		foreach ($raw_shipping_class_map as $shipping_class_slug => $profile_slug) {
+			$shipping_class_slug = sanitize_key((string) $shipping_class_slug);
+			$profile_slug = sanitize_key((string) $profile_slug);
+			if ($shipping_class_slug === '' || $profile_slug === '' || !isset($profile_slugs[$profile_slug])) {
+				continue;
+			}
+			$output['shipping_class_map'][$shipping_class_slug] = $profile_slug;
+		}
+
+		$raw_category_map = isset($input['category_map']) && is_array($input['category_map'])
+			? $input['category_map']
+			: (isset($base['category_map']) && is_array($base['category_map']) ? $base['category_map'] : array());
+		foreach ($raw_category_map as $category_slug => $profile_slug) {
+			$category_slug = sanitize_key((string) $category_slug);
+			$profile_slug = sanitize_key((string) $profile_slug);
+			if ($category_slug === '' || $profile_slug === '' || !isset($profile_slugs[$profile_slug])) {
+				continue;
+			}
+			$output['category_map'][$category_slug] = $profile_slug;
+		}
+
+		$raw_value_rules = isset($input['value_rules']) && is_array($input['value_rules'])
+			? $input['value_rules']
+			: (isset($base['value_rules']) && is_array($base['value_rules']) ? $base['value_rules'] : array());
+		foreach ($raw_value_rules as $value_rule) {
+			if (!is_array($value_rule)) {
+				continue;
+			}
+			$profile_slug = isset($value_rule['profile_slug']) ? sanitize_key((string) $value_rule['profile_slug']) : '';
+			if ($profile_slug === '' || !isset($profile_slugs[$profile_slug])) {
+				continue;
+			}
+			$output['value_rules'][] = array(
+				'profile_slug' => $profile_slug,
+				'min_total' => isset($value_rule['min_total']) ? $this->sanitize_non_negative_number($value_rule['min_total']) : 0,
+				'max_total' => isset($value_rule['max_total']) ? $this->sanitize_non_negative_number($value_rule['max_total']) : 0,
+				'min_quantity' => isset($value_rule['min_quantity']) ? max(0, (int) $value_rule['min_quantity']) : 0,
+				'max_quantity' => isset($value_rule['max_quantity']) ? max(0, (int) $value_rule['max_quantity']) : 0,
+			);
+		}
+
 		return $output;
 	}
 
 	private function sanitize_package_resolution_settings($input, $current) {
 		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_package_resolution_defaults());
-		$output = array('fallback_sources' => array());
+		$output = array(
+			'package_build_mode' => isset($input['package_build_mode'])
+				? sanitize_key((string) $input['package_build_mode'])
+				: sanitize_key((string) (isset($base['package_build_mode']) ? $base['package_build_mode'] : 'combined_single')),
+			'fallback_sources' => array(),
+		);
+		if (!in_array($output['package_build_mode'], array('combined_single', 'split_by_profile', 'separate_bulky_profiles'), true)) {
+			$output['package_build_mode'] = 'combined_single';
+		}
 		$sources = isset($input['fallback_sources']) && is_array($input['fallback_sources']) ? $input['fallback_sources'] : (isset($base['fallback_sources']) && is_array($base['fallback_sources']) ? $base['fallback_sources'] : array());
 		$allowed = array(
 			'product_dimensions',

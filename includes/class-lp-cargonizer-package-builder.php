@@ -7,9 +7,12 @@ if (!defined('ABSPATH')) {
 class LP_Cargonizer_Package_Builder {
 	/** @var LP_Cargonizer_Shipping_Profile_Resolver */
 	private $profile_resolver;
+	/** @var callable|null */
+	private $settings_provider;
 
-	public function __construct($profile_resolver) {
+	public function __construct($profile_resolver, $settings_provider = null) {
 		$this->profile_resolver = $profile_resolver;
+		$this->settings_provider = is_callable($settings_provider) ? $settings_provider : null;
 	}
 
 	public function build_from_order($order) {
@@ -61,7 +64,9 @@ class LP_Cargonizer_Package_Builder {
 
 	public function build_from_lines($lines) {
 		$result = $this->empty_result();
+		$build_mode = $this->get_package_build_mode();
 		$combined = array();
+		$combined_by_profile = array();
 		$separate_packages = array();
 		$profiles_in_use = array();
 		$category_slugs = array();
@@ -81,7 +86,13 @@ class LP_Cargonizer_Package_Builder {
 			$profile_slug = isset($profile_resolution['profile_slug']) ? (string) $profile_resolution['profile_slug'] : 'default';
 			$profiles_in_use[$profile_slug] = true;
 
-			$is_separate = get_post_meta($product_id, '_wildrobot_separate_package_for_product', true) === 'yes';
+			$is_old_separate = get_post_meta($product_id, '_wildrobot_separate_package_for_product', true) === 'yes';
+			$is_profile_forced_separate = !empty($profile_resolution['flags']['force_separate_package']);
+			$is_bulky = !empty($profile_resolution['flags']['bulky']);
+			$is_separate = $is_old_separate || $is_profile_forced_separate;
+			if (!$is_separate && $build_mode === 'separate_bulky_profiles' && $is_bulky) {
+				$is_separate = true;
+			}
 			$separate_name = (string) get_post_meta($product_id, '_wildrobot_separate_package_for_product_name', true);
 			if ($separate_name === '') {
 				$separate_name = $line_name;
@@ -96,6 +107,9 @@ class LP_Cargonizer_Package_Builder {
 					$package['name'] = $separate_name;
 					$package['quantity'] = 1;
 					$package['is_separate_package'] = true;
+					$package['separate_package_source'] = $is_old_separate
+						? 'product_meta'
+						: ($is_profile_forced_separate ? 'profile_force_separate' : 'profile_bulky');
 					$package['line_quantity'] = $quantity;
 					$package['separate_index'] = $i + 1;
 					$separate_packages[] = $package;
@@ -105,14 +119,30 @@ class LP_Cargonizer_Package_Builder {
 
 			$single_package['quantity'] = $quantity;
 			$single_package['is_separate_package'] = false;
-			$combined[] = $single_package;
+			if ($build_mode === 'split_by_profile' || $build_mode === 'separate_bulky_profiles') {
+				$group_key = !empty($single_package['profile_slug']) ? (string) $single_package['profile_slug'] : 'default';
+				if (!isset($combined_by_profile[$group_key])) {
+					$combined_by_profile[$group_key] = array();
+				}
+				$combined_by_profile[$group_key][] = $single_package;
+			} else {
+				$combined[] = $single_package;
+			}
 		}
 
-		$combined_colli = $this->build_combined_colli($combined);
+		$combined_colli = array();
+		if ($build_mode === 'split_by_profile' || $build_mode === 'separate_bulky_profiles') {
+			foreach ($combined_by_profile as $profile_slug => $packages_in_group) {
+				$combined_colli = array_merge($combined_colli, $this->build_combined_colli($packages_in_group, (string) $profile_slug));
+			}
+		} else {
+			$combined_colli = $this->build_combined_colli($combined);
+		}
 		$result['packages'] = array_merge($combined_colli, $separate_packages);
 		$result['summary'] = $this->build_summary($result['packages'], array(
 			'profiles_in_use' => array_keys($profiles_in_use),
 			'category_slugs' => array_values(array_unique(array_filter($category_slugs))),
+			'package_build_mode' => $build_mode,
 		));
 
 		return $result;
@@ -138,7 +168,7 @@ class LP_Cargonizer_Package_Builder {
 		);
 	}
 
-	private function build_combined_colli($combined) {
+	private function build_combined_colli($combined, $profile_scope = '') {
 		if (empty($combined)) {
 			return array();
 		}
@@ -168,9 +198,10 @@ class LP_Cargonizer_Package_Builder {
 			}
 		}
 
+		$combined_label = $profile_scope !== '' ? ('Combined package (' . $profile_scope . ')') : 'Combined package';
 		return array(array(
-			'name' => 'Combined package',
-			'description' => 'Combined package',
+			'name' => $combined_label,
+			'description' => $combined_label,
 			'weight' => round($total_weight, 3),
 			'length' => round($max_length, 3),
 			'width' => round($max_width, 3),
@@ -179,6 +210,7 @@ class LP_Cargonizer_Package_Builder {
 			'is_separate_package' => false,
 			'missing_dimensions' => $has_missing_dimensions,
 			'profile_slugs' => array_keys($profiles),
+			'combined_profile_scope' => $profile_scope,
 			'profile_resolution_sources' => array_keys($resolution_sources),
 			'combined_items' => $combined,
 		));
@@ -196,6 +228,7 @@ class LP_Cargonizer_Package_Builder {
 			'has_pickup_capable' => false,
 			'has_bulky' => false,
 			'has_high_value_secure' => false,
+			'package_build_mode' => isset($extra['package_build_mode']) ? (string) $extra['package_build_mode'] : 'combined_single',
 		);
 
 		foreach ($packages as $package) {
@@ -270,7 +303,19 @@ class LP_Cargonizer_Package_Builder {
 				'has_pickup_capable' => false,
 				'has_bulky' => false,
 				'has_high_value_secure' => false,
+				'package_build_mode' => 'combined_single',
 			),
 		);
+	}
+
+	private function get_package_build_mode() {
+		$settings = is_callable($this->settings_provider) ? call_user_func($this->settings_provider) : array();
+		$mode = isset($settings['package_resolution']['package_build_mode'])
+			? sanitize_key((string) $settings['package_resolution']['package_build_mode'])
+			: 'combined_single';
+		if (!in_array($mode, array('combined_single', 'split_by_profile', 'separate_bulky_profiles'), true)) {
+			$mode = 'combined_single';
+		}
+		return $mode;
 	}
 }
