@@ -298,7 +298,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'label' => $customer_title,
 			'live_price' => (float) $live_price,
 			'display_cost' => round(max(0, $display_cost), 2),
-			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method) && !empty($package_summary['has_pickup_capable']),
+			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method) && !empty($package_summary['all_pickup_capable']),
 			'method_payload' => $method,
 		);
 

@@ -37,8 +37,13 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			return;
 		}
 
+		$package_index = $this->resolve_package_index_for_rate($rate);
+		if ($package_index < 0) {
+			return;
+		}
+
 		$chosen_methods = $this->get_chosen_shipping_methods();
-		$chosen_for_package = isset($chosen_methods[$index]) ? (string) $chosen_methods[$index] : '';
+		$chosen_for_package = isset($chosen_methods[$package_index]) ? (string) $chosen_methods[$package_index] : '';
 		$current_rate_id = (string) $rate->get_id();
 		if ($chosen_for_package === '' || $chosen_for_package !== $current_rate_id) {
 			return;
@@ -64,10 +69,26 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		if ($selected_id === '' && !empty($pickup_points[0]['id'])) {
 			$selected_id = (string) $pickup_points[0]['id'];
 		}
+		if ($selected_id !== '' && is_array($pickup_points) && !empty($pickup_points)) {
+			$has_selected = false;
+			foreach ($pickup_points as $pickup_point) {
+				if (!is_array($pickup_point)) {
+					continue;
+				}
+				if (isset($pickup_point['id']) && (string) $pickup_point['id'] === $selected_id) {
+					$has_selected = true;
+					break;
+				}
+			}
+			if (!$has_selected && !empty($pickup_points[0]['id'])) {
+				$selected_id = (string) $pickup_points[0]['id'];
+			}
+		}
 
 		echo '<div class="lp-cargonizer-checkout-pickup-point" style="margin:8px 0 0 24px;">';
-		echo '<label for="lp-cargonizer-pickup-' . esc_attr($index) . '" style="display:block;margin:0 0 6px;font-weight:600;">' . esc_html__('Pickup point', 'lp-cargonizer') . '</label>';
-		echo '<select id="lp-cargonizer-pickup-' . esc_attr($index) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '" data-selected-pickup-point-id="' . esc_attr($selected_id) . '">';
+		$selector_id = 'lp-cargonizer-pickup-' . $package_index . '-' . sanitize_title($current_rate_id);
+		echo '<label for="' . esc_attr($selector_id) . '" style="display:block;margin:0 0 6px;font-weight:600;">' . esc_html__('Pickup point', 'lp-cargonizer') . '</label>';
+		echo '<select id="' . esc_attr($selector_id) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '" data-selected-pickup-point-id="' . esc_attr($selected_id) . '">';
 		if (is_array($pickup_points) && !empty($pickup_points)) {
 			foreach ($pickup_points as $point) {
 				if (!is_array($point)) {
@@ -85,6 +106,37 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		}
 		echo '</select>';
 		echo '</div>';
+	}
+
+	private function resolve_package_index_for_rate($rate) {
+		$current_rate_id = is_a($rate, 'WC_Shipping_Rate') ? (string) $rate->get_id() : '';
+		if ($current_rate_id === '') {
+			return -1;
+		}
+
+		$shipping_packages = $this->get_shipping_packages_from_session();
+		if (empty($shipping_packages)) {
+			return -1;
+		}
+
+		$chosen_methods = $this->get_chosen_shipping_methods();
+		$fallback_package_index = -1;
+		foreach ($shipping_packages as $package_index => $shipping_package) {
+			$rates = isset($shipping_package['rates']) && is_array($shipping_package['rates']) ? $shipping_package['rates'] : array();
+			$has_current_rate = isset($rates[$current_rate_id]) && is_a($rates[$current_rate_id], 'WC_Shipping_Rate');
+			if (!$has_current_rate) {
+				continue;
+			}
+			if ($fallback_package_index < 0) {
+				$fallback_package_index = (int) $package_index;
+			}
+			$chosen_for_package = isset($chosen_methods[$package_index]) ? (string) $chosen_methods[$package_index] : '';
+			if ($chosen_for_package === $current_rate_id) {
+				return (int) $package_index;
+			}
+		}
+
+		return $fallback_package_index;
 	}
 
 	public function ajax_set_pickup_point() {

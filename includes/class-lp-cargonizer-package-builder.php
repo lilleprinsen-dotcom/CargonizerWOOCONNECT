@@ -226,10 +226,15 @@ class LP_Cargonizer_Package_Builder {
 			'category_slugs' => array(),
 			'has_mailbox_capable' => false,
 			'has_pickup_capable' => false,
+			'all_mailbox_capable' => false,
+			'all_pickup_capable' => false,
 			'has_bulky' => false,
 			'has_high_value_secure' => false,
 			'package_build_mode' => isset($extra['package_build_mode']) ? (string) $extra['package_build_mode'] : 'combined_single',
 		);
+		$total_flag_items = 0;
+		$mailbox_capable_items = 0;
+		$pickup_capable_items = 0;
 
 		foreach ($packages as $package) {
 			$summary['colli_count']++;
@@ -251,8 +256,25 @@ class LP_Cargonizer_Package_Builder {
 			$this->merge_flag_summary($summary, isset($package['flags']) && is_array($package['flags']) ? $package['flags'] : array());
 			if (isset($package['combined_items']) && is_array($package['combined_items'])) {
 				foreach ($package['combined_items'] as $combined_item) {
-					$this->merge_flag_summary($summary, isset($combined_item['flags']) && is_array($combined_item['flags']) ? $combined_item['flags'] : array());
+					$flags = isset($combined_item['flags']) && is_array($combined_item['flags']) ? $combined_item['flags'] : array();
+					$this->merge_flag_summary($summary, $flags);
+					$total_flag_items++;
+					if (!empty($flags['mailbox_capable'])) {
+						$mailbox_capable_items++;
+					}
+					if (!empty($flags['pickup_capable'])) {
+						$pickup_capable_items++;
+					}
 				}
+				continue;
+			}
+			$flags = isset($package['flags']) && is_array($package['flags']) ? $package['flags'] : array();
+			$total_flag_items++;
+			if (!empty($flags['mailbox_capable'])) {
+				$mailbox_capable_items++;
+			}
+			if (!empty($flags['pickup_capable'])) {
+				$pickup_capable_items++;
 			}
 		}
 
@@ -263,6 +285,8 @@ class LP_Cargonizer_Package_Builder {
 		if (isset($extra['category_slugs']) && is_array($extra['category_slugs'])) {
 			$summary['category_slugs'] = array_values(array_unique($extra['category_slugs']));
 		}
+		$summary['all_mailbox_capable'] = $total_flag_items > 0 && $mailbox_capable_items === $total_flag_items;
+		$summary['all_pickup_capable'] = $total_flag_items > 0 && $pickup_capable_items === $total_flag_items;
 		$summary['total_weight'] = round($summary['total_weight'], 3);
 		return $summary;
 	}
@@ -301,6 +325,8 @@ class LP_Cargonizer_Package_Builder {
 				'category_slugs' => array(),
 				'has_mailbox_capable' => false,
 				'has_pickup_capable' => false,
+				'all_mailbox_capable' => false,
+				'all_pickup_capable' => false,
 				'has_bulky' => false,
 				'has_high_value_secure' => false,
 				'package_build_mode' => 'combined_single',
