@@ -496,6 +496,47 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return $warnings;
 	}
 
+	private function get_live_checkout_quote_debug_payload($status_context) {
+		$status_context = is_array($status_context) ? $status_context : array();
+		$destination = isset($status_context['destination']) && is_array($status_context['destination']) ? $status_context['destination'] : array();
+		$request_context = isset($status_context['request_context']) && is_array($status_context['request_context']) ? $status_context['request_context'] : array();
+		$failures = isset($status_context['quote_failures']) && is_array($status_context['quote_failures']) ? $status_context['quote_failures'] : array();
+
+		$payload = array(
+			'generated_at_gmt' => gmdate('Y-m-d H:i:s'),
+			'purpose' => 'Debug helper payload for live checkout no-rates diagnostics',
+			'destination' => array(
+				'country' => isset($destination['country']) ? sanitize_text_field((string) $destination['country']) : '',
+				'postcode_present' => !empty($destination['postcode_present']),
+				'city_present' => !empty($destination['city_present']),
+				'address_present' => !empty($destination['address_present']),
+			),
+			'request_context' => array(
+				'allow_remote_quotes' => !empty($request_context['allow_remote_quotes']),
+				'use_cart_placeholder_rate' => !empty($request_context['use_cart_placeholder_rate']),
+			),
+			'quote_failures' => array(),
+			'notes' => array(
+				'Use this snapshot to compare checkout request context with expected NO destination readiness.',
+				'If quote_failures contains auth_or_config_problem or 401/403, validate API key and sender settings first.',
+			),
+		);
+
+		foreach ($failures as $failure) {
+			if (!is_array($failure)) {
+				continue;
+			}
+			$payload['quote_failures'][] = array(
+				'method_key' => isset($failure['method_key']) ? sanitize_text_field((string) $failure['method_key']) : '',
+				'reason_code' => isset($failure['reason_code']) ? sanitize_key((string) $failure['reason_code']) : '',
+				'http_status' => isset($failure['http_status']) ? (int) $failure['http_status'] : 0,
+				'error' => isset($failure['error']) ? sanitize_text_field((string) $failure['error']) : '',
+			);
+		}
+
+		return $payload;
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -691,12 +732,18 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							<li><strong>Fallback-modus:</strong> <?php echo esc_html((string) $status_context['fallback']['mode']); ?><?php echo isset($status_context['fallback']['added_count']) ? esc_html(' (rater lagt til: ' . (int) $status_context['fallback']['added_count'] . ')') : ''; ?></li>
 						<?php endif; ?>
 					</ul>
-					<details style="margin-top:8px;">
-						<summary>Kort diagnostikk (JSON)</summary>
-						<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;max-height:220px;overflow:auto;"><?php echo esc_html(wp_json_encode($status_context, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
-					</details>
-				<?php endif; ?>
-			</div>
+						<details style="margin-top:8px;">
+							<summary>Kort diagnostikk (JSON)</summary>
+							<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;max-height:220px;overflow:auto;"><?php echo esc_html(wp_json_encode($status_context, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
+						</details>
+						<?php $quote_debug_payload = $this->get_live_checkout_quote_debug_payload($status_context); ?>
+						<details style="margin-top:8px;">
+							<summary>Debugverktøy: quote replay-snapshot</summary>
+							<p style="margin-top:8px;">Denne payloaden kan kopieres for feilsøking når checkout viser «ingen fraktmetoder».</p>
+							<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;max-height:220px;overflow:auto;"><?php echo esc_html(wp_json_encode($quote_debug_payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
+						</details>
+					<?php endif; ?>
+				</div>
 			<?php $setup_warnings = $this->get_live_checkout_setup_warnings($settings, $last_no_rates_status); ?>
 			<?php if (!empty($setup_warnings)) : ?>
 				<div style="background:#fff1f0;border:1px solid #f1aeb5;padding:14px 16px;margin:16px 0 20px 0;max-width:1100px;">

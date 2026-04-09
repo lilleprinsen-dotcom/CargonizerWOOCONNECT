@@ -8,6 +8,11 @@
 	var refreshDebounceTimer = null;
 	var pendingRefreshRequest = null;
 	var queuedRefreshAfterCurrent = false;
+	var lastRefreshStartedAt = 0;
+
+	function hasPickupSelectors() {
+		return $('.lp-cargonizer-pickup-point-select').length > 0;
+	}
 
 	function triggerCompatibilityUpdate() {
 		$(document.body).trigger('lp_cargonizer_pickup_point_updated');
@@ -59,10 +64,14 @@
 		if (!config.ajaxGetAction) {
 			return;
 		}
+		if (!hasPickupSelectors()) {
+			return;
+		}
 		if (pendingRefreshRequest) {
 			queuedRefreshAfterCurrent = true;
 			return;
 		}
+		lastRefreshStartedAt = Date.now();
 		pendingRefreshRequest = $.post(config.ajaxUrl, {
 			action: config.ajaxGetAction,
 			nonce: config.nonce
@@ -86,13 +95,20 @@
 	}
 
 	function scheduleCompatibilityRefresh() {
+		if (!hasPickupSelectors()) {
+			return;
+		}
+		var now = Date.now();
+		var minIntervalMs = 400;
+		var elapsed = now - lastRefreshStartedAt;
+		var debounceMs = elapsed >= minIntervalMs ? 250 : (minIntervalMs - elapsed);
 		if (refreshDebounceTimer) {
 			clearTimeout(refreshDebounceTimer);
 		}
 		refreshDebounceTimer = setTimeout(function () {
 			refreshDebounceTimer = null;
 			refreshCompatibilityPayload();
-		}, 250);
+		}, debounceMs);
 	}
 
 	function applyPickupPointsStateToSelectors(state) {
@@ -167,6 +183,13 @@
 		}).done(function () {
 			$select.data('selected-pickup-point-id', pickupPointId);
 			scheduleCompatibilityRefresh();
+		}).fail(function (xhr) {
+			var response = xhr && xhr.responseJSON && xhr.responseJSON.data ? xhr.responseJSON.data : {};
+			if (response && response.pickup_point_id) {
+				$select.data('selected-pickup-point-id', String(response.pickup_point_id));
+				$select.val(String(response.pickup_point_id));
+				scheduleCompatibilityRefresh();
+			}
 		}).always(function () {
 			$select.prop('disabled', false);
 			triggerCompatibilityUpdate();
@@ -176,5 +199,7 @@
 	$(document.body).on('updated_checkout wc-blocks_checkout_updated', function () {
 		scheduleCompatibilityRefresh();
 	});
-	scheduleCompatibilityRefresh();
+	if (hasPickupSelectors()) {
+		scheduleCompatibilityRefresh();
+	}
 })(jQuery);

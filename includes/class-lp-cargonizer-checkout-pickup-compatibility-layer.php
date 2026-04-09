@@ -407,7 +407,35 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			$this->log_pickup_compatibility_debug('Skipped pickup compatibility session write: WC session unavailable.');
 			return;
 		}
-		WC()->session->set($this->get_pickup_session_key(), is_array($map) ? $map : array());
+		WC()->session->set($this->get_pickup_session_key(), $this->sanitize_pickup_session_map($map));
+	}
+
+	private function sanitize_pickup_session_map($map) {
+		if (!is_array($map)) {
+			return array();
+		}
+		$normalized = array();
+		foreach ($map as $rate_id => $row) {
+			$rate_id = sanitize_text_field((string) $rate_id);
+			if ($rate_id === '' || !is_array($row)) {
+				continue;
+			}
+			$pickup_points = isset($row['pickup_points']) && is_array($row['pickup_points']) ? array_values($row['pickup_points']) : array();
+			if (count($pickup_points) > 20) {
+				$pickup_points = array_slice($pickup_points, 0, 20);
+			}
+			$normalized[$rate_id] = array(
+				'id' => isset($row['id']) ? sanitize_text_field((string) $row['id']) : '',
+				'point' => isset($row['point']) && is_array($row['point']) ? $row['point'] : array(),
+				'pickup_points' => $pickup_points,
+				'source' => isset($row['source']) ? sanitize_key((string) $row['source']) : 'auto_nearest',
+				'rate_context' => isset($row['rate_context']) && is_array($row['rate_context']) ? $row['rate_context'] : array(),
+			);
+		}
+		if (count($normalized) > 30) {
+			$normalized = array_slice($normalized, -30, null, true);
+		}
+		return $normalized;
 	}
 
 	private function get_chosen_shipping_methods() {
