@@ -540,6 +540,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			<?php
 			$live_checkout_summary = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
 			$threshold_summary = isset($live_checkout_summary['free_shipping_threshold']) ? $this->sanitize_non_negative_number($live_checkout_summary['free_shipping_threshold']) : 1500;
+			$threshold_basis_summary = isset($live_checkout_summary['free_shipping_threshold_basis']) ? sanitize_key((string) $live_checkout_summary['free_shipping_threshold_basis']) : 'subtotal_incl_vat';
 			$low_price_summary = isset($live_checkout_summary['low_price_option_amount']) ? $this->sanitize_non_negative_number($live_checkout_summary['low_price_option_amount']) : 69;
 			$format_summary_price = function ($value) {
 				$value = (float) $value;
@@ -551,11 +552,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$summary_lines = array();
 			$summary_lines[] = !empty($live_checkout_summary['enabled']) ? 'Live checkout er aktivert.' : 'Live checkout er ikke aktivert.';
 			$summary_lines[] = !empty($live_checkout_summary['norway_only_enabled']) ? 'Frakt vises kun for Norge (NO).' : 'Frakt kan vises utenfor Norge.';
+			$threshold_basis_label = $threshold_basis_summary === 'subtotal_excl_vat' ? 'eks. MVA' : 'inkl. MVA';
 			if ((string) (isset($live_checkout_summary['low_price_strategy']) ? $live_checkout_summary['low_price_strategy'] : '') !== 'disabled') {
-				$summary_lines[] = 'Under ' . $format_summary_price($threshold_summary) . ' NOK settes billigste kvalifiserte metode til ' . $format_summary_price($low_price_summary) . ' NOK.';
+				$summary_lines[] = 'Under ' . $format_summary_price($threshold_summary) . ' NOK (' . $threshold_basis_label . ') settes billigste kvalifiserte metode til ' . $format_summary_price($low_price_summary) . ' NOK.';
 			}
 			if ((string) (isset($live_checkout_summary['free_shipping_strategy']) ? $live_checkout_summary['free_shipping_strategy'] : '') === 'cheapest_standard_eligible') {
-				$summary_lines[] = 'Over ' . $format_summary_price($threshold_summary) . ' NOK blir billigste kvalifiserte standardmetode gratis.';
+				$summary_lines[] = 'Over ' . $format_summary_price($threshold_summary) . ' NOK (' . $threshold_basis_label . ') blir billigste kvalifiserte standardmetode gratis.';
 			}
 			$summary_lines[] = 'Nærmeste hentepunkt velges automatisk når metoden støtter pickup points.';
 			?>
@@ -973,7 +975,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 								<td>
 									<input type="hidden" name="lp_cargonizer_live_checkout[show_prices_including_vat]" value="0">
 									<label><input type="checkbox" name="lp_cargonizer_live_checkout[show_prices_including_vat]" value="1" <?php checked(!empty($live_checkout['show_prices_including_vat'])); ?>> Vis priser inkludert MVA</label>
-									<p class="description">Vises til kunde i checkout.</p>
+									<p class="description">Styrer hvordan lavpris- og fallback-beløp tolkes: avkrysset = beløp regnes som inkl. MVA, ellers eks. MVA.</p>
 								</td>
 							</tr>
 							<tr>
@@ -981,6 +983,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 								<td>
 									<input id="lp_cargonizer_live_checkout_free_shipping_threshold" type="number" min="0" step="0.01" name="lp_cargonizer_live_checkout[free_shipping_threshold]" value="<?php echo esc_attr(isset($live_checkout['free_shipping_threshold']) ? $live_checkout['free_shipping_threshold'] : 1500); ?>">
 									<p class="description">Over denne ordresummen kan billigste kvalifiserte standardmetode bli gratis.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_free_shipping_threshold_basis">Terskel beregnes fra</label></th>
+								<td>
+									<select id="lp_cargonizer_live_checkout_free_shipping_threshold_basis" name="lp_cargonizer_live_checkout[free_shipping_threshold_basis]">
+										<option value="subtotal_incl_vat" <?php selected(isset($live_checkout['free_shipping_threshold_basis']) ? $live_checkout['free_shipping_threshold_basis'] : 'subtotal_incl_vat', 'subtotal_incl_vat'); ?>>Delsum inkl. MVA</option>
+										<option value="subtotal_excl_vat" <?php selected(isset($live_checkout['free_shipping_threshold_basis']) ? $live_checkout['free_shipping_threshold_basis'] : 'subtotal_incl_vat', 'subtotal_excl_vat'); ?>>Delsum eks. MVA</option>
+									</select>
+									<p class="description">Brukes både for lavpris under terskel og gratis frakt over terskel.</p>
 								</td>
 							</tr>
 							<tr>

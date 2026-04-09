@@ -108,7 +108,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		$package_result = $this->build_package_result($package);
-		$order_value = $this->get_order_value($package);
+		$order_value = $this->get_order_value($package, $live_settings);
 		$eligibility = $this->method_rule_engine->evaluate_methods($methods, $package_result, $order_value);
 		$candidates = isset($eligibility['eligible_methods']) ? $eligibility['eligible_methods'] : array();
 		if (empty($candidates)) {
@@ -119,7 +119,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$allow_checkout_with_fallback = $this->should_allow_checkout_with_fallback($settings);
 		$quotes = $this->collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
 		if (empty($quotes)) {
-			$this->add_fallback_rates_if_needed($settings, $fallback_behavior, $allow_checkout_with_fallback);
+			$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
 			return;
 		}
 
@@ -168,7 +168,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		if ($added_rates < 1) {
-			$this->add_fallback_rates_if_needed($settings, $fallback_behavior, $allow_checkout_with_fallback);
+			$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
 		}
 	}
 
@@ -287,7 +287,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			return $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 		}
 
-		$display_cost = (float) $calc['final_price_ex_vat'];
+		$customer_visible_cost = !empty($live_settings['show_prices_including_vat'])
+			? (float) $calc['rounded_price']
+			: (float) $calc['final_price_ex_vat'];
+		$display_cost = $this->convert_customer_visible_amount_to_rate_cost($customer_visible_cost, $live_settings);
 		$customer_title = $this->resolve_customer_title($method, $settings);
 		$quote = array(
 			'success' => true,
@@ -297,6 +300,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
 			'label' => $customer_title,
 			'live_price' => (float) $live_price,
+			'customer_visible_cost' => round(max(0, $customer_visible_cost), 2),
 			'display_cost' => round(max(0, $display_cost), 2),
 			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method) && !empty($package_summary['all_pickup_capable']),
 			'method_payload' => $method,
@@ -325,13 +329,15 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				if (!$allow) {
 					continue;
 				}
-				$quote['display_cost'] = round(max(0, $low_price), 2);
+				$quote['customer_visible_cost'] = round(max(0, $low_price), 2);
+				$quote['display_cost'] = $this->convert_customer_visible_amount_to_rate_cost($quote['customer_visible_cost'], $live_settings);
 				$adjusted = true;
 				break;
 			}
 			unset($quote);
 			if (!$adjusted && !empty($quotes[0])) {
-				$quotes[0]['display_cost'] = round(max(0, $low_price), 2);
+				$quotes[0]['customer_visible_cost'] = round(max(0, $low_price), 2);
+				$quotes[0]['display_cost'] = $this->convert_customer_visible_amount_to_rate_cost($quotes[0]['customer_visible_cost'], $live_settings);
 			}
 			return;
 		}
@@ -346,6 +352,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			if (!$allow) {
 				continue;
 			}
+			$quote['customer_visible_cost'] = 0.0;
 			$quote['display_cost'] = 0.0;
 			break;
 		}
@@ -426,11 +433,32 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		return $this->package_builder->build_from_lines($lines);
 	}
 
-	private function get_order_value($package) {
-		if (function_exists('WC') && WC() && isset(WC()->cart) && is_object(WC()->cart)) {
-			return (float) WC()->cart->get_displayed_subtotal();
+	private function get_order_value($package, $live_settings) {
+		$threshold_basis = isset($live_settings['free_shipping_threshold_basis']) ? (string) $live_settings['free_shipping_threshold_basis'] : 'subtotal_incl_vat';
+		$use_including_vat_subtotal = $threshold_basis !== 'subtotal_excl_vat';
+
+		$subtotal_excl_vat = 0.0;
+		$subtotal_vat = 0.0;
+		$contents = isset($package['contents']) && is_array($package['contents']) ? $package['contents'] : array();
+		foreach ($contents as $line) {
+			if (!is_array($line)) {
+				continue;
+			}
+			$subtotal_excl_vat += isset($line['line_total']) ? (float) $line['line_total'] : 0.0;
+			$subtotal_vat += isset($line['line_tax']) ? (float) $line['line_tax'] : 0.0;
 		}
-		return isset($package['contents_cost']) ? (float) $package['contents_cost'] : 0;
+
+		if ($subtotal_excl_vat > 0 || $subtotal_vat > 0) {
+			return $use_including_vat_subtotal ? ($subtotal_excl_vat + $subtotal_vat) : $subtotal_excl_vat;
+		}
+
+		if (function_exists('WC') && WC() && isset(WC()->cart) && is_object(WC()->cart)) {
+			if ($use_including_vat_subtotal) {
+				return (float) WC()->cart->get_subtotal() + (float) WC()->cart->get_subtotal_tax();
+			}
+			return (float) WC()->cart->get_subtotal();
+		}
+		return isset($package['contents_cost']) ? (float) $package['contents_cost'] : 0.0;
 	}
 
 	private function get_rule_overrides_by_method($settings) {
@@ -458,7 +486,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		return $result;
 	}
 
-	private function add_fallback_rates_if_needed($settings, $fallback_behavior, $allow_checkout_with_fallback) {
+	private function add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback) {
 		if ($fallback_behavior === 'block_checkout') {
 			$this->add_checkout_block_notice(__('Fraktberegning er midlertidig utilgjengelig. Vennligst prøv igjen senere.', 'lp-cargonizer'));
 			return;
@@ -485,9 +513,27 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$this->add_rate(array(
 				'id' => $this->id . ':' . $this->instance_id . ':fallback_' . $index,
 				'label' => $label,
-				'cost' => round(max(0, $price), 2),
+				'cost' => $this->convert_customer_visible_amount_to_rate_cost($price, $live_settings),
 			));
 		}
+	}
+
+
+	private function convert_customer_visible_amount_to_rate_cost($customer_visible_amount, $live_settings) {
+		$amount = max(0, (float) $customer_visible_amount);
+		if (empty($live_settings['show_prices_including_vat'])) {
+			return round($amount, 2);
+		}
+		if (!class_exists('WC_Tax')) {
+			return round($amount, 2);
+		}
+		$shipping_tax_rates = WC_Tax::get_shipping_tax_rates();
+		if (empty($shipping_tax_rates) || !is_array($shipping_tax_rates)) {
+			return round($amount, 2);
+		}
+		$shipping_taxes = WC_Tax::calc_tax($amount, $shipping_tax_rates, true);
+		$amount_excluding_vat = $amount - array_sum(is_array($shipping_taxes) ? $shipping_taxes : array());
+		return round(max(0, $amount_excluding_vat), 2);
 	}
 
 	private function get_pickup_points_for_rate($quote, $destination, $live_settings) {
