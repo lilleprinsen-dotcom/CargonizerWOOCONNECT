@@ -47,7 +47,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$shipping_profile_resolver = new LP_Cargonizer_Shipping_Profile_Resolver(function () {
 			return $this->settings_service->get_settings();
 		}, $package_resolution_service);
-		$this->package_builder = new LP_Cargonizer_Package_Builder($shipping_profile_resolver);
+		$this->package_builder = new LP_Cargonizer_Package_Builder($shipping_profile_resolver, function () {
+			return $this->settings_service->get_settings();
+		});
 		$this->method_rule_engine = new LP_Cargonizer_Method_Rule_Engine(function () {
 			return $this->settings_service->get_settings();
 		});
@@ -188,6 +190,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'country' => $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : ''),
 		);
 		$packages = isset($package_result['packages']) && is_array($package_result['packages']) ? $package_result['packages'] : array();
+		$package_summary = isset($package_result['summary']) && is_array($package_result['summary']) ? $package_result['summary'] : array();
 		if (empty($recipient['postcode']) || $recipient['country'] === '') {
 			return array('success' => false);
 		}
@@ -290,7 +293,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'label' => $customer_title,
 			'live_price' => (float) $live_price,
 			'display_cost' => round(max(0, $display_cost), 2),
-			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method),
+			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method) && !empty($package_summary['has_pickup_capable']),
 			'method_payload' => $method,
 		);
 

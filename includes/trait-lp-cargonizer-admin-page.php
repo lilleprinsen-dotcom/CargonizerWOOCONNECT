@@ -278,6 +278,83 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return array_values(array_unique($list));
 	}
 
+	private function parse_profile_rows_editor_input($profiles_input) {
+		$profiles = array();
+		if (!is_array($profiles_input)) {
+			return $profiles;
+		}
+		foreach ($profiles_input as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$slug = isset($row['slug']) ? sanitize_key((string) $row['slug']) : '';
+			if ($slug === '') {
+				continue;
+			}
+			$profiles[] = array(
+				'slug' => $slug,
+				'label' => isset($row['label']) ? sanitize_text_field((string) $row['label']) : $slug,
+				'default_weight' => isset($row['default_weight']) ? (string) $row['default_weight'] : '',
+				'default_dimensions' => array(
+					'length' => isset($row['length']) ? (string) $row['length'] : '',
+					'width' => isset($row['width']) ? (string) $row['width'] : '',
+					'height' => isset($row['height']) ? (string) $row['height'] : '',
+				),
+				'flags' => array(
+					'pickup_capable' => isset($row['pickup_capable']) ? sanitize_text_field((string) $row['pickup_capable']) : '0',
+					'mailbox_capable' => isset($row['mailbox_capable']) ? sanitize_text_field((string) $row['mailbox_capable']) : '0',
+					'bulky' => isset($row['bulky']) ? sanitize_text_field((string) $row['bulky']) : '0',
+					'high_value_secure' => isset($row['high_value_secure']) ? sanitize_text_field((string) $row['high_value_secure']) : '0',
+					'force_separate_package' => isset($row['force_separate_package']) ? sanitize_text_field((string) $row['force_separate_package']) : '0',
+				),
+			);
+		}
+		return $profiles;
+	}
+
+	private function parse_profile_map_rows_editor_input($rows_input) {
+		$map = array();
+		if (!is_array($rows_input)) {
+			return $map;
+		}
+		foreach ($rows_input as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$key = isset($row['source_slug']) ? sanitize_key((string) $row['source_slug']) : '';
+			$value = isset($row['profile_slug']) ? sanitize_key((string) $row['profile_slug']) : '';
+			if ($key === '' || $value === '') {
+				continue;
+			}
+			$map[$key] = $value;
+		}
+		return $map;
+	}
+
+	private function parse_value_rules_editor_input($rules_input) {
+		$rules = array();
+		if (!is_array($rules_input)) {
+			return $rules;
+		}
+		foreach ($rules_input as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$profile_slug = isset($row['profile_slug']) ? sanitize_key((string) $row['profile_slug']) : '';
+			if ($profile_slug === '') {
+				continue;
+			}
+			$rules[] = array(
+				'profile_slug' => $profile_slug,
+				'min_total' => isset($row['min_total']) ? (string) $row['min_total'] : '',
+				'max_total' => isset($row['max_total']) ? (string) $row['max_total'] : '',
+				'min_quantity' => isset($row['min_quantity']) ? (string) $row['min_quantity'] : '',
+				'max_quantity' => isset($row['max_quantity']) ? (string) $row['max_quantity'] : '',
+			);
+		}
+		return $rules;
+	}
+
 	private function parse_checkout_method_rules_editor_input($rules_input) {
 		$rules = array();
 		if (!is_array($rules_input)) {
@@ -362,9 +439,13 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'live_checkout' => isset($_POST['lp_cargonizer_live_checkout']) && is_array($_POST['lp_cargonizer_live_checkout']) ? wp_unslash($_POST['lp_cargonizer_live_checkout']) : array(),
 				'shipping_profiles' => array(
 					'default_profile_slug' => isset($_POST['lp_cargonizer_shipping_profiles_default_slug']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_shipping_profiles_default_slug'])) : '',
-					'profiles' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : ''),
+					'profiles' => $this->parse_profile_rows_editor_input(isset($_POST['lp_cargonizer_shipping_profiles']) && is_array($_POST['lp_cargonizer_shipping_profiles']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles']) : array()),
+					'shipping_class_map' => $this->parse_profile_map_rows_editor_input(isset($_POST['lp_cargonizer_shipping_class_profile_map']) && is_array($_POST['lp_cargonizer_shipping_class_profile_map']) ? wp_unslash($_POST['lp_cargonizer_shipping_class_profile_map']) : array()),
+					'category_map' => $this->parse_profile_map_rows_editor_input(isset($_POST['lp_cargonizer_category_profile_map']) && is_array($_POST['lp_cargonizer_category_profile_map']) ? wp_unslash($_POST['lp_cargonizer_category_profile_map']) : array()),
+					'value_rules' => $this->parse_value_rules_editor_input(isset($_POST['lp_cargonizer_value_profile_rules']) && is_array($_POST['lp_cargonizer_value_profile_rules']) ? wp_unslash($_POST['lp_cargonizer_value_profile_rules']) : array()),
 				),
 				'package_resolution' => array(
+					'package_build_mode' => isset($_POST['lp_cargonizer_package_build_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_package_build_mode'])) : 'combined_single',
 					'fallback_sources' => $this->parse_live_checkout_lines_to_list(isset($_POST['lp_cargonizer_package_resolution_fallback_sources']) ? wp_unslash($_POST['lp_cargonizer_package_resolution_fallback_sources']) : ''),
 				),
 				'checkout_method_rules' => array(
@@ -378,6 +459,11 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			);
 
 			$new_settings = $this->sanitize_settings($new_settings);
+			$profiles_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : '');
+			if (!empty($profiles_json) && empty($new_settings['shipping_profiles']['profiles'])) {
+				$new_settings['shipping_profiles']['profiles'] = $profiles_json;
+				$new_settings = $this->sanitize_settings($new_settings);
+			}
 			$method_rules_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_method_rules_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules_json']) : '');
 			if (!empty($method_rules_json) && empty($new_settings['checkout_method_rules']['rules'])) {
 				$new_settings['checkout_method_rules']['rules'] = $method_rules_json;
@@ -912,17 +998,164 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</table>
 
 					<h2>Shipping profiles</h2>
-					<p class="description">Legg inn profiler som JSON-array. Felt per profil: <code>slug</code>, <code>label</code>, <code>default_weight</code>, <code>default_dimensions[length,width,height]</code>, og <code>flags</code> (pickup_capable, mailbox_capable, bulky, high_value_secure, force_separate_package).</p>
+					<p class="description">Vanlige profilfelter kan redigeres her uten JSON. JSON-feltet under er beholdt for avansert redigering og bakoverkompatibilitet.</p>
 					<p>
 						<label for="lp_cargonizer_shipping_profiles_default_slug"><strong>Default profile slug</strong></label><br>
 						<input id="lp_cargonizer_shipping_profiles_default_slug" type="text" class="regular-text" name="lp_cargonizer_shipping_profiles_default_slug" value="<?php echo esc_attr(isset($shipping_profiles['default_profile_slug']) ? $shipping_profiles['default_profile_slug'] : 'default'); ?>">
 					</p>
-					<p>
-						<label for="lp_cargonizer_shipping_profiles_json"><strong>Profiler (JSON)</strong></label><br>
+					<?php
+					$profile_rows = isset($shipping_profiles['profiles']) && is_array($shipping_profiles['profiles']) ? $shipping_profiles['profiles'] : array();
+					if (empty($profile_rows)) {
+						$profile_rows[] = array();
+					}
+					$profile_options = array();
+					foreach ($profile_rows as $profile_row) {
+						if (!is_array($profile_row)) {
+							continue;
+						}
+						$profile_slug = isset($profile_row['slug']) ? sanitize_key((string) $profile_row['slug']) : '';
+						if ($profile_slug !== '') {
+							$profile_options[$profile_slug] = isset($profile_row['label']) ? (string) $profile_row['label'] : $profile_slug;
+						}
+					}
+					?>
+					<table class="widefat striped" style="margin-top:8px;">
+						<thead>
+							<tr>
+								<th>Slug</th>
+								<th>Label</th>
+								<th>Vekt (kg)</th>
+								<th>L (cm)</th>
+								<th>B (cm)</th>
+								<th>H (cm)</th>
+								<th>Flagg</th>
+							</tr>
+						</thead>
+						<tbody>
+						<?php foreach ($profile_rows as $profile_index => $profile_row) : ?>
+							<tr>
+								<td><input type="text" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][slug]" value="<?php echo esc_attr(isset($profile_row['slug']) ? (string) $profile_row['slug'] : ''); ?>" style="width:120px;"></td>
+								<td><input type="text" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][label]" value="<?php echo esc_attr(isset($profile_row['label']) ? (string) $profile_row['label'] : ''); ?>" style="width:150px;"></td>
+								<td><input type="number" step="0.01" min="0" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][default_weight]" value="<?php echo esc_attr(isset($profile_row['default_weight']) ? (string) $profile_row['default_weight'] : ''); ?>" style="width:95px;"></td>
+								<td><input type="number" step="0.01" min="0" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][length]" value="<?php echo esc_attr(isset($profile_row['default_dimensions']['length']) ? (string) $profile_row['default_dimensions']['length'] : ''); ?>" style="width:80px;"></td>
+								<td><input type="number" step="0.01" min="0" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][width]" value="<?php echo esc_attr(isset($profile_row['default_dimensions']['width']) ? (string) $profile_row['default_dimensions']['width'] : ''); ?>" style="width:80px;"></td>
+								<td><input type="number" step="0.01" min="0" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][height]" value="<?php echo esc_attr(isset($profile_row['default_dimensions']['height']) ? (string) $profile_row['default_dimensions']['height'] : ''); ?>" style="width:80px;"></td>
+								<td>
+									<?php foreach (array('pickup_capable' => 'Pickup', 'mailbox_capable' => 'Mailbox', 'bulky' => 'Bulky', 'high_value_secure' => 'Secure', 'force_separate_package' => 'Force separate') as $flag_key => $flag_label) : ?>
+										<label style="display:block;white-space:nowrap;">
+											<input type="hidden" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][<?php echo esc_attr($flag_key); ?>]" value="0">
+											<input type="checkbox" name="lp_cargonizer_shipping_profiles[<?php echo esc_attr($profile_index); ?>][<?php echo esc_attr($flag_key); ?>]" value="1" <?php checked(!empty($profile_row['flags'][$flag_key])); ?>>
+											<?php echo esc_html($flag_label); ?>
+										</label>
+									<?php endforeach; ?>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
+					<details style="margin-top:10px;">
+						<summary>Avansert JSON (profiler)</summary>
 						<textarea id="lp_cargonizer_shipping_profiles_json" name="lp_cargonizer_shipping_profiles_json" rows="10" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($shipping_profiles['profiles']) ? $shipping_profiles['profiles'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
-					</p>
+					</details>
+
+					<h3>Shipping class → profil</h3>
+					<?php
+					$shipping_class_map_rows = array();
+					$shipping_class_map = isset($shipping_profiles['shipping_class_map']) && is_array($shipping_profiles['shipping_class_map']) ? $shipping_profiles['shipping_class_map'] : array();
+					foreach ($shipping_class_map as $source_slug => $profile_slug) {
+						$shipping_class_map_rows[] = array('source_slug' => $source_slug, 'profile_slug' => $profile_slug);
+					}
+					if (empty($shipping_class_map_rows)) {
+						$shipping_class_map_rows[] = array();
+					}
+					?>
+					<table class="widefat striped" style="margin-top:8px;max-width:700px;">
+						<thead><tr><th>Shipping class slug</th><th>Profil</th></tr></thead>
+						<tbody>
+						<?php foreach ($shipping_class_map_rows as $map_index => $map_row) : ?>
+							<tr>
+								<td><input type="text" name="lp_cargonizer_shipping_class_profile_map[<?php echo esc_attr($map_index); ?>][source_slug]" value="<?php echo esc_attr(isset($map_row['source_slug']) ? (string) $map_row['source_slug'] : ''); ?>" style="width:220px;"></td>
+								<td>
+									<select name="lp_cargonizer_shipping_class_profile_map[<?php echo esc_attr($map_index); ?>][profile_slug]">
+										<option value="">—</option>
+										<?php foreach ($profile_options as $profile_slug => $profile_label) : ?>
+											<option value="<?php echo esc_attr($profile_slug); ?>" <?php selected(isset($map_row['profile_slug']) ? (string) $map_row['profile_slug'] : '', $profile_slug); ?>><?php echo esc_html($profile_label . ' (' . $profile_slug . ')'); ?></option>
+										<?php endforeach; ?>
+									</select>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
+
+					<h3>Kategori → profil</h3>
+					<?php
+					$category_map_rows = array();
+					$category_map = isset($shipping_profiles['category_map']) && is_array($shipping_profiles['category_map']) ? $shipping_profiles['category_map'] : array();
+					foreach ($category_map as $source_slug => $profile_slug) {
+						$category_map_rows[] = array('source_slug' => $source_slug, 'profile_slug' => $profile_slug);
+					}
+					if (empty($category_map_rows)) {
+						$category_map_rows[] = array();
+					}
+					?>
+					<table class="widefat striped" style="margin-top:8px;max-width:700px;">
+						<thead><tr><th>Kategori slug</th><th>Profil</th></tr></thead>
+						<tbody>
+						<?php foreach ($category_map_rows as $map_index => $map_row) : ?>
+							<tr>
+								<td><input type="text" name="lp_cargonizer_category_profile_map[<?php echo esc_attr($map_index); ?>][source_slug]" value="<?php echo esc_attr(isset($map_row['source_slug']) ? (string) $map_row['source_slug'] : ''); ?>" style="width:220px;"></td>
+								<td>
+									<select name="lp_cargonizer_category_profile_map[<?php echo esc_attr($map_index); ?>][profile_slug]">
+										<option value="">—</option>
+										<?php foreach ($profile_options as $profile_slug => $profile_label) : ?>
+											<option value="<?php echo esc_attr($profile_slug); ?>" <?php selected(isset($map_row['profile_slug']) ? (string) $map_row['profile_slug'] : '', $profile_slug); ?>><?php echo esc_html($profile_label . ' (' . $profile_slug . ')'); ?></option>
+										<?php endforeach; ?>
+									</select>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
+
+					<h3>Verdibaserte profilregler</h3>
+					<?php
+					$value_rule_rows = isset($shipping_profiles['value_rules']) && is_array($shipping_profiles['value_rules']) ? $shipping_profiles['value_rules'] : array();
+					if (empty($value_rule_rows)) {
+						$value_rule_rows[] = array();
+					}
+					?>
+					<table class="widefat striped" style="margin-top:8px;max-width:920px;">
+						<thead><tr><th>Profil</th><th>Min total</th><th>Max total</th><th>Min antall</th><th>Max antall</th></tr></thead>
+						<tbody>
+						<?php foreach ($value_rule_rows as $rule_index => $value_rule_row) : ?>
+							<tr>
+								<td>
+									<select name="lp_cargonizer_value_profile_rules[<?php echo esc_attr($rule_index); ?>][profile_slug]">
+										<option value="">—</option>
+										<?php foreach ($profile_options as $profile_slug => $profile_label) : ?>
+											<option value="<?php echo esc_attr($profile_slug); ?>" <?php selected(isset($value_rule_row['profile_slug']) ? (string) $value_rule_row['profile_slug'] : '', $profile_slug); ?>><?php echo esc_html($profile_label . ' (' . $profile_slug . ')'); ?></option>
+										<?php endforeach; ?>
+									</select>
+								</td>
+								<td><input type="number" min="0" step="0.01" name="lp_cargonizer_value_profile_rules[<?php echo esc_attr($rule_index); ?>][min_total]" value="<?php echo esc_attr(isset($value_rule_row['min_total']) ? (string) $value_rule_row['min_total'] : ''); ?>" style="width:120px;"></td>
+								<td><input type="number" min="0" step="0.01" name="lp_cargonizer_value_profile_rules[<?php echo esc_attr($rule_index); ?>][max_total]" value="<?php echo esc_attr(isset($value_rule_row['max_total']) ? (string) $value_rule_row['max_total'] : ''); ?>" style="width:120px;"></td>
+								<td><input type="number" min="0" step="1" name="lp_cargonizer_value_profile_rules[<?php echo esc_attr($rule_index); ?>][min_quantity]" value="<?php echo esc_attr(isset($value_rule_row['min_quantity']) ? (string) $value_rule_row['min_quantity'] : ''); ?>" style="width:95px;"></td>
+								<td><input type="number" min="0" step="1" name="lp_cargonizer_value_profile_rules[<?php echo esc_attr($rule_index); ?>][max_quantity]" value="<?php echo esc_attr(isset($value_rule_row['max_quantity']) ? (string) $value_rule_row['max_quantity'] : ''); ?>" style="width:95px;"></td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
 
 					<h2>Package resolution</h2>
+					<p>
+						<label for="lp_cargonizer_package_build_mode"><strong>Pakkebygging</strong></label><br>
+						<select id="lp_cargonizer_package_build_mode" name="lp_cargonizer_package_build_mode">
+							<option value="combined_single" <?php selected(isset($package_resolution['package_build_mode']) ? $package_resolution['package_build_mode'] : 'combined_single', 'combined_single'); ?>>En kombinert kolli (dagens enkle oppførsel)</option>
+							<option value="split_by_profile" <?php selected(isset($package_resolution['package_build_mode']) ? $package_resolution['package_build_mode'] : 'combined_single', 'split_by_profile'); ?>>Del opp per profil</option>
+							<option value="separate_bulky_profiles" <?php selected(isset($package_resolution['package_build_mode']) ? $package_resolution['package_build_mode'] : 'combined_single', 'separate_bulky_profiles'); ?>>Del opp per profil + separate bulky-produkter</option>
+						</select>
+					</p>
 					<p class="description">Fallback-kilder i prioritert rekkefølge, én per linje. Tillatte verdier: product_dimensions, product_override, shipping_class_profile, category_profile, value_rule, default_profile.</p>
 					<textarea name="lp_cargonizer_package_resolution_fallback_sources" rows="6" class="large-text code"><?php echo esc_textarea(implode("\n", isset($package_resolution['fallback_sources']) && is_array($package_resolution['fallback_sources']) ? $package_resolution['fallback_sources'] : array())); ?></textarea>
 

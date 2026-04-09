@@ -69,7 +69,9 @@ class LP_Cargonizer_Connector {
 		$this->shipping_profile_resolver = new LP_Cargonizer_Shipping_Profile_Resolver(function () {
 			return $this->get_settings();
 		}, $this->package_resolution_service);
-		$this->package_builder_service = new LP_Cargonizer_Package_Builder($this->shipping_profile_resolver);
+		$this->package_builder_service = new LP_Cargonizer_Package_Builder($this->shipping_profile_resolver, function () {
+			return $this->get_settings();
+		});
 		$this->method_rule_engine_service = new LP_Cargonizer_Method_Rule_Engine(function () {
 			return $this->get_settings();
 		});
@@ -89,6 +91,92 @@ class LP_Cargonizer_Connector {
 		add_action('wp_ajax_lp_cargonizer_get_servicepartner_options', array($this, 'ajax_get_servicepartner_options'));
 		add_action('wp_ajax_lp_cargonizer_get_printers', array($this, 'ajax_get_printers'));
 		add_action('wp_ajax_lp_cargonizer_book_shipment', array($this, 'ajax_book_shipment'));
+		add_action('woocommerce_product_options_shipping', array($this, 'render_product_profile_override_fields'));
+		add_action('woocommerce_process_product_meta', array($this, 'save_product_profile_override_fields'));
+	}
+
+	public function render_product_profile_override_fields() {
+		if (!function_exists('woocommerce_wp_text_input') || !function_exists('woocommerce_wp_select')) {
+			return;
+		}
+
+		global $post;
+		$product_id = isset($post->ID) ? (int) $post->ID : 0;
+		if ($product_id < 1) {
+			return;
+		}
+
+		$settings = $this->get_settings();
+		$profiles = isset($settings['shipping_profiles']['profiles']) && is_array($settings['shipping_profiles']['profiles'])
+			? $settings['shipping_profiles']['profiles']
+			: array();
+		$options = array('' => __('Use resolver/default', 'lp-cargonizer'));
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) {
+				continue;
+			}
+			$slug = isset($profile['slug']) ? sanitize_key((string) $profile['slug']) : '';
+			if ($slug === '') {
+				continue;
+			}
+			$label = isset($profile['label']) ? sanitize_text_field((string) $profile['label']) : $slug;
+			$options[$slug] = $label . ' (' . $slug . ')';
+		}
+
+		echo '<div class="options_group">';
+		echo '<p><strong>' . esc_html__('Cargonizer profile overrides', 'lp-cargonizer') . '</strong></p>';
+		woocommerce_wp_select(array(
+			'id' => '_lp_cargonizer_profile_slug',
+			'label' => __('Profile override', 'lp-cargonizer'),
+			'desc_tip' => true,
+			'description' => __('Optional. Overrides the resolver-selected profile for this product.', 'lp-cargonizer'),
+			'options' => $options,
+			'value' => get_post_meta($product_id, '_lp_cargonizer_profile_slug', true),
+		));
+		foreach (array(
+			'_lp_cargonizer_profile_weight' => __('Profile weight override (kg)', 'lp-cargonizer'),
+			'_lp_cargonizer_profile_length' => __('Profile length override (cm)', 'lp-cargonizer'),
+			'_lp_cargonizer_profile_width' => __('Profile width override (cm)', 'lp-cargonizer'),
+			'_lp_cargonizer_profile_height' => __('Profile height override (cm)', 'lp-cargonizer'),
+		) as $meta_key => $label) {
+			woocommerce_wp_text_input(array(
+				'id' => $meta_key,
+				'label' => $label,
+				'desc_tip' => true,
+				'description' => __('Optional. Leave empty to use profile/default fallback.', 'lp-cargonizer'),
+				'type' => 'text',
+				'value' => get_post_meta($product_id, $meta_key, true),
+			));
+		}
+		echo '</div>';
+	}
+
+	public function save_product_profile_override_fields($product_id) {
+		if (!current_user_can('edit_post', $product_id)) {
+			return;
+		}
+
+		$profile_slug = isset($_POST['_lp_cargonizer_profile_slug']) ? sanitize_key(wp_unslash($_POST['_lp_cargonizer_profile_slug'])) : '';
+		if ($profile_slug === '') {
+			delete_post_meta($product_id, '_lp_cargonizer_profile_slug');
+		} else {
+			update_post_meta($product_id, '_lp_cargonizer_profile_slug', $profile_slug);
+		}
+
+		foreach (array(
+			'_lp_cargonizer_profile_weight',
+			'_lp_cargonizer_profile_length',
+			'_lp_cargonizer_profile_width',
+			'_lp_cargonizer_profile_height',
+		) as $meta_key) {
+			$raw = isset($_POST[$meta_key]) ? wp_unslash($_POST[$meta_key]) : '';
+			$clean = $this->sanitize_non_negative_number($raw);
+			if ($clean > 0) {
+				update_post_meta($product_id, $meta_key, $clean);
+			} else {
+				delete_post_meta($product_id, $meta_key);
+			}
+		}
 	}
 
 	public function sanitize_settings($input) {
