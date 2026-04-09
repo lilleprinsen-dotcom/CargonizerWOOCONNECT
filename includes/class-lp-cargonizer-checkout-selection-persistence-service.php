@@ -112,7 +112,8 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			$rate_id = isset($selected_rate['rate_id']) ? (string) $selected_rate['rate_id'] : '';
 			$rate_meta = isset($selected_rate['meta_data']) && is_array($selected_rate['meta_data']) ? $selected_rate['meta_data'] : array();
 			$pickup = $this->resolve_pickup_selection($rate_meta, $rate_id, $pickup_selection_map);
-			$pickup_point_ids = $this->extract_pickup_point_ids($pickup['pickup_points']);
+			$pickup_points_meta = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup['pickup_points']);
+			$selected_pickup_point_meta = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($pickup['selected_pickup_point']);
 			$minimal_rate_meta = $this->extract_minimal_rate_meta($rate_meta);
 
 			$method_key = isset($rate_meta['method_key']) ? sanitize_text_field((string) $rate_meta['method_key']) : '';
@@ -124,8 +125,8 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			$shipping_item->update_meta_data('carrier_id', isset($rate_meta['carrier_id']) ? (string) $rate_meta['carrier_id'] : '');
 			$shipping_item->update_meta_data('product_id', isset($rate_meta['product_id']) ? (string) $rate_meta['product_id'] : '');
 			$shipping_item->update_meta_data('method_key', $method_key);
-			$shipping_item->update_meta_data('krokedil_pickup_points', $pickup_point_ids);
-			$shipping_item->update_meta_data('krokedil_selected_pickup_point', $pickup['selected_pickup_point']);
+			$shipping_item->update_meta_data('krokedil_pickup_points', $pickup_points_meta);
+			$shipping_item->update_meta_data('krokedil_selected_pickup_point', $selected_pickup_point_meta);
 			$shipping_item->update_meta_data('krokedil_selected_pickup_point_id', $pickup['selected_pickup_point_id']);
 			$shipping_item->save();
 
@@ -151,8 +152,8 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 					'selection_valid' => !empty($pickup['selection_valid']),
 				),
 				'krokedil' => array(
-					'krokedil_pickup_points' => $pickup_point_ids,
-					'krokedil_selected_pickup_point' => $pickup['selected_pickup_point'],
+					'krokedil_pickup_points' => $pickup_points_meta,
+					'krokedil_selected_pickup_point' => $selected_pickup_point_meta,
 					'krokedil_selected_pickup_point_id' => $pickup['selected_pickup_point_id'],
 				),
 				'quote_context' => array(
@@ -330,13 +331,9 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	}
 
 	private function resolve_pickup_selection($rate_meta, $rate_id, $pickup_selection_map) {
-		$pickup_points = isset($rate_meta['krokedil_pickup_points']) && is_array($rate_meta['krokedil_pickup_points'])
-			? array_values($rate_meta['krokedil_pickup_points'])
-			: array();
+		$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_points_meta(isset($rate_meta['krokedil_pickup_points']) ? $rate_meta['krokedil_pickup_points'] : null);
 		$selected_id = isset($rate_meta['krokedil_selected_pickup_point_id']) ? sanitize_text_field((string) $rate_meta['krokedil_selected_pickup_point_id']) : '';
-		$selected_point = isset($rate_meta['krokedil_selected_pickup_point']) && is_array($rate_meta['krokedil_selected_pickup_point'])
-			? $rate_meta['krokedil_selected_pickup_point']
-			: array();
+		$selected_point = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_point_meta(isset($rate_meta['krokedil_selected_pickup_point']) ? $rate_meta['krokedil_selected_pickup_point'] : null);
 		$selection_source = 'auto_nearest';
 		$selection_valid = true;
 

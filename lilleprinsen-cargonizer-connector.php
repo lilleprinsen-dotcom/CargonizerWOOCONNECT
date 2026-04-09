@@ -19,6 +19,7 @@ require_once __DIR__ . '/includes/class-lp-cargonizer-shipping-profile-resolver.
 require_once __DIR__ . '/includes/class-lp-cargonizer-package-builder.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-method-rule-engine.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-live-checkout.php';
+require_once __DIR__ . '/includes/class-lp-cargonizer-krokedil-pickup-meta-helper.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-pickup-controller.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-pickup-compatibility-layer.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-selection-persistence-service.php';
