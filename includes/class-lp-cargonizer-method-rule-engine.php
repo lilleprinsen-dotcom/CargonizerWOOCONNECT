@@ -50,21 +50,34 @@ class LP_Cargonizer_Method_Rule_Engine {
 		$has_mailbox_capable = false;
 		$has_pickup_capable = false;
 		$has_bulky = false;
+		$total_flag_items = 0;
+		$mailbox_capable_items = 0;
+		$pickup_capable_items = 0;
 		foreach ($packages as $package) {
-			$flags = isset($package['flags']) && is_array($package['flags']) ? $package['flags'] : array();
-			if (!empty($flags['high_value_secure'])) {
-				$has_high_value_flag = true;
-			}
-			if (!empty($flags['mailbox_capable'])) {
-				$has_mailbox_capable = true;
-			}
-			if (!empty($flags['pickup_capable'])) {
-				$has_pickup_capable = true;
-			}
-			if (!empty($flags['bulky'])) {
-				$has_bulky = true;
+			$items = isset($package['combined_items']) && is_array($package['combined_items']) && !empty($package['combined_items'])
+				? $package['combined_items']
+				: array($package);
+			foreach ($items as $item) {
+				$flags = isset($item['flags']) && is_array($item['flags']) ? $item['flags'] : array();
+				$total_flag_items++;
+				if (!empty($flags['high_value_secure'])) {
+					$has_high_value_flag = true;
+				}
+				if (!empty($flags['mailbox_capable'])) {
+					$has_mailbox_capable = true;
+					$mailbox_capable_items++;
+				}
+				if (!empty($flags['pickup_capable'])) {
+					$has_pickup_capable = true;
+					$pickup_capable_items++;
+				}
+				if (!empty($flags['bulky'])) {
+					$has_bulky = true;
+				}
 			}
 		}
+		$all_mailbox_capable = $total_flag_items > 0 && $mailbox_capable_items === $total_flag_items;
+		$all_pickup_capable = $total_flag_items > 0 && $pickup_capable_items === $total_flag_items;
 
 		return array(
 			'order_value' => (float) $order_value,
@@ -74,8 +87,8 @@ class LP_Cargonizer_Method_Rule_Engine {
 			'has_separate_package' => !empty($summary['separate_package_count']),
 			'missing_dimensions' => !empty($summary['missing_dimensions']),
 			'has_high_value_secure' => $has_high_value_flag,
-			'has_mailbox_capable' => $has_mailbox_capable || !empty($summary['has_mailbox_capable']),
-			'has_pickup_capable' => $has_pickup_capable || !empty($summary['has_pickup_capable']),
+			'has_mailbox_capable' => !empty($summary['all_mailbox_capable']) || $all_mailbox_capable,
+			'has_pickup_capable' => !empty($summary['all_pickup_capable']) || $all_pickup_capable,
 			'has_bulky' => $has_bulky || !empty($summary['has_bulky']),
 		);
 	}

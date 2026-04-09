@@ -91,6 +91,8 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			$rate_id = isset($selected_rate['rate_id']) ? (string) $selected_rate['rate_id'] : '';
 			$rate_meta = isset($selected_rate['meta_data']) && is_array($selected_rate['meta_data']) ? $selected_rate['meta_data'] : array();
 			$pickup = $this->resolve_pickup_selection($rate_meta, $rate_id, $pickup_selection_map);
+			$pickup_point_ids = $this->extract_pickup_point_ids($pickup['pickup_points']);
+			$minimal_rate_meta = $this->extract_minimal_rate_meta($rate_meta);
 
 			$method_key = isset($rate_meta['method_key']) ? sanitize_text_field((string) $rate_meta['method_key']) : '';
 			$method_config = $method_key !== '' && isset($method_index[$method_key]) ? $method_index[$method_key] : array();
@@ -101,7 +103,7 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			$shipping_item->update_meta_data('carrier_id', isset($rate_meta['carrier_id']) ? (string) $rate_meta['carrier_id'] : '');
 			$shipping_item->update_meta_data('product_id', isset($rate_meta['product_id']) ? (string) $rate_meta['product_id'] : '');
 			$shipping_item->update_meta_data('method_key', $method_key);
-			$shipping_item->update_meta_data('krokedil_pickup_points', $pickup['pickup_points']);
+			$shipping_item->update_meta_data('krokedil_pickup_points', $pickup_point_ids);
 			$shipping_item->update_meta_data('krokedil_selected_pickup_point', $pickup['selected_pickup_point']);
 			$shipping_item->update_meta_data('krokedil_selected_pickup_point_id', $pickup['selected_pickup_point_id']);
 			$shipping_item->save();
@@ -128,14 +130,14 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 					'selection_valid' => !empty($pickup['selection_valid']),
 				),
 				'krokedil' => array(
-					'krokedil_pickup_points' => $pickup['pickup_points'],
+					'krokedil_pickup_points' => $pickup_point_ids,
 					'krokedil_selected_pickup_point' => $pickup['selected_pickup_point'],
 					'krokedil_selected_pickup_point_id' => $pickup['selected_pickup_point_id'],
 				),
 				'quote_context' => array(
 					'package_index' => isset($selected_rate['package_index']) ? (int) $selected_rate['package_index'] : 0,
 					'instance_id' => isset($selected_rate['instance_id']) ? (string) $selected_rate['instance_id'] : '',
-					'rate_meta' => $rate_meta,
+					'rate_meta' => $minimal_rate_meta,
 				),
 			);
 		}
@@ -324,6 +326,41 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 		}
 
 		return array();
+	}
+
+	private function extract_pickup_point_ids($pickup_points) {
+		$result = array();
+		if (!is_array($pickup_points)) {
+			return $result;
+		}
+		foreach ($pickup_points as $pickup_point) {
+			if (!is_array($pickup_point)) {
+				continue;
+			}
+			$point_id = isset($pickup_point['id']) ? sanitize_text_field((string) $pickup_point['id']) : '';
+			if ($point_id !== '') {
+				$result[] = $point_id;
+			}
+		}
+		return array_values(array_unique($result));
+	}
+
+	private function extract_minimal_rate_meta($rate_meta) {
+		$keys = array(
+			'transport_agreement_id',
+			'carrier_id',
+			'product_id',
+			'method_key',
+			'lp_cargonizer_pickup_capable',
+		);
+		$result = array();
+		foreach ($keys as $key) {
+			if (!array_key_exists($key, $rate_meta)) {
+				continue;
+			}
+			$result[$key] = sanitize_text_field((string) $rate_meta[$key]);
+		}
+		return $result;
 	}
 
 	private function index_methods_by_key() {

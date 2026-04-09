@@ -98,7 +98,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 					}
 				}
 				$selected_point = $this->resolve_point_by_id($pickup_points, $selected_id);
-				if ($selected_id === '' && isset($selected_point['id'])) {
+				if (isset($selected_point['id'])) {
 					$selected_id = sanitize_text_field((string) $selected_point['id']);
 				}
 				if ($rate_id !== '') {
