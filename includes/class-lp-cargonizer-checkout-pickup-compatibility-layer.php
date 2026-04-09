@@ -29,6 +29,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			return $rates;
 		}
 
+		$enriched_count = 0;
 		$session_map = $this->get_pickup_selection_session_map();
 		foreach ($rates as $rate_id => $rate) {
 			if (!is_a($rate, 'WC_Shipping_Rate')) {
@@ -60,115 +61,130 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			);
 
 			$rate->add_meta_data('lp_cargonizer_pickup_point_context', $normalized, true);
+			$enriched_count++;
 		}
+		$this->log_pickup_compatibility_debug('Enriched package rates with pickup compatibility metadata.', array(
+			'enriched_count' => $enriched_count,
+		));
 
 		return $rates;
 	}
 
 	public function ajax_get_checkout_pickup_points() {
-		check_ajax_referer(LP_Cargonizer_Checkout_Pickup_Controller::NONCE_ACTION, 'nonce');
-		if (!$this->is_checkout_or_order_pay_context_request()) {
-			wp_send_json_success(array('items' => array()));
-		}
+		try {
+			check_ajax_referer($this->get_pickup_nonce_action(), 'nonce');
+			if (!$this->is_checkout_or_order_pay_context_request()) {
+				wp_send_json_success(array('items' => array()));
+			}
 
-		$packages = $this->get_shipping_packages_from_session();
-		$payload = array();
-		$session_map = $this->get_pickup_selection_session_map();
-		$chosen_methods = $this->get_chosen_shipping_methods();
+			$packages = $this->get_shipping_packages_from_session();
+			$payload = array();
+			$session_map = $this->get_pickup_selection_session_map();
+			$chosen_methods = $this->get_chosen_shipping_methods();
 
-		foreach ($packages as $package_index => $shipping_package) {
-			$destination = isset($shipping_package['destination']) && is_array($shipping_package['destination']) ? $shipping_package['destination'] : array();
-			$chosen_for_package = isset($chosen_methods[$package_index]) ? (string) $chosen_methods[$package_index] : '';
-			$rates = isset($shipping_package['rates']) && is_array($shipping_package['rates']) ? $shipping_package['rates'] : array();
-			foreach ($rates as $rate) {
-				if (!is_a($rate, 'WC_Shipping_Rate')) {
-					continue;
-				}
+			foreach ($packages as $package_index => $shipping_package) {
+				$destination = isset($shipping_package['destination']) && is_array($shipping_package['destination']) ? $shipping_package['destination'] : array();
+				$chosen_for_package = isset($chosen_methods[$package_index]) ? (string) $chosen_methods[$package_index] : '';
+				$rates = isset($shipping_package['rates']) && is_array($shipping_package['rates']) ? $shipping_package['rates'] : array();
+				foreach ($rates as $rate) {
+					if (!is_a($rate, 'WC_Shipping_Rate')) {
+						continue;
+					}
 
-				$rate_id = (string) $rate->get_id();
-				if ($rate_id === '' || $rate_id !== $chosen_for_package) {
-					continue;
-				}
-				if (!$this->is_pickup_capable_rate($rate)) {
-					continue;
-				}
-				$pickup_lookup = $this->get_pickup_points_for_rate($rate, $rate_id, $destination, $session_map);
-				$pickup_points = isset($pickup_lookup['points']) && is_array($pickup_lookup['points']) ? $pickup_lookup['points'] : array();
-				$pickup_state = isset($pickup_lookup['state']) ? (string) $pickup_lookup['state'] : 'unavailable';
-				$pickup_message = isset($pickup_lookup['message']) ? (string) $pickup_lookup['message'] : '';
+					$rate_id = (string) $rate->get_id();
+					if ($rate_id === '' || $rate_id !== $chosen_for_package) {
+						continue;
+					}
+					if (!$this->is_pickup_capable_rate($rate)) {
+						continue;
+					}
+					$pickup_lookup = $this->get_pickup_points_for_rate($rate, $rate_id, $destination, $session_map);
+					$pickup_points = isset($pickup_lookup['points']) && is_array($pickup_lookup['points']) ? $pickup_lookup['points'] : array();
+					$pickup_state = isset($pickup_lookup['state']) ? (string) $pickup_lookup['state'] : 'unavailable';
+					$pickup_message = isset($pickup_lookup['message']) ? (string) $pickup_lookup['message'] : '';
 
-				if (!is_array($pickup_points) || empty($pickup_points)) {
-					if ($rate_id !== '') {
-						$existing_source = isset($session_map[$rate_id]['source']) ? $session_map[$rate_id]['source'] : 'auto_nearest';
-						$session_map[$rate_id] = array(
-							'id' => '',
-							'point' => array(),
+					if (!is_array($pickup_points) || empty($pickup_points)) {
+						if ($rate_id !== '') {
+							$existing_source = isset($session_map[$rate_id]['source']) ? $session_map[$rate_id]['source'] : 'auto_nearest';
+							$session_map[$rate_id] = array(
+								'id' => '',
+								'point' => array(),
+								'pickup_points' => array(),
+								'source' => $existing_source,
+							);
+						}
+						if ($pickup_state !== 'loading') {
+							$this->log_pickup_state_reason($pickup_state, $rate_id, $pickup_message, $rate);
+						}
+						$payload[] = array(
+							'package_index' => (int) $package_index,
+							'rate_id' => $rate_id,
+							'method_id' => method_exists($rate, 'get_method_id') ? (string) $rate->get_method_id() : '',
 							'pickup_points' => array(),
-							'source' => $existing_source,
+							'krokedil_pickup_points' => array(),
+							'selected_pickup_point_id' => '',
+							'krokedil_selected_pickup_point_id' => '',
+							'selected_pickup_point' => array(),
+							'krokedil_selected_pickup_point' => array(),
+							'state' => $pickup_state,
+							'unavailable' => ($pickup_state === 'unavailable'),
+							'error' => ($pickup_state === 'error'),
+							'message' => $pickup_message,
+						);
+						continue;
+					}
+					$selected_id = (string) $this->rate_meta($rate, 'krokedil_selected_pickup_point_id');
+					if ($rate_id !== '' && isset($session_map[$rate_id]['id'])) {
+						$session_selected_id = sanitize_text_field((string) $session_map[$rate_id]['id']);
+						if ($session_selected_id !== '') {
+							$selected_id = $session_selected_id;
+						}
+					}
+					$selected_point = $this->resolve_point_by_id($pickup_points, $selected_id);
+					if (isset($selected_point['id'])) {
+						$selected_id = sanitize_text_field((string) $selected_point['id']);
+					}
+					if ($rate_id !== '') {
+						$session_map[$rate_id] = array(
+							'id' => $selected_id,
+							'point' => $selected_point,
+							'pickup_points' => array_values($pickup_points),
+							'source' => isset($session_map[$rate_id]['source']) ? $session_map[$rate_id]['source'] : 'auto_nearest',
 						);
 					}
-					if ($pickup_state !== 'loading') {
-						$this->log_pickup_state_reason($pickup_state, $rate_id, $pickup_message, $rate);
-					}
+
 					$payload[] = array(
 						'package_index' => (int) $package_index,
 						'rate_id' => $rate_id,
 						'method_id' => method_exists($rate, 'get_method_id') ? (string) $rate->get_method_id() : '',
-						'pickup_points' => array(),
-						'krokedil_pickup_points' => array(),
-						'selected_pickup_point_id' => '',
-						'krokedil_selected_pickup_point_id' => '',
-						'selected_pickup_point' => array(),
-						'krokedil_selected_pickup_point' => array(),
-						'state' => $pickup_state,
-						'unavailable' => ($pickup_state === 'unavailable'),
-						'error' => ($pickup_state === 'error'),
-						'message' => $pickup_message,
-					);
-					continue;
-				}
-				$selected_id = (string) $this->rate_meta($rate, 'krokedil_selected_pickup_point_id');
-				if ($rate_id !== '' && isset($session_map[$rate_id]['id'])) {
-					$session_selected_id = sanitize_text_field((string) $session_map[$rate_id]['id']);
-					if ($session_selected_id !== '') {
-						$selected_id = $session_selected_id;
-					}
-				}
-				$selected_point = $this->resolve_point_by_id($pickup_points, $selected_id);
-				if (isset($selected_point['id'])) {
-					$selected_id = sanitize_text_field((string) $selected_point['id']);
-				}
-				if ($rate_id !== '') {
-					$session_map[$rate_id] = array(
-						'id' => $selected_id,
-						'point' => $selected_point,
 						'pickup_points' => array_values($pickup_points),
-						'source' => isset($session_map[$rate_id]['source']) ? $session_map[$rate_id]['source'] : 'auto_nearest',
+						'krokedil_pickup_points' => array_values($pickup_points),
+						'selected_pickup_point_id' => $selected_id,
+						'krokedil_selected_pickup_point_id' => $selected_id,
+						'selected_pickup_point' => $selected_point,
+						'krokedil_selected_pickup_point' => $selected_point,
+						'state' => 'loaded',
+						'unavailable' => false,
+						'error' => false,
+						'message' => '',
 					);
-				}
-
-				$payload[] = array(
-					'package_index' => (int) $package_index,
-					'rate_id' => $rate_id,
-					'method_id' => method_exists($rate, 'get_method_id') ? (string) $rate->get_method_id() : '',
-					'pickup_points' => array_values($pickup_points),
-					'krokedil_pickup_points' => array_values($pickup_points),
-					'selected_pickup_point_id' => $selected_id,
-					'krokedil_selected_pickup_point_id' => $selected_id,
-					'selected_pickup_point' => $selected_point,
-					'krokedil_selected_pickup_point' => $selected_point,
-					'state' => 'loaded',
-					'unavailable' => false,
-					'error' => false,
-					'message' => '',
-				);
 				}
 			}
-		$this->set_pickup_selection_session_map($session_map);
+			$this->set_pickup_selection_session_map($session_map);
+			$this->log_pickup_compatibility_debug('Generated pickup compatibility payload.', array(
+				'items' => count($payload),
+				'packages' => count($packages),
+			));
 
-		wp_send_json_success(array(
-			'items' => $payload,
-		));
+			wp_send_json_success(array(
+				'items' => $payload,
+			));
+		} catch (Throwable $throwable) {
+			$this->log_pickup_compatibility_debug('Pickup compatibility payload generation failed.', array(
+				'error' => $throwable->getMessage(),
+			), 'error');
+			wp_send_json_success(array('items' => array()));
+		}
 	}
 
 	private function get_pickup_points_for_rate($rate, $rate_id, $destination, $session_map = array()) {
@@ -306,12 +322,12 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 	}
 
 	private function get_shipping_packages_from_session() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 
 		$package_count = 1;
-		if (WC()->cart && method_exists(WC()->cart, 'get_shipping_packages')) {
+		if (isset(WC()->cart) && WC()->cart && method_exists(WC()->cart, 'get_shipping_packages')) {
 			$packages = WC()->cart->get_shipping_packages();
 			if (is_array($packages) && !empty($packages)) {
 				$package_count = count($packages);
@@ -330,26 +346,43 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 	}
 
 	private function get_pickup_selection_session_map() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
-		$value = WC()->session->get(LP_Cargonizer_Checkout_Pickup_Controller::SESSION_KEY, array());
+		$value = WC()->session->get($this->get_pickup_session_key(), array());
 		return is_array($value) ? $value : array();
 	}
 
 	private function set_pickup_selection_session_map($map) {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
+			$this->log_pickup_compatibility_debug('Skipped pickup compatibility session write: WC session unavailable.');
 			return;
 		}
-		WC()->session->set(LP_Cargonizer_Checkout_Pickup_Controller::SESSION_KEY, is_array($map) ? $map : array());
+		WC()->session->set($this->get_pickup_session_key(), is_array($map) ? $map : array());
 	}
 
 	private function get_chosen_shipping_methods() {
-		if (!function_exists('WC') || !WC() || !WC()->session) {
+		if (!$this->has_wc_session()) {
 			return array();
 		}
 		$chosen = WC()->session->get('chosen_shipping_methods', array());
 		return is_array($chosen) ? $chosen : array();
+	}
+
+	private function has_wc_session() {
+		return function_exists('WC') && WC() && isset(WC()->session) && WC()->session;
+	}
+
+	private function get_pickup_session_key() {
+		return class_exists('LP_Cargonizer_Checkout_Pickup_Controller')
+			? LP_Cargonizer_Checkout_Pickup_Controller::SESSION_KEY
+			: 'lp_cargonizer_checkout_pickup_selection_map';
+	}
+
+	private function get_pickup_nonce_action() {
+		return class_exists('LP_Cargonizer_Checkout_Pickup_Controller')
+			? LP_Cargonizer_Checkout_Pickup_Controller::NONCE_ACTION
+			: 'lp_cargonizer_checkout_pickup_point';
 	}
 
 	private function get_live_checkout_settings() {
@@ -410,7 +443,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 
 	private function should_log_pickup_state() {
 		$live_settings = $this->get_live_checkout_settings();
-		return !empty($live_settings['debug_logging']) || (defined('WP_DEBUG') && WP_DEBUG);
+		return !empty($live_settings['debug_logging']);
 	}
 
 	private function has_minimum_destination_for_pickup_points($destination) {
@@ -458,5 +491,23 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			return $meta_data[$key];
 		}
 		return null;
+	}
+
+	private function log_pickup_compatibility_debug($message, $context = array(), $level = 'debug') {
+		if (!$this->should_log_pickup_state()) {
+			return;
+		}
+		if (!function_exists('wc_get_logger')) {
+			return;
+		}
+		$logger = wc_get_logger();
+		if (!$logger) {
+			return;
+		}
+		$method = method_exists($logger, $level) ? $level : 'debug';
+		$logger->$method((string) $message, array(
+			'source' => 'lp-cargonizer-live-checkout',
+			'context' => is_array($context) ? $context : array(),
+		));
 	}
 }

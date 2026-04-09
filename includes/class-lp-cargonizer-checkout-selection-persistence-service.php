@@ -21,46 +21,52 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	}
 
 	public function handle_classic_checkout_order_processed($order_id, $posted_data = array(), $order = null) {
-		if (!$this->is_wc_order($order)) {
-			$order = $order_id ? wc_get_order($order_id) : false;
-		}
+		try {
+			if (!$this->is_wc_order($order)) {
+				$order = $order_id ? wc_get_order($order_id) : false;
+			}
 
-		if (!$this->is_wc_order($order)) {
-			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for classic checkout: order instance unavailable.');
-			return;
-		}
+			if (!$this->is_wc_order($order)) {
+				$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for classic checkout: order instance unavailable.');
+				return;
+			}
 
-		$this->persist_for_order($order, 'classic_checkout');
+			$this->persist_for_order($order, 'classic_checkout');
+		} catch (Throwable $throwable) {
+			$this->log_live_checkout_event('error', 'Checkout selection persistence failed for classic checkout.', array(
+				'order_id' => (int) $order_id,
+				'error' => $throwable->getMessage(),
+			));
+		}
 	}
 
 	public function handle_store_api_checkout_order_processed($order) {
-		if (!$this->is_wc_order($order)) {
-			if (is_numeric($order)) {
-				$order = wc_get_order((int) $order);
-			} else {
-				$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for Store API: order payload was not resolvable.');
+		try {
+			if (!$this->is_wc_order($order)) {
+				if (is_numeric($order)) {
+					$order = wc_get_order((int) $order);
+				} else {
+					$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for Store API: order payload was not resolvable.');
+					return;
+				}
+			}
+
+			if (!$this->is_wc_order($order)) {
+				$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for Store API: order instance unavailable.');
 				return;
 			}
-		}
 
-		if (!$this->is_wc_order($order)) {
-			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence for Store API: order instance unavailable.');
-			return;
+			$this->persist_for_order($order, 'store_api');
+		} catch (Throwable $throwable) {
+			$this->log_live_checkout_event('error', 'Checkout selection persistence failed for Store API.', array(
+				'order_id' => $this->is_wc_order($order) && method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+				'error' => $throwable->getMessage(),
+			));
 		}
-
-		$this->persist_for_order($order, 'store_api');
 	}
 
 	private function persist_for_order($order, $source) {
 		$selected_rates = $this->get_selected_rates_from_session();
-		if (empty($selected_rates)) {
-			$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence: no selected rates in session.', array(
-				'source' => $source,
-				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
-			));
-			return;
-		}
-
 		$pickup_selection_map = $this->get_pickup_selection_session_map();
 		$shipping_items = $order->get_items('shipping');
 		if (empty($shipping_items)) {
@@ -69,6 +75,21 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
 			));
 			return;
+		}
+		if (empty($selected_rates)) {
+			$selected_rates = $this->build_selected_rates_from_shipping_items($shipping_items);
+			if (empty($selected_rates)) {
+				$this->log_live_checkout_event('debug', 'Skipped checkout selection persistence: no selected rates in session and no recoverable live rate in order shipping items.', array(
+					'source' => $source,
+					'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+				));
+				return;
+			}
+			$this->log_live_checkout_event('debug', 'Recovered selected rates for order persistence from shipping items.', array(
+				'source' => $source,
+				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+				'rate_count' => count($selected_rates),
+			));
 		}
 
 		$persisted_rows = array();
@@ -170,8 +191,63 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 		));
 	}
 
+	private function build_selected_rates_from_shipping_items($shipping_items) {
+		$result = array();
+		$package_index = 0;
+		foreach ($shipping_items as $shipping_item) {
+			if (!is_object($shipping_item) || !method_exists($shipping_item, 'get_method_id')) {
+				$package_index++;
+				continue;
+			}
+			$method_id = (string) $shipping_item->get_method_id();
+			if ($method_id !== LP_Cargonizer_Live_Checkout::METHOD_ID) {
+				$package_index++;
+				continue;
+			}
+			$rate_id = method_exists($shipping_item, 'get_instance_id') ? (string) $shipping_item->get_instance_id() : '';
+			$result[$package_index] = array(
+				'package_index' => (int) $package_index,
+				'rate_id' => $rate_id,
+				'method_id' => $method_id,
+				'instance_id' => $rate_id,
+				'label' => method_exists($shipping_item, 'get_name') ? (string) $shipping_item->get_name() : '',
+				'cost' => method_exists($shipping_item, 'get_total') ? (string) $shipping_item->get_total() : '',
+				'meta_data' => $this->extract_order_shipping_item_meta($shipping_item),
+			);
+			$package_index++;
+		}
+		ksort($result);
+		return $result;
+	}
+
+	private function extract_order_shipping_item_meta($shipping_item) {
+		$keys = array(
+			'transport_agreement_id',
+			'carrier_id',
+			'product_id',
+			'method_key',
+			'krokedil_pickup_points',
+			'krokedil_selected_pickup_point',
+			'krokedil_selected_pickup_point_id',
+			'lp_cargonizer_pickup_capable',
+		);
+		$result = array();
+		foreach ($keys as $key) {
+			if (!method_exists($shipping_item, 'get_meta')) {
+				continue;
+			}
+			$value = $shipping_item->get_meta($key, true);
+			if ($value === '' || $value === null) {
+				continue;
+			}
+			$result[$key] = $this->sanitize_recursive($value);
+		}
+		return $result;
+	}
+
 	private function get_selected_rates_from_session() {
 		if (!$this->has_wc_session()) {
+			$this->log_live_checkout_event('debug', 'Skipped reading selected checkout rates from session: WC session unavailable.');
 			return array();
 		}
 
@@ -190,6 +266,10 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			$shipping_for_package = WC()->session->get('shipping_for_package_' . $package_index, array());
 			$rates = isset($shipping_for_package['rates']) && is_array($shipping_for_package['rates']) ? $shipping_for_package['rates'] : array();
 			if (!isset($rates[$chosen_rate_id]) || !is_a($rates[$chosen_rate_id], 'WC_Shipping_Rate')) {
+				$this->log_live_checkout_event('debug', 'Skipping selected shipping rate persistence path: chosen rate not available in package session.', array(
+					'package_index' => (int) $package_index,
+					'chosen_rate_id' => $chosen_rate_id,
+				));
 				continue;
 			}
 
