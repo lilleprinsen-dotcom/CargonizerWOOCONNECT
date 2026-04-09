@@ -117,14 +117,38 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$order_value = $this->get_order_value($package, $live_settings);
 			$eligibility = $this->method_rule_engine->evaluate_methods($methods, $package_result, $order_value);
 			$candidates = isset($eligibility['eligible_methods']) ? $eligibility['eligible_methods'] : array();
+			$candidate_count = count($candidates);
+			if ($candidate_count < 1) {
+				return;
+			}
+			$pruned = $this->prune_quote_candidates_for_package_capabilities($candidates, $package_result);
+			$candidates = isset($pruned['candidates']) ? $pruned['candidates'] : array();
+			$pruned_count = isset($pruned['pruned_count']) ? (int) $pruned['pruned_count'] : 0;
 			if (empty($candidates)) {
+				$this->log_live_checkout_event('debug', 'No live checkout quote candidates remained after local pruning.', array(
+					'considered_count' => $candidate_count,
+					'rule_eligible_count' => $candidate_count,
+					'pruned_count' => $pruned_count,
+					'quoted_count' => 0,
+					'returned_count' => 0,
+				));
 				return;
 			}
 
 			$fallback_behavior = $this->resolve_quote_fallback_behavior($settings, $live_settings);
 			$allow_checkout_with_fallback = $this->should_allow_checkout_with_fallback($settings);
 			$quotes = $this->collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
+			$quoted_count = count($candidates);
+			$successful_quote_count = count($quotes);
 			if (empty($quotes)) {
+				$this->log_live_checkout_event('debug', 'Live checkout quoting completed with no usable quotes.', array(
+					'considered_count' => $candidate_count,
+					'rule_eligible_count' => $candidate_count,
+					'pruned_count' => $pruned_count,
+					'quoted_count' => $quoted_count,
+					'successful_quote_count' => $successful_quote_count,
+					'returned_count' => 0,
+				));
 				$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
 				return;
 			}
@@ -152,8 +176,6 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			);
 
 			if (!empty($quote['pickup_capable'])) {
-				$pickup_points = $this->get_pickup_points_for_rate($quote, $destination, $live_settings);
-				$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
 				$meta_data['lp_cargonizer_pickup_capable'] = 1;
 				$meta_data['lp_cargonizer_pickup_rate_context'] = array(
 					'transport_agreement_id' => $quote['agreement_id'],
@@ -161,9 +183,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 					'product_id' => $quote['product_id'],
 					'method_key' => $quote['method_key'],
 				);
-				$meta_data['krokedil_pickup_points'] = is_array($pickup_points) ? array_values($pickup_points) : array();
-				$meta_data['krokedil_selected_pickup_point'] = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
-				$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
+				$meta_data['krokedil_pickup_points'] = array();
+				$meta_data['krokedil_selected_pickup_point'] = array();
+				$meta_data['krokedil_selected_pickup_point_id'] = '';
 			}
 
 				$this->add_rate(array(
@@ -175,9 +197,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				$added_rates++;
 			}
 			$this->log_live_checkout_event('debug', 'Calculated live shipping package rates.', array(
-				'candidate_count' => count($candidates),
-				'quote_count' => count($quotes),
-				'added_rates' => $added_rates,
+				'considered_count' => $candidate_count,
+				'rule_eligible_count' => $candidate_count,
+				'pruned_count' => $pruned_count,
+				'quoted_count' => $quoted_count,
+				'successful_quote_count' => $successful_quote_count,
+				'returned_count' => $added_rates,
 			));
 
 			if ($added_rates < 1) {
@@ -239,10 +264,18 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
 			'recipient' => $recipient,
 			'packages' => $packages,
+			'package_summary' => $package_summary,
 			'method_pricing' => $method_pricing,
+			'method_context' => array(
+				'delivery_to_pickup_point' => !empty($method['delivery_to_pickup_point']) ? 1 : 0,
+				'delivery_to_home' => !empty($method['delivery_to_home']) ? 1 : 0,
+				'mailbox_like' => $this->is_method_mailbox_like($method) ? 1 : 0,
+				'pickup_like' => $this->api_service->is_method_explicitly_pickup_point($method) ? 1 : 0,
+			),
 			'pricing_context' => array(
 				'show_prices_including_vat' => !empty($live_settings['show_prices_including_vat']),
-				'quote_timeout_seconds' => isset($live_settings['quote_timeout_seconds']) ? (float) $live_settings['quote_timeout_seconds'] : 5,
+				'quote_timeout_seconds' => $this->resolve_frontend_quote_timeout($live_settings),
+				'quote_fallback_behavior' => (string) $fallback_behavior,
 			),
 		)));
 		if ($cache_ttl > 0) {
@@ -261,10 +294,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			return array('success' => false);
 		}
 
-		$timeout = isset($live_settings['quote_timeout_seconds']) ? (float) $live_settings['quote_timeout_seconds'] : 5;
-		if ($timeout <= 0) {
-			$timeout = 5;
-		}
+		$timeout = $this->resolve_frontend_quote_timeout($live_settings);
 		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => $timeout,
 			'headers' => array_merge($this->api_service->get_auth_headers(), array(
@@ -444,6 +474,47 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$methods[] = $method;
 		}
 		return $methods;
+	}
+
+	private function prune_quote_candidates_for_package_capabilities($candidates, $package_result) {
+		$summary = isset($package_result['summary']) && is_array($package_result['summary']) ? $package_result['summary'] : array();
+		$pickup_possible = !empty($summary['all_pickup_capable']);
+		$mailbox_possible = !empty($summary['all_mailbox_capable']);
+		$filtered = array();
+		$pruned = 0;
+
+		foreach ($candidates as $method) {
+			$is_pickup_method = $this->api_service->is_method_explicitly_pickup_point($method);
+			$is_mailbox_method = $this->is_method_mailbox_like($method);
+			if ($is_pickup_method && !$pickup_possible) {
+				$pruned++;
+				continue;
+			}
+			if ($is_mailbox_method && !$mailbox_possible) {
+				$pruned++;
+				continue;
+			}
+			$filtered[] = $method;
+		}
+
+		return array(
+			'candidates' => $filtered,
+			'pruned_count' => $pruned,
+		);
+	}
+
+	private function is_method_mailbox_like($method) {
+		$product_id = isset($method['product_id']) ? strtolower((string) $method['product_id']) : '';
+		$product_name = isset($method['product_name']) ? strtolower((string) $method['product_name']) : '';
+		$label = isset($method['label']) ? strtolower((string) $method['label']) : '';
+		$haystack = $product_id . ' ' . $product_name . ' ' . $label;
+		$needles = array('mailbox', 'letterbox', 'postkasse', 'pakke i postkassen');
+		foreach ($needles as $needle) {
+			if ($needle !== '' && strpos($haystack, $needle) !== false) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private function build_package_result($package) {
@@ -951,5 +1022,13 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$settings = $this->settings_service->get_settings();
 		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
 		return !empty($live_settings['debug_logging']);
+	}
+
+	private function resolve_frontend_quote_timeout($live_settings) {
+		$timeout = isset($live_settings['quote_timeout_seconds']) ? (float) $live_settings['quote_timeout_seconds'] : 3.0;
+		if ($timeout <= 0) {
+			$timeout = 3.0;
+		}
+		return max(1.0, min(15.0, $timeout));
 	}
 }

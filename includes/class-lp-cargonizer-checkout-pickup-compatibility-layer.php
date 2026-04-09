@@ -112,6 +112,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 							$session_map[$rate_id] = array(
 								'id' => '',
 								'point' => array(),
+								'pickup_points' => array(),
 								'source' => $existing_source,
 								'rate_context' => $rate_context,
 							);
@@ -159,6 +160,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 						$session_map[$rate_id] = array(
 							'id' => $selected_id,
 							'point' => $selected_point,
+							'pickup_points' => array_values($pickup_points),
 							'source' => isset($session_map[$rate_id]['source']) ? $session_map[$rate_id]['source'] : 'auto_nearest',
 							'rate_context' => $rate_context,
 						);
@@ -268,6 +270,12 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			'address' => sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : ''))),
 		);
 		$live_settings = $this->get_live_checkout_settings();
+		$pickup_timeout = isset($live_settings['pickup_point_timeout_seconds']) ? (float) $live_settings['pickup_point_timeout_seconds'] : 8.0;
+		if ($pickup_timeout <= 0) {
+			$pickup_timeout = 8.0;
+		}
+		$pickup_timeout = max(1.0, min(30.0, $pickup_timeout));
+		$lookup_method['request_timeout_seconds'] = $pickup_timeout;
 		$cache_ttl = isset($live_settings['pickup_point_cache_ttl_seconds']) ? max(0, (int) $live_settings['pickup_point_cache_ttl_seconds']) : 300;
 		$custom = $this->api_service->detect_servicepartner_custom_params($lookup_method);
 		$cache_key = 'lp_carg_pickup_' . md5(wp_json_encode(array(
@@ -278,6 +286,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			'postcode' => $lookup_method['postcode'],
 			'city' => $lookup_method['city'],
 			'address' => $lookup_method['address'],
+			'request_timeout_seconds' => $pickup_timeout,
 			'custom' => isset($custom['params']) ? $custom['params'] : array(),
 		)));
 		if ($cache_ttl > 0) {
