@@ -175,6 +175,32 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		<?php
 	}
 
+	private function parse_live_checkout_json_array_input($raw_value) {
+		if (!is_scalar($raw_value)) {
+			return array();
+		}
+		$decoded = json_decode((string) $raw_value, true);
+		return is_array($decoded) ? $decoded : array();
+	}
+
+	private function parse_live_checkout_lines_to_list($raw_value) {
+		if (!is_scalar($raw_value)) {
+			return array();
+		}
+		$lines = preg_split('/\r\n|\r|\n/', (string) $raw_value);
+		if (!is_array($lines)) {
+			return array();
+		}
+		$result = array();
+		foreach ($lines as $line) {
+			$line = sanitize_text_field(trim((string) $line));
+			if ($line !== '') {
+				$result[] = $line;
+			}
+		}
+		return $result;
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -208,6 +234,22 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array()),
 				'method_discounts' => isset($_POST['lp_cargonizer_method_discounts']) && is_array($_POST['lp_cargonizer_method_discounts']) ? wp_unslash($_POST['lp_cargonizer_method_discounts']) : array(),
 				'method_pricing' => isset($_POST['lp_cargonizer_method_pricing']) && is_array($_POST['lp_cargonizer_method_pricing']) ? wp_unslash($_POST['lp_cargonizer_method_pricing']) : array(),
+				'live_checkout' => isset($_POST['lp_cargonizer_live_checkout']) && is_array($_POST['lp_cargonizer_live_checkout']) ? wp_unslash($_POST['lp_cargonizer_live_checkout']) : array(),
+				'shipping_profiles' => array(
+					'default_profile_slug' => isset($_POST['lp_cargonizer_shipping_profiles_default_slug']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_shipping_profiles_default_slug'])) : '',
+					'profiles' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : ''),
+				),
+				'package_resolution' => array(
+					'fallback_sources' => $this->parse_live_checkout_lines_to_list(isset($_POST['lp_cargonizer_package_resolution_fallback_sources']) ? wp_unslash($_POST['lp_cargonizer_package_resolution_fallback_sources']) : ''),
+				),
+				'checkout_method_rules' => array(
+					'rules' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_method_rules_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules_json']) : ''),
+				),
+				'checkout_fallback' => array(
+					'on_quote_failure' => isset($_POST['lp_cargonizer_checkout_fallback_on_quote_failure']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_on_quote_failure'])) : '',
+					'allow_checkout_with_fallback' => isset($_POST['lp_cargonizer_checkout_fallback_allow_checkout']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_allow_checkout'])) : '0',
+					'safe_fallback_rates' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_fallback_rates_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_fallback_rates_json']) : ''),
+				),
 			);
 
 			$new_settings = $this->sanitize_settings($new_settings);
@@ -648,6 +690,133 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							Lagre innstillinger og metodevalg
 						</button>
 					</p>
+
+					<?php
+					$live_checkout = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+					$shipping_profiles = isset($settings['shipping_profiles']) && is_array($settings['shipping_profiles']) ? $settings['shipping_profiles'] : array();
+					$package_resolution = isset($settings['package_resolution']) && is_array($settings['package_resolution']) ? $settings['package_resolution'] : array();
+					$checkout_method_rules = isset($settings['checkout_method_rules']) && is_array($settings['checkout_method_rules']) ? $settings['checkout_method_rules'] : array();
+					$checkout_fallback = isset($settings['checkout_fallback']) && is_array($settings['checkout_fallback']) ? $settings['checkout_fallback'] : array();
+					?>
+
+					<hr style="margin:24px 0;">
+					<h2>Live checkout shipping (grunninnstillinger)</h2>
+					<p>Dette oppsettet klargjør datamodellen for live checkout-frakt. Frontend checkout-logikk er ikke aktivert her.</p>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<tr>
+								<th scope="row">Aktiver live checkout</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_live_checkout[enabled]" value="0">
+									<label><input type="checkbox" name="lp_cargonizer_live_checkout[enabled]" value="1" <?php checked(!empty($live_checkout['enabled'])); ?>> Aktiver dataoppsett for live checkout-metoder</label>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">Norge-begrensning</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_live_checkout[norway_only_enabled]" value="0">
+									<label><input type="checkbox" name="lp_cargonizer_live_checkout[norway_only_enabled]" value="1" <?php checked(!empty($live_checkout['norway_only_enabled'])); ?>> Kun Norge i checkout (NO)</label>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">Prisvisning</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_live_checkout[show_prices_including_vat]" value="0">
+									<label><input type="checkbox" name="lp_cargonizer_live_checkout[show_prices_including_vat]" value="1" <?php checked(!empty($live_checkout['show_prices_including_vat'])); ?>> Vis priser inkludert MVA</label>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_free_shipping_threshold">Gratis frakt terskel (NOK)</label></th>
+								<td>
+									<input id="lp_cargonizer_live_checkout_free_shipping_threshold" type="number" min="0" step="0.01" name="lp_cargonizer_live_checkout[free_shipping_threshold]" value="<?php echo esc_attr(isset($live_checkout['free_shipping_threshold']) ? $live_checkout['free_shipping_threshold'] : 1500); ?>">
+									<p class="description">Standard er 1500.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_low_price_option_amount">Lavprisalternativ (NOK)</label></th>
+								<td>
+									<input id="lp_cargonizer_live_checkout_low_price_option_amount" type="number" min="0" step="0.01" name="lp_cargonizer_live_checkout[low_price_option_amount]" value="<?php echo esc_attr(isset($live_checkout['low_price_option_amount']) ? $live_checkout['low_price_option_amount'] : 69); ?>">
+									<p class="description">Standard er 69.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_low_price_strategy">Lavpris-strategi</label></th>
+								<td>
+									<select id="lp_cargonizer_live_checkout_low_price_strategy" name="lp_cargonizer_live_checkout[low_price_strategy]">
+										<option value="cheapest_eligible_live" <?php selected(isset($live_checkout['low_price_strategy']) ? $live_checkout['low_price_strategy'] : 'cheapest_eligible_live', 'cheapest_eligible_live'); ?>>Billigste kvalifiserte live-estimat</option>
+									</select>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_free_shipping_strategy">Gratis frakt-strategi</label></th>
+								<td>
+									<select id="lp_cargonizer_live_checkout_free_shipping_strategy" name="lp_cargonizer_live_checkout[free_shipping_strategy]">
+										<option value="cheapest_standard_eligible" <?php selected(isset($live_checkout['free_shipping_strategy']) ? $live_checkout['free_shipping_strategy'] : 'cheapest_standard_eligible', 'cheapest_standard_eligible'); ?>>Billigste standard kvalifiserte alternativ</option>
+										<option value="disabled" <?php selected(isset($live_checkout['free_shipping_strategy']) ? $live_checkout['free_shipping_strategy'] : 'cheapest_standard_eligible', 'disabled'); ?>>Deaktivert</option>
+									</select>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_quote_timeout_seconds">Quote timeout (sekunder)</label></th>
+								<td>
+									<input id="lp_cargonizer_live_checkout_quote_timeout_seconds" type="number" min="0" step="0.1" name="lp_cargonizer_live_checkout[quote_timeout_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_timeout_seconds']) ? $live_checkout['quote_timeout_seconds'] : 5); ?>">
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_quote_fallback_behavior">Quote fallback-adferd</label></th>
+								<td>
+									<select id="lp_cargonizer_live_checkout_quote_fallback_behavior" name="lp_cargonizer_live_checkout[quote_fallback_behavior]">
+										<option value="safe_fallback_rate" <?php selected(isset($live_checkout['quote_fallback_behavior']) ? $live_checkout['quote_fallback_behavior'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
+										<option value="hide_live_checkout" <?php selected(isset($live_checkout['quote_fallback_behavior']) ? $live_checkout['quote_fallback_behavior'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
+										<option value="use_last_known_rate" <?php selected(isset($live_checkout['quote_fallback_behavior']) ? $live_checkout['quote_fallback_behavior'] : 'safe_fallback_rate', 'use_last_known_rate'); ?>>Bruk sist kjente rate</option>
+									</select>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_quote_cache_ttl_seconds">Quote cache TTL (sekunder)</label></th>
+								<td><input id="lp_cargonizer_live_checkout_quote_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[quote_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_cache_ttl_seconds']) ? $live_checkout['quote_cache_ttl_seconds'] : 300); ?>"></td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_pickup_point_cache_ttl_seconds">Pickup-point cache TTL (sekunder)</label></th>
+								<td><input id="lp_cargonizer_live_checkout_pickup_point_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[pickup_point_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['pickup_point_cache_ttl_seconds']) ? $live_checkout['pickup_point_cache_ttl_seconds'] : 300); ?>"></td>
+							</tr>
+						</tbody>
+					</table>
+
+					<h2>Shipping profiles</h2>
+					<p class="description">Legg inn profiler som JSON-array. Felt per profil: <code>slug</code>, <code>label</code>, <code>default_weight</code>, <code>default_dimensions[length,width,height]</code>, og <code>flags</code> (pickup_capable, mailbox_capable, bulky, high_value_secure, force_separate_package).</p>
+					<p>
+						<label for="lp_cargonizer_shipping_profiles_default_slug"><strong>Default profile slug</strong></label><br>
+						<input id="lp_cargonizer_shipping_profiles_default_slug" type="text" class="regular-text" name="lp_cargonizer_shipping_profiles_default_slug" value="<?php echo esc_attr(isset($shipping_profiles['default_profile_slug']) ? $shipping_profiles['default_profile_slug'] : 'default'); ?>">
+					</p>
+					<p>
+						<label for="lp_cargonizer_shipping_profiles_json"><strong>Profiler (JSON)</strong></label><br>
+						<textarea id="lp_cargonizer_shipping_profiles_json" name="lp_cargonizer_shipping_profiles_json" rows="10" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($shipping_profiles['profiles']) ? $shipping_profiles['profiles'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
+					</p>
+
+					<h2>Package resolution</h2>
+					<p class="description">Fallback-kilder i prioritert rekkefølge, én per linje. Tillatte verdier: product_dimensions, product_override, shipping_class_profile, category_profile, value_rule, default_profile.</p>
+					<textarea name="lp_cargonizer_package_resolution_fallback_sources" rows="6" class="large-text code"><?php echo esc_textarea(implode("\n", isset($package_resolution['fallback_sources']) && is_array($package_resolution['fallback_sources']) ? $package_resolution['fallback_sources'] : array())); ?></textarea>
+
+					<h2>Checkout method rules</h2>
+					<p class="description">Regler per metode som JSON-array. Hver regel bør inkludere: method_key, enabled, customer_title, allow_low_price, allow_free_shipping, conditions, group_label, embedded_label.</p>
+					<textarea name="lp_cargonizer_checkout_method_rules_json" rows="10" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
+
+					<h2>Checkout fallback</h2>
+					<p>
+						<label for="lp_cargonizer_checkout_fallback_on_quote_failure"><strong>Ved timeout/API-feil</strong></label><br>
+						<select id="lp_cargonizer_checkout_fallback_on_quote_failure" name="lp_cargonizer_checkout_fallback_on_quote_failure">
+							<option value="safe_fallback_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
+							<option value="block_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'block_checkout'); ?>>Blokker checkout</option>
+							<option value="hide_live_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
+						</select>
+					</p>
+					<p>
+						<input type="hidden" name="lp_cargonizer_checkout_fallback_allow_checkout" value="0">
+						<label><input type="checkbox" name="lp_cargonizer_checkout_fallback_allow_checkout" value="1" <?php checked(!empty($checkout_fallback['allow_checkout_with_fallback'])); ?>> Tillat checkout å fortsette med fallback-rater</label>
+					</p>
+					<p class="description">Fallback-rater som JSON-array med feltene method_key, label og price.</p>
+					<textarea name="lp_cargonizer_checkout_fallback_rates_json" rows="8" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_fallback['safe_fallback_rates']) ? $checkout_fallback['safe_fallback_rates'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
 				</form>
 			</div>
 

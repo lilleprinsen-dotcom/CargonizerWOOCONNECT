@@ -25,6 +25,11 @@ class LP_Cargonizer_Settings_Service {
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
 			'method_pricing' => array(),
+			'live_checkout' => $this->get_live_checkout_defaults(),
+			'shipping_profiles' => $this->get_shipping_profiles_defaults(),
+			'package_resolution' => $this->get_package_resolution_defaults(),
+			'checkout_method_rules' => $this->get_checkout_method_rules_defaults(),
+			'checkout_fallback' => $this->get_checkout_fallback_defaults(),
 		);
 
 		$saved = get_option($this->option_key, array());
@@ -54,6 +59,26 @@ class LP_Cargonizer_Settings_Service {
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
 			'method_pricing' => array(),
+			'live_checkout' => $this->sanitize_live_checkout_settings(
+				isset($input['live_checkout']) && is_array($input['live_checkout']) ? $input['live_checkout'] : array(),
+				isset($current['live_checkout']) && is_array($current['live_checkout']) ? $current['live_checkout'] : array()
+			),
+			'shipping_profiles' => $this->sanitize_shipping_profiles_settings(
+				isset($input['shipping_profiles']) && is_array($input['shipping_profiles']) ? $input['shipping_profiles'] : array(),
+				isset($current['shipping_profiles']) && is_array($current['shipping_profiles']) ? $current['shipping_profiles'] : array()
+			),
+			'package_resolution' => $this->sanitize_package_resolution_settings(
+				isset($input['package_resolution']) && is_array($input['package_resolution']) ? $input['package_resolution'] : array(),
+				isset($current['package_resolution']) && is_array($current['package_resolution']) ? $current['package_resolution'] : array()
+			),
+			'checkout_method_rules' => $this->sanitize_checkout_method_rules_settings(
+				isset($input['checkout_method_rules']) && is_array($input['checkout_method_rules']) ? $input['checkout_method_rules'] : array(),
+				isset($current['checkout_method_rules']) && is_array($current['checkout_method_rules']) ? $current['checkout_method_rules'] : array()
+			),
+			'checkout_fallback' => $this->sanitize_checkout_fallback_settings(
+				isset($input['checkout_fallback']) && is_array($input['checkout_fallback']) ? $input['checkout_fallback'] : array(),
+				isset($current['checkout_fallback']) && is_array($current['checkout_fallback']) ? $current['checkout_fallback'] : array()
+			),
 		);
 
 		if ($output['api_key'] === '' && !empty($current['api_key'])) {
@@ -184,6 +209,296 @@ class LP_Cargonizer_Settings_Service {
 					'delivery_to_home' => 1,
 				);
 			}
+		}
+
+		return $output;
+	}
+
+	private function get_live_checkout_defaults() {
+		return array(
+			'enabled' => 0,
+			'norway_only_enabled' => 1,
+			'show_prices_including_vat' => 1,
+			'free_shipping_threshold' => 1500,
+			'low_price_option_amount' => 69,
+			'low_price_strategy' => 'cheapest_eligible_live',
+			'free_shipping_strategy' => 'cheapest_standard_eligible',
+			'quote_timeout_seconds' => 5,
+			'quote_fallback_behavior' => 'safe_fallback_rate',
+			'quote_cache_ttl_seconds' => 300,
+			'pickup_point_cache_ttl_seconds' => 300,
+		);
+	}
+
+	private function get_shipping_profiles_defaults() {
+		return array(
+			'default_profile_slug' => 'default',
+			'profiles' => array(
+				array(
+					'slug' => 'default',
+					'label' => 'Standard',
+					'default_weight' => 1,
+					'default_dimensions' => array(
+						'length' => 30,
+						'width' => 20,
+						'height' => 10,
+					),
+					'flags' => array(
+						'pickup_capable' => 1,
+						'mailbox_capable' => 0,
+						'bulky' => 0,
+						'high_value_secure' => 0,
+						'force_separate_package' => 0,
+					),
+				),
+			),
+		);
+	}
+
+	private function get_package_resolution_defaults() {
+		return array(
+			'fallback_sources' => array(
+				'product_dimensions',
+				'product_override',
+				'shipping_class_profile',
+				'category_profile',
+				'value_rule',
+				'default_profile',
+			),
+		);
+	}
+
+	private function get_checkout_method_rules_defaults() {
+		return array(
+			'rules' => array(),
+		);
+	}
+
+	private function get_checkout_fallback_defaults() {
+		return array(
+			'on_quote_failure' => 'safe_fallback_rate',
+			'safe_fallback_rates' => array(
+				array(
+					'method_key' => 'fallback_standard',
+					'label' => 'Standard frakt',
+					'price' => 69,
+				),
+			),
+			'allow_checkout_with_fallback' => 1,
+		);
+	}
+
+	private function sanitize_live_checkout_settings($input, $current) {
+		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_live_checkout_defaults());
+		$output = array(
+			'enabled' => isset($input['enabled']) ? $this->sanitize_checkbox_value($input['enabled']) : $this->sanitize_checkbox_value($base['enabled']),
+			'norway_only_enabled' => isset($input['norway_only_enabled']) ? $this->sanitize_checkbox_value($input['norway_only_enabled']) : $this->sanitize_checkbox_value($base['norway_only_enabled']),
+			'show_prices_including_vat' => isset($input['show_prices_including_vat']) ? $this->sanitize_checkbox_value($input['show_prices_including_vat']) : $this->sanitize_checkbox_value($base['show_prices_including_vat']),
+			'free_shipping_threshold' => isset($input['free_shipping_threshold']) ? $this->sanitize_non_negative_number($input['free_shipping_threshold']) : $this->sanitize_non_negative_number($base['free_shipping_threshold']),
+			'low_price_option_amount' => isset($input['low_price_option_amount']) ? $this->sanitize_non_negative_number($input['low_price_option_amount']) : $this->sanitize_non_negative_number($base['low_price_option_amount']),
+			'low_price_strategy' => isset($input['low_price_strategy']) ? sanitize_text_field((string) $input['low_price_strategy']) : sanitize_text_field((string) $base['low_price_strategy']),
+			'free_shipping_strategy' => isset($input['free_shipping_strategy']) ? sanitize_text_field((string) $input['free_shipping_strategy']) : sanitize_text_field((string) $base['free_shipping_strategy']),
+			'quote_timeout_seconds' => isset($input['quote_timeout_seconds']) ? $this->sanitize_non_negative_number($input['quote_timeout_seconds']) : $this->sanitize_non_negative_number($base['quote_timeout_seconds']),
+			'quote_fallback_behavior' => isset($input['quote_fallback_behavior']) ? sanitize_text_field((string) $input['quote_fallback_behavior']) : sanitize_text_field((string) $base['quote_fallback_behavior']),
+			'quote_cache_ttl_seconds' => isset($input['quote_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['quote_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['quote_cache_ttl_seconds']),
+			'pickup_point_cache_ttl_seconds' => isset($input['pickup_point_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['pickup_point_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['pickup_point_cache_ttl_seconds']),
+		);
+
+		$allowed_low_price = array('cheapest_eligible_live');
+		if (!in_array($output['low_price_strategy'], $allowed_low_price, true)) {
+			$output['low_price_strategy'] = 'cheapest_eligible_live';
+		}
+
+		$allowed_free_shipping = array('cheapest_standard_eligible', 'disabled');
+		if (!in_array($output['free_shipping_strategy'], $allowed_free_shipping, true)) {
+			$output['free_shipping_strategy'] = 'cheapest_standard_eligible';
+		}
+
+		$allowed_fallback_behavior = array('safe_fallback_rate', 'hide_live_checkout', 'use_last_known_rate');
+		if (!in_array($output['quote_fallback_behavior'], $allowed_fallback_behavior, true)) {
+			$output['quote_fallback_behavior'] = 'safe_fallback_rate';
+		}
+
+		return $output;
+	}
+
+	private function sanitize_shipping_profiles_settings($input, $current) {
+		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_shipping_profiles_defaults());
+		$output = array(
+			'default_profile_slug' => isset($input['default_profile_slug']) ? sanitize_key((string) $input['default_profile_slug']) : sanitize_key((string) $base['default_profile_slug']),
+			'profiles' => array(),
+		);
+
+		$profiles = isset($input['profiles']) && is_array($input['profiles']) ? $input['profiles'] : (isset($base['profiles']) && is_array($base['profiles']) ? $base['profiles'] : array());
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) {
+				continue;
+			}
+
+			$slug = isset($profile['slug']) ? sanitize_key((string) $profile['slug']) : '';
+			if ($slug === '') {
+				continue;
+			}
+
+			$output['profiles'][] = array(
+				'slug' => $slug,
+				'label' => isset($profile['label']) ? sanitize_text_field((string) $profile['label']) : $slug,
+				'default_weight' => isset($profile['default_weight']) ? $this->sanitize_non_negative_number($profile['default_weight']) : 0,
+				'default_dimensions' => array(
+					'length' => isset($profile['default_dimensions']['length']) ? $this->sanitize_non_negative_number($profile['default_dimensions']['length']) : 0,
+					'width' => isset($profile['default_dimensions']['width']) ? $this->sanitize_non_negative_number($profile['default_dimensions']['width']) : 0,
+					'height' => isset($profile['default_dimensions']['height']) ? $this->sanitize_non_negative_number($profile['default_dimensions']['height']) : 0,
+				),
+				'flags' => array(
+					'pickup_capable' => isset($profile['flags']['pickup_capable']) ? $this->sanitize_checkbox_value($profile['flags']['pickup_capable']) : 0,
+					'mailbox_capable' => isset($profile['flags']['mailbox_capable']) ? $this->sanitize_checkbox_value($profile['flags']['mailbox_capable']) : 0,
+					'bulky' => isset($profile['flags']['bulky']) ? $this->sanitize_checkbox_value($profile['flags']['bulky']) : 0,
+					'high_value_secure' => isset($profile['flags']['high_value_secure']) ? $this->sanitize_checkbox_value($profile['flags']['high_value_secure']) : 0,
+					'force_separate_package' => isset($profile['flags']['force_separate_package']) ? $this->sanitize_checkbox_value($profile['flags']['force_separate_package']) : 0,
+				),
+			);
+		}
+
+		if (empty($output['profiles'])) {
+			$output['profiles'] = $this->get_shipping_profiles_defaults()['profiles'];
+		}
+
+		$profile_slugs = array();
+		foreach ($output['profiles'] as $profile) {
+			$profile_slugs[$profile['slug']] = true;
+		}
+		if ($output['default_profile_slug'] === '' || !isset($profile_slugs[$output['default_profile_slug']])) {
+			$output['default_profile_slug'] = isset($output['profiles'][0]['slug']) ? $output['profiles'][0]['slug'] : 'default';
+		}
+
+		return $output;
+	}
+
+	private function sanitize_package_resolution_settings($input, $current) {
+		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_package_resolution_defaults());
+		$output = array('fallback_sources' => array());
+		$sources = isset($input['fallback_sources']) && is_array($input['fallback_sources']) ? $input['fallback_sources'] : (isset($base['fallback_sources']) && is_array($base['fallback_sources']) ? $base['fallback_sources'] : array());
+		$allowed = array(
+			'product_dimensions',
+			'product_override',
+			'shipping_class_profile',
+			'category_profile',
+			'value_rule',
+			'default_profile',
+		);
+		foreach ($sources as $source) {
+			$clean = sanitize_key((string) $source);
+			if (in_array($clean, $allowed, true)) {
+				$output['fallback_sources'][] = $clean;
+			}
+		}
+		$output['fallback_sources'] = array_values(array_unique($output['fallback_sources']));
+		if (empty($output['fallback_sources'])) {
+			$output['fallback_sources'] = $this->get_package_resolution_defaults()['fallback_sources'];
+		}
+		return $output;
+	}
+
+	private function sanitize_checkout_method_rules_settings($input, $current) {
+		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_checkout_method_rules_defaults());
+		$output = array('rules' => array());
+		$rules = isset($input['rules']) && is_array($input['rules']) ? $input['rules'] : (isset($base['rules']) && is_array($base['rules']) ? $base['rules'] : array());
+
+		foreach ($rules as $rule) {
+			if (!is_array($rule)) {
+				continue;
+			}
+
+			$method_key = isset($rule['method_key']) ? sanitize_text_field((string) $rule['method_key']) : '';
+			if ($method_key === '') {
+				continue;
+			}
+
+			$output['rules'][] = array(
+				'method_key' => $method_key,
+				'enabled' => isset($rule['enabled']) ? $this->sanitize_checkbox_value($rule['enabled']) : 1,
+				'customer_title' => isset($rule['customer_title']) ? sanitize_text_field((string) $rule['customer_title']) : '',
+				'allow_low_price' => isset($rule['allow_low_price']) ? $this->sanitize_checkbox_value($rule['allow_low_price']) : 1,
+				'allow_free_shipping' => isset($rule['allow_free_shipping']) ? $this->sanitize_checkbox_value($rule['allow_free_shipping']) : 1,
+				'conditions' => isset($rule['conditions']) && is_array($rule['conditions']) ? $this->sanitize_method_rule_conditions($rule['conditions']) : array(),
+				'group_label' => isset($rule['group_label']) ? sanitize_text_field((string) $rule['group_label']) : '',
+				'embedded_label' => isset($rule['embedded_label']) ? sanitize_text_field((string) $rule['embedded_label']) : '',
+			);
+		}
+
+		return $output;
+	}
+
+	private function sanitize_method_rule_conditions($conditions) {
+		$output = array();
+		$allowed_text_conditions = array(
+			'profile_slug',
+			'category_slug',
+			'security_level',
+		);
+		foreach ($allowed_text_conditions as $key) {
+			if (isset($conditions[$key])) {
+				$output[$key] = sanitize_text_field((string) $conditions[$key]);
+			}
+		}
+
+		$allowed_numeric_conditions = array(
+			'min_weight',
+			'max_weight',
+			'min_order_value',
+			'max_order_value',
+		);
+		foreach ($allowed_numeric_conditions as $key) {
+			if (isset($conditions[$key])) {
+				$output[$key] = $this->sanitize_non_negative_number($conditions[$key]);
+			}
+		}
+
+		$allowed_checkbox_conditions = array(
+			'require_separate_package',
+			'require_high_value',
+			'require_security',
+		);
+		foreach ($allowed_checkbox_conditions as $key) {
+			if (isset($conditions[$key])) {
+				$output[$key] = $this->sanitize_checkbox_value($conditions[$key]);
+			}
+		}
+
+		return $output;
+	}
+
+	private function sanitize_checkout_fallback_settings($input, $current) {
+		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_checkout_fallback_defaults());
+		$output = array(
+			'on_quote_failure' => isset($input['on_quote_failure']) ? sanitize_text_field((string) $input['on_quote_failure']) : sanitize_text_field((string) $base['on_quote_failure']),
+			'safe_fallback_rates' => array(),
+			'allow_checkout_with_fallback' => isset($input['allow_checkout_with_fallback']) ? $this->sanitize_checkbox_value($input['allow_checkout_with_fallback']) : $this->sanitize_checkbox_value($base['allow_checkout_with_fallback']),
+		);
+
+		$rates = isset($input['safe_fallback_rates']) && is_array($input['safe_fallback_rates']) ? $input['safe_fallback_rates'] : (isset($base['safe_fallback_rates']) && is_array($base['safe_fallback_rates']) ? $base['safe_fallback_rates'] : array());
+		foreach ($rates as $rate) {
+			if (!is_array($rate)) {
+				continue;
+			}
+			$method_key = isset($rate['method_key']) ? sanitize_text_field((string) $rate['method_key']) : '';
+			if ($method_key === '') {
+				continue;
+			}
+			$output['safe_fallback_rates'][] = array(
+				'method_key' => $method_key,
+				'label' => isset($rate['label']) ? sanitize_text_field((string) $rate['label']) : '',
+				'price' => isset($rate['price']) ? $this->sanitize_non_negative_number($rate['price']) : 0,
+			);
+		}
+
+		if (empty($output['safe_fallback_rates'])) {
+			$output['safe_fallback_rates'] = $this->get_checkout_fallback_defaults()['safe_fallback_rates'];
+		}
+
+		$allowed_failure_modes = array('safe_fallback_rate', 'block_checkout', 'hide_live_checkout');
+		if (!in_array($output['on_quote_failure'], $allowed_failure_modes, true)) {
+			$output['on_quote_failure'] = 'safe_fallback_rate';
 		}
 
 		return $output;
