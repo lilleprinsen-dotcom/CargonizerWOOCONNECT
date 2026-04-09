@@ -152,6 +152,8 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			);
 
 			if (!empty($quote['pickup_capable'])) {
+				$pickup_points = $this->get_pickup_points_for_rate($quote, $destination, $live_settings);
+				$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
 				$meta_data['lp_cargonizer_pickup_capable'] = 1;
 				$meta_data['lp_cargonizer_pickup_rate_context'] = array(
 					'transport_agreement_id' => $quote['agreement_id'],
@@ -159,9 +161,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 					'product_id' => $quote['product_id'],
 					'method_key' => $quote['method_key'],
 				);
-				$meta_data['krokedil_pickup_points'] = array();
-				$meta_data['krokedil_selected_pickup_point'] = array();
-				$meta_data['krokedil_selected_pickup_point_id'] = '';
+				$meta_data['krokedil_pickup_points'] = is_array($pickup_points) ? array_values($pickup_points) : array();
+				$meta_data['krokedil_selected_pickup_point'] = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
+				$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
 			}
 
 				$this->add_rate(array(
@@ -661,16 +663,28 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$selected_id = (string) $first['id'];
 		$selected_point = $first;
 		$session_map = $this->get_pickup_selection_session_map();
+		$selection_source = 'auto_nearest';
 		if (isset($session_map[$rate_id]) && is_array($session_map[$rate_id])) {
 			$stored_id = isset($session_map[$rate_id]['id']) ? sanitize_text_field((string) $session_map[$rate_id]['id']) : '';
 			if ($stored_id !== '') {
+				$selection_source = 'customer_override';
+				$matched = false;
 				foreach ($pickup_points as $point) {
 					$point_id = isset($point['id']) ? (string) $point['id'] : '';
 					if ($point_id === $stored_id) {
 						$selected_id = $point_id;
 						$selected_point = $point;
+						$matched = true;
 						break;
 					}
+				}
+				if (!$matched) {
+					$this->log_live_checkout_event('debug', 'Previously selected pickup point was unavailable for the refreshed rate payload; fell back to deterministic nearest point.', array(
+						'rate_id' => (string) $rate_id,
+						'requested_pickup_point_id' => $stored_id,
+						'fallback_pickup_point_id' => $selected_id,
+					));
+					$selection_source = 'customer_override_fallback_unavailable';
 				}
 			}
 		}
@@ -679,6 +693,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$session_map[$rate_id] = array(
 				'id' => $selected_id,
 				'point' => $selected_point,
+				'source' => $selection_source,
+				'rate_context' => array(
+					'rate_id' => (string) $rate_id,
+				),
 			);
 			$this->set_pickup_selection_session_map($session_map);
 		}
