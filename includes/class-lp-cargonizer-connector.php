@@ -29,6 +29,14 @@ class LP_Cargonizer_Connector {
 	private $api_service;
 	/** @var LP_Cargonizer_Estimator_Service */
 	private $estimator_service;
+	/** @var LP_Cargonizer_Package_Resolution_Service */
+	private $package_resolution_service;
+	/** @var LP_Cargonizer_Shipping_Profile_Resolver */
+	private $shipping_profile_resolver;
+	/** @var LP_Cargonizer_Package_Builder */
+	private $package_builder_service;
+	/** @var LP_Cargonizer_Method_Rule_Engine */
+	private $method_rule_engine_service;
 
 	public function __construct() {
 		$this->settings_service = new LP_Cargonizer_Settings_Service(self::OPTION_KEY, self::MANUAL_NORGESPAKKE_KEY);
@@ -55,6 +63,16 @@ class LP_Cargonizer_Connector {
 				return call_user_func_array(array($this, 'run_consignment_estimate_for_packages'), func_get_args());
 			},
 		));
+		$this->package_resolution_service = new LP_Cargonizer_Package_Resolution_Service(function () {
+			return $this->get_settings();
+		});
+		$this->shipping_profile_resolver = new LP_Cargonizer_Shipping_Profile_Resolver(function () {
+			return $this->get_settings();
+		}, $this->package_resolution_service);
+		$this->package_builder_service = new LP_Cargonizer_Package_Builder($this->shipping_profile_resolver);
+		$this->method_rule_engine_service = new LP_Cargonizer_Method_Rule_Engine(function () {
+			return $this->get_settings();
+		});
 	}
 
 	public function register_hooks() {
@@ -677,6 +695,18 @@ class LP_Cargonizer_Connector {
 		$price_fields = $this->parse_estimate_price_fields($body);
 		$selected = $this->select_estimate_price_value($price_fields);
 		return $selected['value'];
+	}
+
+	private function build_reusable_packages_from_order($order) {
+		return $this->package_builder_service->build_from_order($order);
+	}
+
+	private function build_reusable_packages_from_cart($cart) {
+		return $this->package_builder_service->build_from_cart($cart);
+	}
+
+	private function evaluate_reusable_method_eligibility($methods, $package_result, $order_value) {
+		return $this->method_rule_engine_service->evaluate_methods($methods, $package_result, $order_value);
 	}
 
 }
