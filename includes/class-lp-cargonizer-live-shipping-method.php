@@ -5,7 +5,7 @@ if (!defined('ABSPATH')) {
 }
 
 class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
-	const METHOD_ID = 'lp_cargonizer_live';
+	const METHOD_ID = LP_Cargonizer_Live_Checkout::METHOD_ID;
 
 	/** @var LP_Cargonizer_Settings_Service */
 	private $settings_service;
