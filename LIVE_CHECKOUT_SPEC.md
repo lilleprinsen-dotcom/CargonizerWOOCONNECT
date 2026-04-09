@@ -255,3 +255,44 @@ Implementation note:
 - No checkout UI behavior changes yet.
 - No migration routines executed yet.
 
+## 10) Reusable package/profile/rule subsystem (implemented 2026-04-09)
+
+The codebase now contains additive reusable services intended for both future checkout and current/future admin reuse:
+
+- `LP_Cargonizer_Package_Resolution_Service`
+  - Resolves the effective package-dimension fallback order from `lp_cargonizer_settings.package_resolution.fallback_sources`.
+  - Guarantees a stable fallback chain with defaults appended if missing.
+
+- `LP_Cargonizer_Shipping_Profile_Resolver`
+  - Resolves package profile + dimensions/weight per product using configurable priority order.
+  - Supported sources in order (driven by package-resolution settings):
+    1. product dimensions/weight
+    2. product override
+    3. shipping class profile
+    4. category profile
+    5. value-based rule
+    6. default profile
+  - Returns a resolution trace for diagnostics/replay.
+
+- `LP_Cargonizer_Package_Builder`
+  - Builds reusable package/colli output from cart/order lines.
+  - Preserves existing separate-package semantics using:
+    - `_wildrobot_separate_package_for_product`
+    - `_wildrobot_separate_package_for_product_name`
+  - Multi-quantity separate-package lines become multiple collis.
+  - Non-separate lines become one combined package with summary metadata.
+
+- `LP_Cargonizer_Method_Rule_Engine`
+  - Evaluates method eligibility before customer-pricing transformation.
+  - Uses context dimensions:
+    - order value
+    - total weight
+    - resolved profile slugs
+    - category presence
+    - separate-package presence
+    - missing-dimensions signal
+    - high-value/security flag presence
+  - Reads rules from `lp_cargonizer_settings.checkout_method_rules.rules`.
+
+Important compatibility note:
+- Existing admin estimator/booking/AJAX flows are intentionally unchanged in runtime behavior in this milestone; new services are additive scaffolding only.
