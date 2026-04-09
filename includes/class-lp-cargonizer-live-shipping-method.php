@@ -127,17 +127,30 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 
 		foreach ($quotes as $quote) {
 			$rate_id = $this->id . ':' . $this->instance_id . ':' . sanitize_title($quote['method_key']);
+			$meta_data = array(
+				'transport_agreement_id' => $quote['agreement_id'],
+				'carrier_id' => $quote['carrier_id'],
+				'product_id' => $quote['product_id'],
+				'method_key' => $quote['method_key'],
+			);
+
+			if (!empty($quote['pickup_capable'])) {
+				$pickup_points = $this->get_pickup_points_for_rate($quote, $destination, $live_settings);
+				if (empty($pickup_points)) {
+					continue;
+				}
+				$selected = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
+				$meta_data['krokedil_pickup_points'] = $pickup_points;
+				$meta_data['krokedil_selected_pickup_point'] = $selected['point'];
+				$meta_data['krokedil_selected_pickup_point_id'] = $selected['id'];
+			}
+
 			$this->add_rate(array(
 				'id' => $rate_id,
 				'label' => $quote['label'],
 				'cost' => $quote['display_cost'],
 				'taxes' => false,
-				'meta_data' => array(
-					'transport_agreement_id' => $quote['agreement_id'],
-					'carrier_id' => $quote['carrier_id'],
-					'product_id' => $quote['product_id'],
-					'method_key' => $quote['method_key'],
-				),
+				'meta_data' => $meta_data,
 			));
 		}
 	}
@@ -158,7 +171,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$method_pricing = $this->resolve_method_pricing($method_key, $settings);
 		$recipient = array(
 			'name' => trim((string) (isset($destination['first_name']) ? $destination['first_name'] : '') . ' ' . (isset($destination['last_name']) ? $destination['last_name'] : '')),
-			'address_1' => isset($destination['address']) ? sanitize_text_field((string) $destination['address']) : '',
+			'address_1' => isset($destination['address']) ? sanitize_text_field((string) $destination['address']) : (isset($destination['address_1']) ? sanitize_text_field((string) $destination['address_1']) : ''),
 			'address_2' => isset($destination['address_2']) ? sanitize_text_field((string) $destination['address_2']) : '',
 			'postcode' => $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : ''),
 			'city' => sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : ''),
@@ -247,6 +260,8 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'label' => $customer_title,
 			'live_price' => (float) $live_price,
 			'display_cost' => round(max(0, $display_cost), 2),
+			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method),
+			'method_payload' => $method,
 		);
 
 		if ($cache_ttl > 0) {
@@ -410,5 +425,129 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'taxes' => false,
 			));
 		}
+	}
+
+	private function get_pickup_points_for_rate($quote, $destination, $live_settings) {
+		$method = isset($quote['method_payload']) && is_array($quote['method_payload']) ? $quote['method_payload'] : array();
+		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
+		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
+		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
+		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
+
+		if ($country === '' || $postcode === '') {
+			return array();
+		}
+
+		$lookup_method = array_merge($method, array(
+			'agreement_id' => isset($quote['agreement_id']) ? $quote['agreement_id'] : '',
+			'carrier_id' => isset($quote['carrier_id']) ? $quote['carrier_id'] : '',
+			'product_id' => isset($quote['product_id']) ? $quote['product_id'] : '',
+			'country' => $country,
+			'postcode' => $postcode,
+			'city' => $city,
+			'address' => $address,
+		));
+
+		$custom = $this->api_service->detect_servicepartner_custom_params($lookup_method);
+		$cache_ttl = isset($live_settings['pickup_point_cache_ttl_seconds']) ? max(0, (int) $live_settings['pickup_point_cache_ttl_seconds']) : 300;
+		$cache_key = 'lp_carg_pickup_' . md5(wp_json_encode(array(
+			'transport_agreement_id' => isset($lookup_method['agreement_id']) ? (string) $lookup_method['agreement_id'] : '',
+			'carrier' => isset($lookup_method['carrier_id']) ? (string) $lookup_method['carrier_id'] : '',
+			'product' => isset($lookup_method['product_id']) ? (string) $lookup_method['product_id'] : '',
+			'country' => $country,
+			'postcode' => $postcode,
+			'address' => $address,
+			'custom' => isset($custom['params']) ? $custom['params'] : array(),
+		)));
+		if ($cache_ttl > 0) {
+			$cached = get_transient($cache_key);
+			if (is_array($cached) && !empty($cached)) {
+				return $cached;
+			}
+		}
+
+		$result = $this->api_service->fetch_servicepartner_options($lookup_method);
+		$options = isset($result['options']) && is_array($result['options']) ? $result['options'] : array();
+		$points = array();
+		foreach ($options as $option) {
+			if (!is_array($option)) {
+				continue;
+			}
+			$point_id = isset($option['value']) ? sanitize_text_field((string) $option['value']) : '';
+			$raw = isset($option['raw']) && is_array($option['raw']) ? $option['raw'] : array();
+			if ($point_id === '') {
+				continue;
+			}
+			$points[] = array(
+				'id' => $point_id,
+				'name' => isset($raw['name']) ? (string) $raw['name'] : '',
+				'address1' => isset($raw['address1']) ? (string) $raw['address1'] : '',
+				'address2' => isset($raw['address2']) ? (string) $raw['address2'] : '',
+				'postcode' => isset($raw['postcode']) ? (string) $raw['postcode'] : '',
+				'city' => isset($raw['city']) ? (string) $raw['city'] : '',
+				'country' => isset($raw['country']) ? (string) $raw['country'] : $country,
+				'customer_number' => isset($option['customer_number']) ? (string) $option['customer_number'] : '',
+				'distance_meters' => isset($option['distance_meters']) && is_numeric($option['distance_meters']) ? (float) $option['distance_meters'] : null,
+				'label' => isset($option['label']) ? (string) $option['label'] : $point_id,
+			);
+		}
+
+		if ($cache_ttl > 0) {
+			set_transient($cache_key, $points, $cache_ttl);
+		}
+
+		return $points;
+	}
+
+	private function resolve_selected_pickup_point($rate_id, $pickup_points) {
+		$first = reset($pickup_points);
+		if (!is_array($first)) {
+			return array('id' => '', 'point' => array());
+		}
+
+		$selected_id = (string) $first['id'];
+		$selected_point = $first;
+		$session_map = $this->get_pickup_selection_session_map();
+		if (isset($session_map[$rate_id]) && is_array($session_map[$rate_id])) {
+			$stored_id = isset($session_map[$rate_id]['id']) ? sanitize_text_field((string) $session_map[$rate_id]['id']) : '';
+			if ($stored_id !== '') {
+				foreach ($pickup_points as $point) {
+					$point_id = isset($point['id']) ? (string) $point['id'] : '';
+					if ($point_id === $stored_id) {
+						$selected_id = $point_id;
+						$selected_point = $point;
+						break;
+					}
+				}
+			}
+		}
+
+		if ($selected_id !== '') {
+			$session_map[$rate_id] = array(
+				'id' => $selected_id,
+				'point' => $selected_point,
+			);
+			$this->set_pickup_selection_session_map($session_map);
+		}
+
+		return array(
+			'id' => $selected_id,
+			'point' => $selected_point,
+		);
+	}
+
+	private function get_pickup_selection_session_map() {
+		if (!function_exists('WC') || !WC() || !isset(WC()->session) || !WC()->session) {
+			return array();
+		}
+		$value = WC()->session->get('lp_cargonizer_checkout_pickup_selection_map', array());
+		return is_array($value) ? $value : array();
+	}
+
+	private function set_pickup_selection_session_map($map) {
+		if (!function_exists('WC') || !WC() || !isset(WC()->session) || !WC()->session) {
+			return;
+		}
+		WC()->session->set('lp_cargonizer_checkout_pickup_selection_map', is_array($map) ? $map : array());
 	}
 }

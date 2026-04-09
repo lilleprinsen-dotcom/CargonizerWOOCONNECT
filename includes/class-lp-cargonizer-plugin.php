@@ -7,13 +7,17 @@ if (!defined('ABSPATH')) {
 class LP_Cargonizer_Plugin {
 	/** @var LP_Cargonizer_Connector */
 	private $connector;
+	/** @var LP_Cargonizer_Checkout_Pickup_Controller */
+	private $checkout_pickup_controller;
 
 	public function __construct() {
 		$this->connector = new LP_Cargonizer_Connector();
+		$this->checkout_pickup_controller = new LP_Cargonizer_Checkout_Pickup_Controller();
 	}
 
 	public function bootstrap() {
 		$this->connector->register_hooks();
+		$this->checkout_pickup_controller->register_hooks();
 		add_action('woocommerce_shipping_init', array($this, 'register_live_shipping_method_class'));
 		add_filter('woocommerce_shipping_methods', array($this, 'register_live_shipping_method_id'));
 	}
