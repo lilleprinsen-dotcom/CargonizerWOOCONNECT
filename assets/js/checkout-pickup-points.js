@@ -5,6 +5,9 @@
 	if (!config.ajaxUrl || !config.ajaxAction || !config.nonce) {
 		return;
 	}
+	var refreshDebounceTimer = null;
+	var pendingRefreshRequest = null;
+	var queuedRefreshAfterCurrent = false;
 
 	function triggerCompatibilityUpdate() {
 		$(document.body).trigger('lp_cargonizer_pickup_point_updated');
@@ -16,21 +19,80 @@
 		}
 	}
 
+	function setSelectorState($select, state, message) {
+		if (!$select || !$select.length) {
+			return;
+		}
+		var $container = $select.closest('.lp-cargonizer-checkout-pickup-point');
+		var normalizedState = String(state || 'loading');
+		$select.attr('data-state', normalizedState);
+		if (normalizedState === 'loaded') {
+			$container.show();
+			$select.prop('disabled', false);
+			return;
+		}
+		if (normalizedState === 'unavailable') {
+			$container.hide();
+			$select.prop('disabled', true);
+			return;
+		}
+		$container.show();
+		$select.prop('disabled', true);
+		$select.empty().append(
+			$('<option></option>')
+				.attr('value', '')
+				.text(String(message || (normalizedState === 'error' ? 'Pickup points unavailable.' : 'Fetching pickup points…')))
+		);
+	}
+
+	function applyErrorStateToLoadingSelectors(message) {
+		$('.lp-cargonizer-pickup-point-select').each(function () {
+			var $select = $(this);
+			var state = String($select.attr('data-state') || '');
+			if (state === '' || state === 'loading') {
+				setSelectorState($select, 'error', message || 'Could not fetch pickup points.');
+			}
+		});
+	}
+
 	function refreshCompatibilityPayload() {
 		if (!config.ajaxGetAction) {
 			return;
 		}
-		$.post(config.ajaxUrl, {
+		if (pendingRefreshRequest) {
+			queuedRefreshAfterCurrent = true;
+			return;
+		}
+		pendingRefreshRequest = $.post(config.ajaxUrl, {
 			action: config.ajaxGetAction,
 			nonce: config.nonce
 		}).done(function (response) {
 			if (!response || !response.success || !response.data) {
+				applyErrorStateToLoadingSelectors('Could not resolve pickup point state.');
 				return;
 			}
 			window.lpCargonizerPickupPointsState = response.data;
 			applyPickupPointsStateToSelectors(response.data);
 			$(document.body).trigger('lp_cargonizer_pickup_points_state_ready', [response.data]);
+		}).fail(function () {
+			applyErrorStateToLoadingSelectors('Could not fetch pickup points.');
+		}).always(function () {
+			pendingRefreshRequest = null;
+			if (queuedRefreshAfterCurrent) {
+				queuedRefreshAfterCurrent = false;
+				refreshCompatibilityPayload();
+			}
 		});
+	}
+
+	function scheduleCompatibilityRefresh() {
+		if (refreshDebounceTimer) {
+			clearTimeout(refreshDebounceTimer);
+		}
+		refreshDebounceTimer = setTimeout(function () {
+			refreshDebounceTimer = null;
+			refreshCompatibilityPayload();
+		}, 250);
 	}
 
 	function applyPickupPointsStateToSelectors(state) {
@@ -45,8 +107,19 @@
 			if (!$select.length) {
 				return;
 			}
+			var state = String(item.state || '');
+			var message = String(item.message || '');
 			var points = Array.isArray(item.pickup_points) ? item.pickup_points : [];
+			if (state === 'unavailable' || item.unavailable) {
+				setSelectorState($select, 'unavailable', message);
+				return;
+			}
+			if (state === 'error' || item.error) {
+				setSelectorState($select, 'error', message || 'Pickup points unavailable.');
+				return;
+			}
 			if (!points.length) {
+				setSelectorState($select, 'loading', message || 'Fetching pickup points…');
 				return;
 			}
 			var selectedId = String(item.selected_pickup_point_id || points[0].id || '');
@@ -63,6 +136,7 @@
 				$select.append($option);
 			});
 			$select.data('selected-pickup-point-id', selectedId);
+			setSelectorState($select, 'loaded', '');
 		});
 	}
 
@@ -92,7 +166,7 @@
 			pickup_point_id: pickupPointId
 		}).done(function () {
 			$select.data('selected-pickup-point-id', pickupPointId);
-			refreshCompatibilityPayload();
+			scheduleCompatibilityRefresh();
 		}).always(function () {
 			$select.prop('disabled', false);
 			triggerCompatibilityUpdate();
@@ -100,7 +174,7 @@
 	});
 
 	$(document.body).on('updated_checkout wc-blocks_checkout_updated', function () {
-		refreshCompatibilityPayload();
+		scheduleCompatibilityRefresh();
 	});
-	refreshCompatibilityPayload();
+	scheduleCompatibilityRefresh();
 })(jQuery);
