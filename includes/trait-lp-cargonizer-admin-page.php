@@ -435,6 +435,67 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return isset($labels[$code]) ? $labels[$code] : ($code !== '' ? $code : 'ukjent');
 	}
 
+	private function get_live_checkout_setup_warnings($settings, $last_no_rates_status = array()) {
+		$warnings = array();
+		$enabled_methods = isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array();
+		$enabled_methods = array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $enabled_methods)), 'strlen'));
+		$enabled_map = array_fill_keys($enabled_methods, true);
+
+		$live_checkout = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		$low_strategy = isset($live_checkout['low_price_strategy']) ? (string) $live_checkout['low_price_strategy'] : 'cheapest_eligible_live';
+		$free_strategy = isset($live_checkout['free_shipping_strategy']) ? (string) $live_checkout['free_shipping_strategy'] : 'cheapest_standard_eligible';
+
+		$decorator_by_method = array();
+		$rules = isset($settings['checkout_method_rules']['rules']) && is_array($settings['checkout_method_rules']['rules']) ? $settings['checkout_method_rules']['rules'] : array();
+		foreach ($rules as $rule) {
+			if (!is_array($rule)) {
+				continue;
+			}
+			$method_key = isset($rule['method_key']) ? sanitize_text_field((string) $rule['method_key']) : '';
+			if ($method_key === '' || !isset($enabled_map[$method_key])) {
+				continue;
+			}
+			$action = isset($rule['action']) ? sanitize_key((string) $rule['action']) : '';
+			$is_enabled = !isset($rule['enabled']) || !empty($rule['enabled']);
+			if ($action !== 'decorate' || !$is_enabled) {
+				continue;
+			}
+			$decorator_by_method[$method_key] = array(
+				'allow_low_price' => !isset($rule['allow_low_price']) || !empty($rule['allow_low_price']),
+				'allow_free_shipping' => !isset($rule['allow_free_shipping']) || !empty($rule['allow_free_shipping']),
+			);
+		}
+
+		$has_low_price_candidate = false;
+		$has_free_shipping_candidate = false;
+		foreach ($enabled_methods as $method_key) {
+			$rule = isset($decorator_by_method[$method_key]) ? $decorator_by_method[$method_key] : array(
+				'allow_low_price' => true,
+				'allow_free_shipping' => true,
+			);
+			if (!empty($rule['allow_low_price'])) {
+				$has_low_price_candidate = true;
+			}
+			if (!empty($rule['allow_free_shipping'])) {
+				$has_free_shipping_candidate = true;
+			}
+		}
+
+		if (!empty($enabled_methods) && $low_strategy !== 'disabled' && !$has_low_price_candidate) {
+			$warnings[] = 'Ingen aktiv metode er kvalifisert for lavpris under terskel. Slå på lavpris for minst én metode, eller sett strategien til «Deaktivert».';
+		}
+		if (!empty($enabled_methods) && $free_strategy !== 'disabled' && !$has_free_shipping_candidate) {
+			$warnings[] = 'Ingen aktiv metode er kvalifisert for gratis frakt over terskel. Slå på gratis frakt for minst én metode, eller sett strategien til «Deaktivert».';
+		}
+
+		$reason_code = isset($last_no_rates_status['reason_code']) ? sanitize_key((string) $last_no_rates_status['reason_code']) : '';
+		if ($reason_code === 'rules_filtered_all') {
+			$warnings[] = 'Siste checkout-forsøk ble filtrert bort av regler (ingen metoder vist). Gå gjennom «Når metoder skal vises/skjules».';
+		}
+
+		return $warnings;
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -586,12 +647,15 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$summary_lines[] = !empty($live_checkout_summary['norway_only_enabled']) ? 'Frakt vises kun for Norge (NO).' : 'Frakt kan vises utenfor Norge.';
 			$threshold_basis_label = $threshold_basis_summary === 'subtotal_excl_vat' ? 'eks. MVA' : 'inkl. MVA';
 			if ((string) (isset($live_checkout_summary['low_price_strategy']) ? $live_checkout_summary['low_price_strategy'] : '') !== 'disabled') {
-				$summary_lines[] = 'Under ' . $format_summary_price($threshold_summary) . ' NOK (' . $threshold_basis_label . ') settes billigste kvalifiserte metode til ' . $format_summary_price($low_price_summary) . ' NOK.';
+				$summary_lines[] = 'Ordre under ' . $format_summary_price($threshold_summary) . ' kr (' . $threshold_basis_label . ') viser billigste godkjente metode til ' . $format_summary_price($low_price_summary) . ' kr.';
 			}
 			if ((string) (isset($live_checkout_summary['free_shipping_strategy']) ? $live_checkout_summary['free_shipping_strategy'] : '') === 'cheapest_standard_eligible') {
-				$summary_lines[] = 'Over ' . $format_summary_price($threshold_summary) . ' NOK (' . $threshold_basis_label . ') blir billigste kvalifiserte standardmetode gratis.';
+				$summary_lines[] = 'Ordre over ' . $format_summary_price($threshold_summary) . ' kr (' . $threshold_basis_label . ') gjør billigste godkjente standardmetode gratis.';
 			}
-			$summary_lines[] = 'Nærmeste hentepunkt velges automatisk når metoden støtter pickup points.';
+			$summary_lines[] = 'Nærmeste hentested velges automatisk når metoden støtter hentepunkt.';
+			$summary_lines[] = (isset($live_checkout_summary['quote_timing_mode']) && (string) $live_checkout_summary['quote_timing_mode'] === 'checkout_only')
+				? 'Live prisberegning kjøres først i checkout.'
+				: 'Live prisberegning kjøres i både handlekurv og checkout.';
 			?>
 			<div style="background:#f0f6fc;border:1px solid #c5d9ed;padding:14px 16px;margin:16px 0 20px 0;max-width:1100px;">
 				<h2 style="margin-top:0;margin-bottom:8px;">Kort oppsummering av aktiv oppførsel</h2>
@@ -633,9 +697,21 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</details>
 				<?php endif; ?>
 			</div>
+			<?php $setup_warnings = $this->get_live_checkout_setup_warnings($settings, $last_no_rates_status); ?>
+			<?php if (!empty($setup_warnings)) : ?>
+				<div style="background:#fff1f0;border:1px solid #f1aeb5;padding:14px 16px;margin:16px 0 20px 0;max-width:1100px;">
+					<h2 style="margin-top:0;margin-bottom:8px;">Sjekk oppsettet ditt</h2>
+					<ul style="margin:0;padding-left:18px;">
+						<?php foreach ($setup_warnings as $warning) : ?>
+							<li><?php echo esc_html($warning); ?></li>
+						<?php endforeach; ?>
+					</ul>
+				</div>
+			<?php endif; ?>
 
 			<div style="background:#fff;border:1px solid #ddd;padding:20px;margin:20px 0;max-width:900px;">
 				<h2>Tilkobling</h2>
+				<p class="description">Legg inn API-nøkkel og sender-ID for å hente metoder og priser fra Cargonizer.</p>
 				<form method="post">
 					<?php wp_nonce_field(self::NONCE_ACTION_SAVE); ?>
 
@@ -745,8 +821,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</table>
 
 
-					<h2>Synlighet for leveringsmetoder</h2>
-					<p>Her velger du hvilke metoder som er synlige. Prisfeltene under hver metode styrer samme beregningslogikk som før.</p>
+					<h2>Når metoder skal vises/skjules</h2>
+					<p class="description">Velg hvilke metoder som skal være aktive. Prisfeltene under hver metode bruker samme beregningslogikk som før.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<?php
@@ -1014,8 +1090,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					?>
 
 					<hr style="margin:24px 0;">
-					<h2>Enkelt oppsett</h2>
-					<p class="description" style="max-width:900px;">Anbefalt for vanlig butikkdrift. Disse feltene dekker standardoppsett som fri frakt over 1500, 69-kr under terskel, nærmeste hentepunkt og Norge-fokus.</p>
+					<h2>Grunnoppsett / Enkel oppsett</h2>
+					<p class="description" style="max-width:900px;">Anbefalt for vanlig butikkdrift. Sett Norge-only, fri frakt-terskel, 69 kr under terskel, hentested og fallback uten å åpne avanserte JSON-felt.</p>
+					<h3 style="margin-bottom:4px;">Fraktpriser i checkout</h3>
+					<p class="description" style="margin-top:0;">Kjernevalg for prisvisning og terskelregler.</p>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>
@@ -1097,7 +1175,38 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										<option value="checkout_only" <?php selected(isset($live_checkout['quote_timing_mode']) ? $live_checkout['quote_timing_mode'] : 'checkout_only', 'checkout_only'); ?>>Kun checkout / checkout refresh / order-pay (anbefalt)</option>
 										<option value="cart_and_checkout" <?php selected(isset($live_checkout['quote_timing_mode']) ? $live_checkout['quote_timing_mode'] : 'checkout_only', 'cart_and_checkout'); ?>>Cart og checkout</option>
 									</select>
-									<p class="description">Nærmeste pickup point blir automatisk forhåndsvalgt for pickup-metoder.</p>
+									<p class="description">Velg <strong>Kun checkout</strong> for «estimate only in checkout».</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row" colspan="2" style="padding-top:18px;">
+									<h3 style="margin:0;">Utleveringssteder</h3>
+									<p class="description" style="margin:4px 0 0 0;">Forenklet oppsett for hentepunkt i checkout.</p>
+								</th>
+							</tr>
+							<tr>
+								<th scope="row">Utleveringssteder</th>
+								<td>
+									<p style="margin:0 0 4px 0;"><strong>Nærmeste hentested velges automatisk</strong></p>
+									<p class="description" style="margin:0;">Aktiv oppførsel er bevart: pickup-metoder forhåndsvelger nærmeste hentested, kunden kan fortsatt overstyre.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row" colspan="2" style="padding-top:18px;">
+									<h3 style="margin:0;">Reserveoppsett ved feil</h3>
+									<p class="description" style="margin:4px 0 0 0;">Velg hva kunden skal se hvis Cargonizer ikke svarer.</p>
+								</th>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_checkout_fallback_on_quote_failure">Reserveoppsett ved feil</label></th>
+								<td>
+									<select id="lp_cargonizer_checkout_fallback_on_quote_failure" name="lp_cargonizer_checkout_fallback_on_quote_failure">
+										<option value="safe_fallback_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
+										<option value="use_last_known_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'use_last_known_rate'); ?>>Bruk sist kjente rate</option>
+										<option value="block_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'block_checkout'); ?>>Blokker checkout</option>
+										<option value="hide_live_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
+									</select>
+									<p class="description">Hva som skal skje hvis API-estimat feiler eller får timeout.</p>
 								</td>
 							</tr>
 								<tr>
@@ -1119,7 +1228,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</table>
 
 					<details style="margin:18px 0;border:1px solid #dcdcde;padding:10px 12px;background:#fff;">
-						<summary style="cursor:pointer;font-weight:600;">Avansert (for utvikler / teknisk ansvarlig)</summary>
+						<summary style="cursor:pointer;font-weight:600;">Avansert</summary>
 						<p class="description" style="margin-top:8px;">Her finner du produkt-/pakkeregler, synlighetsregler og JSON-editorer. Skjult som standard for å gjøre daglig bruk enklere.</p>
 
 					<h2>Produkt- og pakkeregler</h2>
@@ -1272,7 +1381,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</tbody>
 					</table>
 
-					<h2>Package resolution</h2>
+					<h2>Produkt- og pakkeregler: Pakkeoppløsning</h2>
 					<p>
 						<label for="lp_cargonizer_package_build_mode"><strong>Pakkebygging</strong></label><br>
 						<select id="lp_cargonizer_package_build_mode" name="lp_cargonizer_package_build_mode">
@@ -1284,7 +1393,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<p class="description">Fallback-kilder i prioritert rekkefølge, én per linje. Tillatte verdier: product_dimensions, product_override, shipping_class_profile, category_profile, value_rule, default_profile.</p>
 					<textarea name="lp_cargonizer_package_resolution_fallback_sources" rows="6" class="large-text code"><?php echo esc_textarea(implode("\n", isset($package_resolution['fallback_sources']) && is_array($package_resolution['fallback_sources']) ? $package_resolution['fallback_sources'] : array())); ?></textarea>
 
-					<h2>Leveringsmetode-synlighet (avansert)</h2>
+					<h2>Når metoder skal vises/skjules (avansert regler)</h2>
 					<p class="description">Regelredigering per metode (allow/deny/decorate). Hver rad er én regelgruppe; metoden tillates når minst én allow-regel matcher (med mindre en deny-regel matcher).</p>
 					<?php
 					$method_rule_rows = isset($checkout_method_rules['rules']) && is_array($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array();
@@ -1380,16 +1489,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<textarea name="lp_cargonizer_checkout_method_rules_json" rows="10" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
 					</details>
 
-					<h2>Fallbacks</h2>
-					<p>
-						<label for="lp_cargonizer_checkout_fallback_on_quote_failure"><strong>Ved timeout/API-feil</strong></label><br>
-							<select id="lp_cargonizer_checkout_fallback_on_quote_failure" name="lp_cargonizer_checkout_fallback_on_quote_failure">
-								<option value="safe_fallback_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
-								<option value="use_last_known_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'use_last_known_rate'); ?>>Bruk sist kjente rate</option>
-								<option value="block_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'block_checkout'); ?>>Blokker checkout</option>
-								<option value="hide_live_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
-							</select>
-					</p>
+					<h2>Reserveoppsett ved feil</h2>
 					<p>
 						<input type="hidden" name="lp_cargonizer_checkout_fallback_allow_checkout" value="0">
 						<label><input type="checkbox" name="lp_cargonizer_checkout_fallback_allow_checkout" value="1" <?php checked(!empty($checkout_fallback['allow_checkout_with_fallback'])); ?>> Tillat checkout å fortsette med fallback-rater</label>
