@@ -37,7 +37,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			}
 
 			$normalized_rate_id = (string) $rate->get_id();
-			$pickup_points = $this->rate_meta($rate, 'krokedil_pickup_points');
+			$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_points_meta($this->rate_meta($rate, 'krokedil_pickup_points'));
 			if ((!is_array($pickup_points) || empty($pickup_points)) && $normalized_rate_id !== '' && isset($session_map[$normalized_rate_id]['pickup_points']) && is_array($session_map[$normalized_rate_id]['pickup_points'])) {
 				$pickup_points = $session_map[$normalized_rate_id]['pickup_points'];
 			}
@@ -120,6 +120,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 						if ($pickup_state !== 'loading') {
 							$this->log_pickup_state_reason($pickup_state, $rate_id, $pickup_message, $rate);
 						}
+						$this->set_generic_krokedil_selection_session(array(), '');
 						$payload[] = array(
 							'package_index' => (int) $package_index,
 							'rate_id' => $rate_id,
@@ -165,6 +166,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 							'rate_context' => $rate_context,
 						);
 					}
+					$this->set_generic_krokedil_selection_session($selected_point, $selected_id);
 
 					$payload[] = array(
 						'package_index' => (int) $package_index,
@@ -235,8 +237,8 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			'state' => 'unavailable',
 			'message' => '',
 		);
-		$pickup_points = $this->rate_meta($rate, 'krokedil_pickup_points');
-		if (is_array($pickup_points) && !empty($pickup_points)) {
+		$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_points_meta($this->rate_meta($rate, 'krokedil_pickup_points'));
+		if (!empty($pickup_points)) {
 			$result['points'] = array_values($pickup_points);
 			$result['state'] = 'loaded';
 			return $result;
@@ -448,6 +450,16 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 
 	private function has_wc_session() {
 		return function_exists('WC') && WC() && isset(WC()->session) && WC()->session;
+	}
+
+	private function set_generic_krokedil_selection_session($selected_pickup_point, $selected_pickup_point_id) {
+		if (!$this->has_wc_session()) {
+			return;
+		}
+		$selected_pickup_point = is_array($selected_pickup_point) ? $selected_pickup_point : array();
+		$selected_pickup_point_id = sanitize_text_field((string) $selected_pickup_point_id);
+		WC()->session->set('krokedil_selected_pickup_point', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point));
+		WC()->session->set('krokedil_selected_pickup_point_id', $selected_pickup_point_id);
 	}
 
 	private function get_pickup_session_key() {

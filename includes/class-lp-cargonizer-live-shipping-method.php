@@ -243,9 +243,6 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 						'product_id' => $quote['product_id'],
 						'method_key' => $quote['method_key'],
 					);
-					$meta_data['krokedil_pickup_points'] = array();
-					$meta_data['krokedil_selected_pickup_point'] = array();
-					$meta_data['krokedil_selected_pickup_point_id'] = '';
 				}
 
 				if (!empty($quote['pickup_required'])) {
@@ -255,8 +252,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 						continue;
 					}
 					$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
-					$meta_data['krokedil_pickup_points'] = $pickup_points;
-					$meta_data['krokedil_selected_pickup_point'] = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
+					$selected_pickup_point = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
+					$meta_data['krokedil_pickup_points'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points);
+					$meta_data['krokedil_selected_pickup_point'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point);
 					$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
 				}
 
