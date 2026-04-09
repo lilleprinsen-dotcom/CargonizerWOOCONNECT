@@ -23,7 +23,9 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 
 		$handle = 'lp-cargonizer-checkout-pickup-points';
 		$src = plugin_dir_url(dirname(__FILE__)) . 'assets/js/checkout-pickup-points.js';
-		wp_enqueue_script($handle, $src, array('jquery'), '1.0.0', true);
+		$script_path = plugin_dir_path(dirname(__FILE__)) . 'assets/js/checkout-pickup-points.js';
+		$script_version = file_exists($script_path) ? filemtime($script_path) : false;
+		wp_enqueue_script($handle, $src, array('jquery'), $script_version ? (string) $script_version : '1.0.0', true);
 		wp_localize_script($handle, 'lpCargonizerPickupPointsConfig', array(
 			'ajaxUrl' => admin_url('admin-ajax.php'),
 			'ajaxAction' => self::AJAX_ACTION,
