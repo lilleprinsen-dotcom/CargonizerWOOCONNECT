@@ -89,6 +89,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if (empty($live_settings['enabled'])) {
 			return;
 		}
+		if (!$this->should_run_live_quotes_in_current_request($live_settings)) {
+			return;
+		}
 
 		$destination = isset($package['destination']) && is_array($package['destination']) ? $package['destination'] : array();
 		$country = strtoupper(isset($destination['country']) ? (string) $destination['country'] : '');
@@ -143,14 +146,16 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			);
 
 			if (!empty($quote['pickup_capable'])) {
-				$pickup_points = $this->get_pickup_points_for_rate($quote, $destination, $live_settings);
-				if (empty($pickup_points)) {
-					continue;
-				}
-				$selected = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
-				$meta_data['krokedil_pickup_points'] = $pickup_points;
-				$meta_data['krokedil_selected_pickup_point'] = $selected['point'];
-				$meta_data['krokedil_selected_pickup_point_id'] = $selected['id'];
+				$meta_data['lp_cargonizer_pickup_capable'] = 1;
+				$meta_data['lp_cargonizer_pickup_rate_context'] = array(
+					'transport_agreement_id' => $quote['agreement_id'],
+					'carrier_id' => $quote['carrier_id'],
+					'product_id' => $quote['product_id'],
+					'method_key' => $quote['method_key'],
+				);
+				$meta_data['krokedil_pickup_points'] = array();
+				$meta_data['krokedil_selected_pickup_point'] = array();
+				$meta_data['krokedil_selected_pickup_point_id'] = '';
 			}
 
 			$this->add_rate(array(
@@ -673,6 +678,43 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			return false;
 		}
 		return $postcode !== '' && $city !== '';
+	}
+
+	private function should_run_live_quotes_in_current_request($live_settings) {
+		$mode = isset($live_settings['quote_timing_mode']) ? sanitize_key((string) $live_settings['quote_timing_mode']) : 'checkout_only';
+		if ($mode === 'cart_and_checkout') {
+			return true;
+		}
+
+		if (function_exists('is_checkout_pay_page') && is_checkout_pay_page()) {
+			return true;
+		}
+		if (function_exists('is_checkout') && is_checkout()) {
+			return true;
+		}
+
+		if (function_exists('wp_doing_ajax') && wp_doing_ajax()) {
+			$ajax_action = isset($_REQUEST['action']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['action'])) : '';
+			if ($ajax_action === 'woocommerce_update_order_review') {
+				return true;
+			}
+			if ($ajax_action === 'lp_cargonizer_get_checkout_pickup_points' || $ajax_action === 'lp_cargonizer_set_checkout_pickup_point') {
+				return true;
+			}
+		}
+
+		$request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash((string) $_SERVER['REQUEST_URI'])) : '';
+		if ($request_uri !== '' && strpos($request_uri, '/wc/store/checkout') !== false) {
+			return true;
+		}
+		if ($request_uri !== '' && strpos($request_uri, '/wc/store/cart') !== false) {
+			$referer = isset($_SERVER['HTTP_REFERER']) ? sanitize_text_field(wp_unslash((string) $_SERVER['HTTP_REFERER'])) : '';
+			if ($referer !== '' && strpos($referer, '/checkout') !== false) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	private function has_minimum_destination_for_pickup_points($destination) {

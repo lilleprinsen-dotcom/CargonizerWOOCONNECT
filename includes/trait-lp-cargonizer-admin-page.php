@@ -979,6 +979,15 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<input id="lp_cargonizer_live_checkout_quote_timeout_seconds" type="number" min="0" step="0.1" name="lp_cargonizer_live_checkout[quote_timeout_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_timeout_seconds']) ? $live_checkout['quote_timeout_seconds'] : 5); ?>">
 								</td>
 							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_live_checkout_quote_timing_mode">Når live quote kjøres</label></th>
+								<td>
+									<select id="lp_cargonizer_live_checkout_quote_timing_mode" name="lp_cargonizer_live_checkout[quote_timing_mode]">
+										<option value="checkout_only" <?php selected(isset($live_checkout['quote_timing_mode']) ? $live_checkout['quote_timing_mode'] : 'checkout_only', 'checkout_only'); ?>>Kun checkout / checkout refresh / order-pay (anbefalt)</option>
+										<option value="cart_and_checkout" <?php selected(isset($live_checkout['quote_timing_mode']) ? $live_checkout['quote_timing_mode'] : 'checkout_only', 'cart_and_checkout'); ?>>Cart og checkout</option>
+									</select>
+								</td>
+							</tr>
 								<tr>
 									<th scope="row"><label for="lp_cargonizer_live_checkout_quote_cache_ttl_seconds">Quote cache TTL (sekunder)</label></th>
 									<td><input id="lp_cargonizer_live_checkout_quote_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[quote_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_cache_ttl_seconds']) ? $live_checkout['quote_cache_ttl_seconds'] : 300); ?>"></td>

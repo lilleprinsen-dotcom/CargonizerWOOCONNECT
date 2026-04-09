@@ -290,6 +290,7 @@ class LP_Cargonizer_Settings_Service {
 			'low_price_option_amount' => 69,
 			'low_price_strategy' => 'cheapest_eligible_live',
 			'free_shipping_strategy' => 'cheapest_standard_eligible',
+			'quote_timing_mode' => 'checkout_only',
 			'quote_timeout_seconds' => 5,
 			'quote_cache_ttl_seconds' => 300,
 			'pickup_point_cache_ttl_seconds' => 300,
@@ -370,6 +371,7 @@ class LP_Cargonizer_Settings_Service {
 			'low_price_option_amount' => isset($input['low_price_option_amount']) ? $this->sanitize_non_negative_number($input['low_price_option_amount']) : $this->sanitize_non_negative_number($base['low_price_option_amount']),
 			'low_price_strategy' => isset($input['low_price_strategy']) ? sanitize_text_field((string) $input['low_price_strategy']) : sanitize_text_field((string) $base['low_price_strategy']),
 			'free_shipping_strategy' => isset($input['free_shipping_strategy']) ? sanitize_text_field((string) $input['free_shipping_strategy']) : sanitize_text_field((string) $base['free_shipping_strategy']),
+			'quote_timing_mode' => isset($input['quote_timing_mode']) ? sanitize_key((string) $input['quote_timing_mode']) : sanitize_key((string) $base['quote_timing_mode']),
 			'quote_timeout_seconds' => isset($input['quote_timeout_seconds']) ? $this->sanitize_non_negative_number($input['quote_timeout_seconds']) : $this->sanitize_non_negative_number($base['quote_timeout_seconds']),
 			'quote_cache_ttl_seconds' => isset($input['quote_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['quote_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['quote_cache_ttl_seconds']),
 			'pickup_point_cache_ttl_seconds' => isset($input['pickup_point_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['pickup_point_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['pickup_point_cache_ttl_seconds']),
@@ -384,6 +386,11 @@ class LP_Cargonizer_Settings_Service {
 		$allowed_free_shipping = array('cheapest_standard_eligible', 'disabled');
 		if (!in_array($output['free_shipping_strategy'], $allowed_free_shipping, true)) {
 			$output['free_shipping_strategy'] = 'cheapest_standard_eligible';
+		}
+
+		$allowed_quote_timing_modes = array('checkout_only', 'cart_and_checkout');
+		if (!in_array($output['quote_timing_mode'], $allowed_quote_timing_modes, true)) {
+			$output['quote_timing_mode'] = 'checkout_only';
 		}
 
 		return $output;
