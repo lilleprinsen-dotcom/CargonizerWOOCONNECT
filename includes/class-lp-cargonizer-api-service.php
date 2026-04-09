@@ -1466,6 +1466,10 @@ class LP_Cargonizer_Api_Service {
 	}
 
 	public function log_estimate_package_dimensions($data) {
+		if (!$this->should_log_estimate_package_dimensions()) {
+			return;
+		}
+
 		if (!function_exists('wc_get_logger')) {
 			return;
 		}
@@ -1476,6 +1480,26 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		$logger->debug('Estimate package dimensions sent to Cargonizer: ' . wp_json_encode($data), array('source' => 'lp-cargonizer-estimate'));
+	}
+
+	private function should_log_estimate_package_dimensions() {
+		$settings = is_callable($this->settings_provider)
+			? call_user_func($this->settings_provider)
+			: array();
+		if (!is_array($settings)) {
+			return false;
+		}
+
+		if (!empty($settings['debug_logging'])) {
+			return true;
+		}
+
+		$live_checkout = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		if (!empty($live_checkout['debug_logging'])) {
+			return true;
+		}
+
+		return defined('WP_DEBUG') && WP_DEBUG;
 	}
 
 	public function parse_response_error_details($body) {

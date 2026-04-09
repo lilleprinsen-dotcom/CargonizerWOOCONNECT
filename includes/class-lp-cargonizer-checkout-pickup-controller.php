@@ -62,7 +62,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 
 		echo '<div class="lp-cargonizer-checkout-pickup-point" style="margin:8px 0 0 24px;">';
 		echo '<label for="lp-cargonizer-pickup-' . esc_attr($index) . '" style="display:block;margin:0 0 6px;font-weight:600;">' . esc_html__('Pickup point', 'lp-cargonizer') . '</label>';
-		echo '<select id="lp-cargonizer-pickup-' . esc_attr($index) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '">';
+		echo '<select id="lp-cargonizer-pickup-' . esc_attr($index) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '" data-selected-pickup-point-id="' . esc_attr($selected_id) . '">';
 		foreach ($pickup_points as $point) {
 			if (!is_array($point)) {
 				continue;

@@ -34,6 +34,48 @@ Scope: compare current refactored plugin to original monolithic implementation a
 - Verified no duplicate class/trait declarations in `includes/*.php`.
 - Verified bootstrap remains `lilleprinsen-cargonizer-connector.php` requiring connector/services/plugin orchestrator classes.
 
+## Manual checkout regression scenarios (live checkout hardening)
+
+Run these scenarios with live checkout enabled, at least one pickup-capable method, and at least one non-pickup method:
+
+1. **Live checkout rates (baseline happy path)**
+   - Enter a Norwegian destination with postcode + city.
+   - Confirm rates appear from `lp_cargonizer_live` without page reload.
+   - Change address/postcode and verify rates refresh asynchronously.
+
+2. **Pickup-point selection**
+   - Choose a pickup-capable rate.
+   - Verify pickup dropdown renders with nearest point preselected.
+   - Change selection and confirm checkout refreshes asynchronously and keeps the selected point.
+
+3. **Embedded checkout persistence assumptions (Dintero-style)**
+   - Complete checkout through a Store API / embedded checkout path.
+   - Verify order meta `_lp_cargonizer_checkout_selection` contains:
+     - selected method/rate context
+     - `krokedil_pickup_points`
+     - `krokedil_selected_pickup_point`
+     - `krokedil_selected_pickup_point_id`
+
+4. **Under-threshold NOK 69 behavior**
+   - Set cart subtotal below configured threshold (default NOK 1500).
+   - Confirm at least one eligible live method is priced to configured low-price value (default NOK 69).
+
+5. **Over-threshold free shipping behavior**
+   - Set cart subtotal above threshold.
+   - Confirm cheapest eligible standard method is free when configured strategy is `cheapest_standard_eligible`.
+
+6. **Separate-package multi-colli behavior**
+   - Add products with `_wildrobot_separate_package_for_product = yes`, quantity > 1.
+   - Verify package builder splits to multiple collis and live quotes still return.
+
+7. **Fallback behavior on API failure/timeout**
+   - Simulate quote failures/timeouts (bad key/network block/forced timeout).
+   - Confirm configured fallback rates are shown when quote collection yields no usable live rate.
+
+8. **Admin booking prefill from checkout selection**
+   - Place order with live checkout method and pickup-point selection.
+   - In admin booking modal, verify checkout selection metadata is available for prefill/override paths.
+
 ## Zip readiness
 
 The plugin directory is structurally complete and ready for external zipping.

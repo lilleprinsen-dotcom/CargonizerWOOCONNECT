@@ -93,6 +93,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if (!empty($live_settings['norway_only_enabled']) && $country !== 'NO') {
 			return;
 		}
+		if (!$this->has_minimum_destination_for_quotes($destination)) {
+			return;
+		}
 
 		$methods = $this->get_enabled_live_methods($settings);
 		if (empty($methods)) {
@@ -125,6 +128,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$rules_by_method = $this->get_rule_overrides_by_method($settings);
 		$this->apply_checkout_price_adjustments($quotes, $order_value, $live_settings, $rules_by_method);
 
+		$added_rates = 0;
 		foreach ($quotes as $quote) {
 			$rate_id = $this->id . ':' . $this->instance_id . ':' . sanitize_title($quote['method_key']);
 			$meta_data = array(
@@ -152,6 +156,11 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'taxes' => false,
 				'meta_data' => $meta_data,
 			));
+			$added_rates++;
+		}
+
+		if ($added_rates < 1) {
+			$this->add_fallback_rates_if_needed($settings, $live_settings);
 		}
 	}
 
@@ -183,7 +192,19 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		$cache_ttl = isset($live_settings['quote_cache_ttl_seconds']) ? max(0, (int) $live_settings['quote_cache_ttl_seconds']) : 0;
-		$cache_key = 'lp_carg_quote_' . md5(wp_json_encode(array($method_key, $recipient, $packages, $method_pricing)));
+		$cache_key = 'lp_carg_quote_' . md5(wp_json_encode(array(
+			'method_key' => $method_key,
+			'agreement_id' => isset($method['agreement_id']) ? (string) $method['agreement_id'] : '',
+			'carrier_id' => isset($method['carrier_id']) ? (string) $method['carrier_id'] : '',
+			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
+			'recipient' => $recipient,
+			'packages' => $packages,
+			'method_pricing' => $method_pricing,
+			'pricing_context' => array(
+				'show_prices_including_vat' => !empty($live_settings['show_prices_including_vat']),
+				'quote_timeout_seconds' => isset($live_settings['quote_timeout_seconds']) ? (float) $live_settings['quote_timeout_seconds'] : 5,
+			),
+		)));
 		if ($cache_ttl > 0) {
 			$cached = get_transient($cache_key);
 			if (is_array($cached) && !empty($cached['success'])) {
@@ -213,12 +234,21 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'body' => (string) $xml,
 		));
 		if (is_wp_error($response)) {
+			$this->log_live_checkout_event('warning', 'Live quote request failed.', array(
+				'method_key' => $method_key,
+				'error' => $response->get_error_message(),
+			));
 			return array('success' => false);
 		}
 
 		$status = (int) wp_remote_retrieve_response_code($response);
 		$body = (string) wp_remote_retrieve_body($response);
 		if ($status < 200 || $status >= 300 || $body === '') {
+			$this->log_live_checkout_event('warning', 'Live quote response was not successful.', array(
+				'method_key' => $method_key,
+				'http_status' => $status,
+				'body_empty' => $body === '',
+			));
 			return array('success' => false);
 		}
 
@@ -434,7 +464,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
 		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
 
-		if ($country === '' || $postcode === '') {
+		if (!$this->has_minimum_destination_for_pickup_points($destination)) {
 			return array();
 		}
 
@@ -456,7 +486,11 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'product' => isset($lookup_method['product_id']) ? (string) $lookup_method['product_id'] : '',
 			'country' => $country,
 			'postcode' => $postcode,
+			'city' => $city,
 			'address' => $address,
+			'pickup_context' => array(
+				'pickup_timeout_seconds' => isset($live_settings['pickup_point_timeout_seconds']) ? (float) $live_settings['pickup_point_timeout_seconds'] : 30,
+			),
 			'custom' => isset($custom['params']) ? $custom['params'] : array(),
 		)));
 		if ($cache_ttl > 0) {
@@ -468,6 +502,16 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 
 		$result = $this->api_service->fetch_servicepartner_options($lookup_method);
 		$options = isset($result['options']) && is_array($result['options']) ? $result['options'] : array();
+		if (empty($result['success'])) {
+			$this->log_live_checkout_event('warning', 'Pickup point lookup failed.', array(
+				'method_key' => isset($quote['method_key']) ? (string) $quote['method_key'] : '',
+				'carrier_id' => isset($quote['carrier_id']) ? (string) $quote['carrier_id'] : '',
+				'product_id' => isset($quote['product_id']) ? (string) $quote['product_id'] : '',
+				'postcode' => $postcode,
+				'error_message' => isset($result['error_message']) ? (string) $result['error_message'] : '',
+				'http_status' => isset($result['http_status']) ? (int) $result['http_status'] : 0,
+			));
+		}
 		$points = array();
 		foreach ($options as $option) {
 			if (!is_array($option)) {
@@ -549,5 +593,41 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			return;
 		}
 		WC()->session->set('lp_cargonizer_checkout_pickup_selection_map', is_array($map) ? $map : array());
+	}
+
+	private function has_minimum_destination_for_quotes($destination) {
+		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
+		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
+		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
+		if ($country !== 'NO') {
+			return false;
+		}
+		return $postcode !== '' && $city !== '';
+	}
+
+	private function has_minimum_destination_for_pickup_points($destination) {
+		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
+		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
+		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
+		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
+		if ($country !== 'NO') {
+			return false;
+		}
+		return $postcode !== '' && $city !== '' && $address !== '';
+	}
+
+	private function log_live_checkout_event($level, $message, $context = array()) {
+		if (!function_exists('wc_get_logger')) {
+			return;
+		}
+		$logger = wc_get_logger();
+		if (!$logger) {
+			return;
+		}
+		$method = method_exists($logger, $level) ? $level : 'info';
+		$logger->$method($message, array(
+			'source' => 'lp-cargonizer-live-checkout',
+			'context' => is_array($context) ? $context : array(),
+		));
 	}
 }
