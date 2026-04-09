@@ -9,9 +9,59 @@
 	var pendingRefreshRequest = null;
 	var queuedRefreshAfterCurrent = false;
 	var lastRefreshStartedAt = 0;
+	var selectorIdCounter = 0;
 
 	function hasPickupSelectors() {
 		return $('.lp-cargonizer-pickup-point-select').length > 0;
+	}
+
+	function normalizeRateId(value) {
+		return String(value || '');
+	}
+
+	function getChosenShippingRateIds() {
+		var ids = [];
+		$('input[name^="shipping_method"]:checked').each(function () {
+			var value = normalizeRateId($(this).val());
+			if (value) {
+				ids.push(value);
+			}
+		});
+		return ids;
+	}
+
+	function ensurePickupSelectorForRate(rateId) {
+		rateId = normalizeRateId(rateId);
+		if (!rateId) {
+			return $();
+		}
+		var $existing = $('.lp-cargonizer-pickup-point-select[data-rate-id="' + rateId + '"]');
+		if ($existing.length) {
+			return $existing.first();
+		}
+		var $shippingInput = $('input[name^="shipping_method"][value="' + rateId + '"]');
+		if (!$shippingInput.length) {
+			return $();
+		}
+		var $row = $shippingInput.closest('li, .wc-block-components-radio-control__option, .wc-block-components-shipping-rates-control__package');
+		if (!$row.length) {
+			return $();
+		}
+		selectorIdCounter += 1;
+		var selectorId = 'lp-cargonizer-pickup-dynamic-' + selectorIdCounter;
+		var $container = $('<div class="lp-cargonizer-checkout-pickup-point" style="margin:8px 0 0 24px;"></div>');
+		var $label = $('<label style="display:block;margin:0 0 6px;font-weight:600;"></label>')
+			.attr('for', selectorId)
+			.text('Pickup point');
+		var $select = $('<select class="lp-cargonizer-pickup-point-select"></select>')
+			.attr('id', selectorId)
+			.attr('data-rate-id', rateId)
+			.attr('data-selected-pickup-point-id', '')
+			.attr('data-state', 'loading');
+		$select.append($('<option></option>').attr('value', '').text('Fetching pickup points…'));
+		$container.append($label).append($select);
+		$row.append($container);
+		return $select;
 	}
 
 	function triggerCompatibilityUpdate() {
@@ -64,7 +114,7 @@
 		if (!config.ajaxGetAction) {
 			return;
 		}
-		if (!hasPickupSelectors()) {
+		if (!hasPickupSelectors() && !getChosenShippingRateIds().length) {
 			return;
 		}
 		if (pendingRefreshRequest) {
@@ -95,7 +145,7 @@
 	}
 
 	function scheduleCompatibilityRefresh() {
-		if (!hasPickupSelectors()) {
+		if (!hasPickupSelectors() && !getChosenShippingRateIds().length) {
 			return;
 		}
 		var now = Date.now();
@@ -120,6 +170,9 @@
 				return;
 			}
 			var $select = $('.lp-cargonizer-pickup-point-select[data-rate-id="' + item.rate_id + '"]');
+			if (!$select.length) {
+				$select = ensurePickupSelectorForRate(item.rate_id);
+			}
 			if (!$select.length) {
 				return;
 			}
@@ -199,7 +252,10 @@
 	$(document.body).on('updated_checkout wc-blocks_checkout_updated', function () {
 		scheduleCompatibilityRefresh();
 	});
-	if (hasPickupSelectors()) {
+	$(document.body).on('change', 'input[name^="shipping_method"]', function () {
+		scheduleCompatibilityRefresh();
+	});
+	if (hasPickupSelectors() || getChosenShippingRateIds().length) {
 		scheduleCompatibilityRefresh();
 	}
 })(jQuery);
