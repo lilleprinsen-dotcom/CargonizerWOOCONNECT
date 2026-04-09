@@ -214,7 +214,62 @@ class LP_Cargonizer_Settings_Service {
 			}
 		}
 
+		$output = $this->validate_live_pricing_method_coverage($output);
+
 		return $output;
+	}
+
+	private function validate_live_pricing_method_coverage($settings) {
+		$settings = is_array($settings) ? $settings : array();
+		$enabled_methods = isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array();
+		$live_checkout = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		$rules = isset($settings['checkout_method_rules']['rules']) && is_array($settings['checkout_method_rules']['rules']) ? $settings['checkout_method_rules']['rules'] : array();
+		$overrides = array();
+		foreach ($rules as $rule) {
+			if (!is_array($rule)) {
+				continue;
+			}
+			$method_key = isset($rule['method_key']) ? sanitize_text_field((string) $rule['method_key']) : '';
+			if ($method_key === '') {
+				continue;
+			}
+			$action = isset($rule['action']) ? sanitize_key((string) $rule['action']) : 'allow';
+			if ($action !== 'decorate') {
+				continue;
+			}
+			$overrides[$method_key] = array(
+				'allow_low_price' => !isset($rule['allow_low_price']) || !empty($rule['allow_low_price']),
+				'allow_free_shipping' => !isset($rule['allow_free_shipping']) || !empty($rule['allow_free_shipping']),
+			);
+		}
+
+		$has_low_price_candidate = false;
+		$has_free_candidate = false;
+		foreach ($enabled_methods as $method_key) {
+			$method_key = sanitize_text_field((string) $method_key);
+			if ($method_key === '') {
+				continue;
+			}
+			$rule = isset($overrides[$method_key]) ? $overrides[$method_key] : array(
+				'allow_low_price' => true,
+				'allow_free_shipping' => true,
+			);
+			if (!empty($rule['allow_low_price'])) {
+				$has_low_price_candidate = true;
+			}
+			if (!empty($rule['allow_free_shipping'])) {
+				$has_free_candidate = true;
+			}
+		}
+
+		if ((isset($live_checkout['low_price_strategy']) ? (string) $live_checkout['low_price_strategy'] : '') !== 'disabled' && !$has_low_price_candidate && !empty($enabled_methods)) {
+			$settings['live_checkout']['low_price_strategy'] = 'disabled';
+		}
+		if ((isset($live_checkout['free_shipping_strategy']) ? (string) $live_checkout['free_shipping_strategy'] : '') !== 'disabled' && !$has_free_candidate && !empty($enabled_methods)) {
+			$settings['live_checkout']['free_shipping_strategy'] = 'disabled';
+		}
+
+		return $settings;
 	}
 
 	private function prepare_checkout_fallback_input($fallback_input, $live_checkout_input) {
@@ -282,6 +337,7 @@ class LP_Cargonizer_Settings_Service {
 
 	private function get_checkout_method_rules_defaults() {
 		return array(
+			'schema_version' => 2,
 			'rules' => array(),
 		);
 	}
@@ -316,7 +372,7 @@ class LP_Cargonizer_Settings_Service {
 			'debug_logging' => isset($input['debug_logging']) ? $this->sanitize_checkbox_value($input['debug_logging']) : $this->sanitize_checkbox_value($base['debug_logging']),
 		);
 
-		$allowed_low_price = array('cheapest_eligible_live');
+		$allowed_low_price = array('cheapest_eligible_live', 'disabled');
 		if (!in_array($output['low_price_strategy'], $allowed_low_price, true)) {
 			$output['low_price_strategy'] = 'cheapest_eligible_live';
 		}
@@ -408,7 +464,10 @@ class LP_Cargonizer_Settings_Service {
 
 	private function sanitize_checkout_method_rules_settings($input, $current) {
 		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_checkout_method_rules_defaults());
-		$output = array('rules' => array());
+		$output = array(
+			'schema_version' => 2,
+			'rules' => array(),
+		);
 		$rules = isset($input['rules']) && is_array($input['rules']) ? $input['rules'] : (isset($base['rules']) && is_array($base['rules']) ? $base['rules'] : array());
 
 		foreach ($rules as $rule) {
@@ -421,13 +480,37 @@ class LP_Cargonizer_Settings_Service {
 				continue;
 			}
 
+			$action = isset($rule['action']) ? sanitize_key((string) $rule['action']) : 'allow';
+			if (!in_array($action, array('allow', 'deny', 'decorate'), true)) {
+				$action = 'allow';
+			}
+
+			$conditions_groups = array();
+			if (isset($rule['conditions_groups']) && is_array($rule['conditions_groups'])) {
+				foreach ($rule['conditions_groups'] as $group_conditions) {
+					if (!is_array($group_conditions)) {
+						continue;
+					}
+					$clean_group = $this->sanitize_method_rule_conditions($group_conditions);
+					if (!empty($clean_group)) {
+						$conditions_groups[] = $clean_group;
+					}
+				}
+			}
+			$legacy_conditions = isset($rule['conditions']) && is_array($rule['conditions']) ? $this->sanitize_method_rule_conditions($rule['conditions']) : array();
+			if (empty($conditions_groups) && !empty($legacy_conditions)) {
+				$conditions_groups[] = $legacy_conditions;
+			}
+
 			$output['rules'][] = array(
 				'method_key' => $method_key,
+				'action' => $action,
 				'enabled' => isset($rule['enabled']) ? $this->sanitize_checkbox_value($rule['enabled']) : 1,
 				'customer_title' => isset($rule['customer_title']) ? sanitize_text_field((string) $rule['customer_title']) : '',
 				'allow_low_price' => isset($rule['allow_low_price']) ? $this->sanitize_checkbox_value($rule['allow_low_price']) : 1,
 				'allow_free_shipping' => isset($rule['allow_free_shipping']) ? $this->sanitize_checkbox_value($rule['allow_free_shipping']) : 1,
-				'conditions' => isset($rule['conditions']) && is_array($rule['conditions']) ? $this->sanitize_method_rule_conditions($rule['conditions']) : array(),
+				'conditions' => $legacy_conditions,
+				'conditions_groups' => $conditions_groups,
 				'group_label' => isset($rule['group_label']) ? sanitize_text_field((string) $rule['group_label']) : '',
 				'embedded_label' => isset($rule['embedded_label']) ? sanitize_text_field((string) $rule['embedded_label']) : '',
 			);
@@ -448,12 +531,29 @@ class LP_Cargonizer_Settings_Service {
 				$output[$key] = sanitize_text_field((string) $conditions[$key]);
 			}
 		}
+		$allowed_tristate_conditions = array(
+			'has_separate_package',
+			'has_missing_dimensions',
+			'has_high_value_secure',
+			'mailbox_capable',
+			'pickup_capable',
+			'bulky',
+		);
+		foreach ($allowed_tristate_conditions as $key) {
+			if (!isset($conditions[$key])) {
+				continue;
+			}
+			$value = sanitize_key((string) $conditions[$key]);
+			$output[$key] = in_array($value, array('any', 'yes', 'no'), true) ? $value : 'any';
+		}
 
 		$allowed_numeric_conditions = array(
 			'min_weight',
 			'max_weight',
 			'min_order_value',
 			'max_order_value',
+			'min_total_weight',
+			'max_total_weight',
 		);
 		foreach ($allowed_numeric_conditions as $key) {
 			if (isset($conditions[$key])) {
@@ -469,6 +569,21 @@ class LP_Cargonizer_Settings_Service {
 		foreach ($allowed_checkbox_conditions as $key) {
 			if (isset($conditions[$key])) {
 				$output[$key] = $this->sanitize_checkbox_value($conditions[$key]);
+			}
+		}
+		foreach (array('profile_slugs', 'category_slugs') as $list_key) {
+			if (!isset($conditions[$list_key]) || !is_array($conditions[$list_key])) {
+				continue;
+			}
+			$clean_list = array();
+			foreach ($conditions[$list_key] as $item) {
+				$item = sanitize_key((string) $item);
+				if ($item !== '') {
+					$clean_list[] = $item;
+				}
+			}
+			if (!empty($clean_list)) {
+				$output[$list_key] = array_values(array_unique($clean_list));
 			}
 		}
 

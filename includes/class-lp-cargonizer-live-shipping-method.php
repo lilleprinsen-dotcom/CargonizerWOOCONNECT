@@ -308,17 +308,23 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		$threshold = isset($live_settings['free_shipping_threshold']) ? (float) $live_settings['free_shipping_threshold'] : 1500;
-		if ($order_value < $threshold) {
+		$low_price_strategy = isset($live_settings['low_price_strategy']) ? (string) $live_settings['low_price_strategy'] : 'cheapest_eligible_live';
+		if ($order_value < $threshold && $low_price_strategy !== 'disabled') {
 			$low_price = isset($live_settings['low_price_option_amount']) ? (float) $live_settings['low_price_option_amount'] : 69;
+			$adjusted = false;
 			foreach ($quotes as &$quote) {
 				$allow = !isset($rules_by_method[$quote['method_key']]['allow_low_price']) || !empty($rules_by_method[$quote['method_key']]['allow_low_price']);
 				if (!$allow) {
 					continue;
 				}
 				$quote['display_cost'] = round(max(0, $low_price), 2);
+				$adjusted = true;
 				break;
 			}
 			unset($quote);
+			if (!$adjusted && !empty($quotes[0])) {
+				$quotes[0]['display_cost'] = round(max(0, $low_price), 2);
+			}
 			return;
 		}
 
@@ -348,6 +354,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				continue;
 			}
 			if ((string) (isset($rule['method_key']) ? $rule['method_key'] : '') !== $method_key) {
+				continue;
+			}
+			$action = isset($rule['action']) ? sanitize_key((string) $rule['action']) : 'allow';
+			if ($action !== 'decorate') {
 				continue;
 			}
 			$title = isset($rule['customer_title']) ? trim((string) $rule['customer_title']) : '';
@@ -426,6 +436,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			}
 			$method_key = isset($rule['method_key']) ? sanitize_text_field((string) $rule['method_key']) : '';
 			if ($method_key === '') {
+				continue;
+			}
+			$action = isset($rule['action']) ? sanitize_key((string) $rule['action']) : 'allow';
+			if ($action !== 'decorate') {
 				continue;
 			}
 			$result[$method_key] = array(
