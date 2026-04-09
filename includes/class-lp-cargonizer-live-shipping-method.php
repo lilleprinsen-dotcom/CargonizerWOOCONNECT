@@ -110,9 +110,11 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			return;
 		}
 
-		$quotes = $this->collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings);
+		$fallback_behavior = $this->resolve_quote_fallback_behavior($settings, $live_settings);
+		$allow_checkout_with_fallback = $this->should_allow_checkout_with_fallback($settings);
+		$quotes = $this->collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
 		if (empty($quotes)) {
-			$this->add_fallback_rates_if_needed($settings, $live_settings);
+			$this->add_fallback_rates_if_needed($settings, $fallback_behavior, $allow_checkout_with_fallback);
 			return;
 		}
 
@@ -153,21 +155,20 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'id' => $rate_id,
 				'label' => $quote['label'],
 				'cost' => $quote['display_cost'],
-				'taxes' => false,
 				'meta_data' => $meta_data,
 			));
 			$added_rates++;
 		}
 
 		if ($added_rates < 1) {
-			$this->add_fallback_rates_if_needed($settings, $live_settings);
+			$this->add_fallback_rates_if_needed($settings, $fallback_behavior, $allow_checkout_with_fallback);
 		}
 	}
 
-	private function collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings) {
+	private function collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior) {
 		$quotes = array();
 		foreach ($candidates as $method) {
-			$quote = $this->build_quote_for_method($method, $package_result, $destination, $settings, $live_settings);
+			$quote = $this->build_quote_for_method($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
 			if (!empty($quote['success'])) {
 				$quotes[] = $quote;
 			}
@@ -175,7 +176,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		return $quotes;
 	}
 
-	private function build_quote_for_method($method, $package_result, $destination, $settings, $live_settings) {
+	private function build_quote_for_method($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior) {
 		$method_key = isset($method['key']) ? (string) $method['key'] : '';
 		$method_pricing = $this->resolve_method_pricing($method_key, $settings);
 		$recipient = array(
@@ -225,7 +226,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if ($timeout <= 0) {
 			$timeout = 5;
 		}
-		$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
+		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => $timeout,
 			'headers' => array_merge($this->api_service->get_auth_headers(), array(
 				'Accept' => 'application/xml',
@@ -238,7 +239,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'method_key' => $method_key,
 				'error' => $response->get_error_message(),
 			));
-			return array('success' => false);
+			return $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 		}
 
 		$status = (int) wp_remote_retrieve_response_code($response);
@@ -249,14 +250,14 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'http_status' => $status,
 				'body_empty' => $body === '',
 			));
-			return array('success' => false);
+			return $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 		}
 
 		$price_fields = $this->api_service->parse_estimate_price_fields($body);
 		$selected = $this->estimator_service->select_estimate_price_value($price_fields, isset($method_pricing['price_source']) ? $method_pricing['price_source'] : 'estimated');
 		$live_price = $this->estimator_service->parse_price_to_number(isset($selected['value']) ? $selected['value'] : '');
 		if ($live_price === null) {
-			return array('success' => false);
+			return $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 		}
 
 		$bring_handling = $this->estimator_service->get_bring_manual_handling_fee($packages, $method);
@@ -275,11 +276,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'rounding_mode' => isset($method_pricing['rounding_mode']) ? $method_pricing['rounding_mode'] : 'none',
 		));
 		if (!is_array($calc) || (isset($calc['status']) && $calc['status'] !== 'ok')) {
-			return array('success' => false);
+			return $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 		}
 
-		$show_vat = !empty($live_settings['show_prices_including_vat']);
-		$display_cost = $show_vat ? (float) $calc['rounded_price'] : (float) $calc['final_price_ex_vat'];
+		$display_cost = (float) $calc['final_price_ex_vat'];
 		$customer_title = $this->resolve_customer_title($method, $settings);
 		$quote = array(
 			'success' => true,
@@ -297,6 +297,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if ($cache_ttl > 0) {
 			set_transient($cache_key, $quote, $cache_ttl);
 		}
+		set_transient($this->get_last_known_quote_cache_key($cache_key), $quote, DAY_IN_SECONDS * 30);
 
 		return $quote;
 	}
@@ -367,6 +368,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 	private function get_enabled_live_methods($settings) {
 		$available = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
 		$available = $this->settings_service->ensure_internal_manual_methods($available);
+		$method_pricing = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
 		$enabled_map = $this->settings_service->get_enabled_method_map();
 		$methods = array();
 		foreach ($available as $method) {
@@ -380,6 +382,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			if ($this->settings_service->is_manual_norgespakke_method($method)) {
 				continue;
 			}
+			$pricing = isset($method_pricing[$key]) && is_array($method_pricing[$key]) ? $method_pricing[$key] : array();
+			$method['delivery_to_pickup_point'] = !empty($pricing['delivery_to_pickup_point']) ? 1 : (!empty($method['delivery_to_pickup_point']) ? 1 : 0);
+			$method['delivery_to_home'] = array_key_exists('delivery_to_home', $pricing) ? (!empty($pricing['delivery_to_home']) ? 1 : 0) : (!empty($method['delivery_to_home']) ? 1 : 0);
 			$methods[] = $method;
 		}
 		return $methods;
@@ -431,9 +436,16 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		return $result;
 	}
 
-	private function add_fallback_rates_if_needed($settings, $live_settings) {
-		$fallback_behavior = isset($live_settings['quote_fallback_behavior']) ? (string) $live_settings['quote_fallback_behavior'] : 'safe_fallback_rate';
-		if ($fallback_behavior !== 'safe_fallback_rate') {
+	private function add_fallback_rates_if_needed($settings, $fallback_behavior, $allow_checkout_with_fallback) {
+		if ($fallback_behavior === 'block_checkout') {
+			$this->add_checkout_block_notice(__('Fraktberegning er midlertidig utilgjengelig. Vennligst prøv igjen senere.', 'lp-cargonizer'));
+			return;
+		}
+		if ($fallback_behavior === 'hide_live_checkout') {
+			return;
+		}
+		if (!$allow_checkout_with_fallback) {
+			$this->add_checkout_block_notice(__('Fraktberegning er midlertidig utilgjengelig. Fallback-rater er deaktivert.', 'lp-cargonizer'));
 			return;
 		}
 
@@ -452,7 +464,6 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'id' => $this->id . ':' . $this->instance_id . ':fallback_' . $index,
 				'label' => $label,
 				'cost' => round(max(0, $price), 2),
-				'taxes' => false,
 			));
 		}
 	}
@@ -617,6 +628,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 	}
 
 	private function log_live_checkout_event($level, $message, $context = array()) {
+		if (!$this->should_log_live_checkout_events()) {
+			return;
+		}
 		if (!function_exists('wc_get_logger')) {
 			return;
 		}
@@ -629,5 +643,51 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'source' => 'lp-cargonizer-live-checkout',
 			'context' => is_array($context) ? $context : array(),
 		));
+	}
+
+	private function resolve_quote_fallback_behavior($settings, $live_settings) {
+		$fallback = isset($settings['checkout_fallback']) && is_array($settings['checkout_fallback']) ? $settings['checkout_fallback'] : array();
+		$behavior = isset($fallback['on_quote_failure']) ? sanitize_text_field((string) $fallback['on_quote_failure']) : '';
+		if ($behavior === '' && isset($live_settings['quote_fallback_behavior'])) {
+			$behavior = sanitize_text_field((string) $live_settings['quote_fallback_behavior']);
+		}
+		$allowed = array('safe_fallback_rate', 'block_checkout', 'hide_live_checkout', 'use_last_known_rate');
+		if (!in_array($behavior, $allowed, true)) {
+			$behavior = 'safe_fallback_rate';
+		}
+		return $behavior;
+	}
+
+	private function should_allow_checkout_with_fallback($settings) {
+		$fallback = isset($settings['checkout_fallback']) && is_array($settings['checkout_fallback']) ? $settings['checkout_fallback'] : array();
+		return !isset($fallback['allow_checkout_with_fallback']) || !empty($fallback['allow_checkout_with_fallback']);
+	}
+
+	private function maybe_return_last_known_quote($cache_key, $fallback_behavior) {
+		if ($fallback_behavior !== 'use_last_known_rate') {
+			return array('success' => false);
+		}
+		$cached = get_transient($this->get_last_known_quote_cache_key($cache_key));
+		if (is_array($cached) && !empty($cached['success'])) {
+			return $cached;
+		}
+		return array('success' => false);
+	}
+
+	private function get_last_known_quote_cache_key($cache_key) {
+		return 'lp_carg_last_known_' . md5((string) $cache_key);
+	}
+
+	private function add_checkout_block_notice($message) {
+		if (!function_exists('wc_add_notice') || is_admin()) {
+			return;
+		}
+		wc_add_notice((string) $message, 'error');
+	}
+
+	private function should_log_live_checkout_events() {
+		$settings = $this->settings_service->get_settings();
+		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		return !empty($live_settings['debug_logging']);
 	}
 }

@@ -1853,13 +1853,6 @@
 				bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
 
 				var bookingNonce = (config.nonces && config.nonces.book ? config.nonces.book : '');
-				if (window.console && typeof window.console.log === 'function') {
-					window.console.log({
-						source: 'lp-cargonizer-booking',
-						bookingNonce: bookingNonce,
-						availableNonces: config && config.nonces ? config.nonces : null
-					});
-				}
 				if (!bookingNonce) {
 					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Booking nonce mangler i frontend-konfigurasjonen.</span>';
 					runBookingBtn.disabled = false;

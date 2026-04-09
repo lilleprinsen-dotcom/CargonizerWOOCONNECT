@@ -424,7 +424,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			return $empty_result;
 		}
 
-		$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
+		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => 40,
 			'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
 			'body' => $xml,
@@ -1159,7 +1159,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
 			), $method_payload);
 
-			$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
+			$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 				'timeout' => 40,
 				'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
 				'body' => $xml,
