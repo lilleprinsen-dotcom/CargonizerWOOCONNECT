@@ -45,12 +45,16 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		}
 
 		$pickup_points = $this->rate_meta($rate, 'krokedil_pickup_points');
-		if (!is_array($pickup_points) || empty($pickup_points)) {
+		$session_map = $this->get_session_map();
+		if ((!is_array($pickup_points) || empty($pickup_points)) && isset($session_map[$current_rate_id]['pickup_points']) && is_array($session_map[$current_rate_id]['pickup_points'])) {
+			$pickup_points = $session_map[$current_rate_id]['pickup_points'];
+		}
+		$is_pickup_capable = !empty($this->rate_meta($rate, 'lp_cargonizer_pickup_capable'));
+		if ((!is_array($pickup_points) || empty($pickup_points)) && !$is_pickup_capable) {
 			return;
 		}
 
 		$selected_id = (string) $this->rate_meta($rate, 'krokedil_selected_pickup_point_id');
-		$session_map = $this->get_session_map();
 		if (isset($session_map[$current_rate_id]['id'])) {
 			$session_selected_id = sanitize_text_field((string) $session_map[$current_rate_id]['id']);
 			if ($session_selected_id !== '') {
@@ -64,16 +68,20 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		echo '<div class="lp-cargonizer-checkout-pickup-point" style="margin:8px 0 0 24px;">';
 		echo '<label for="lp-cargonizer-pickup-' . esc_attr($index) . '" style="display:block;margin:0 0 6px;font-weight:600;">' . esc_html__('Pickup point', 'lp-cargonizer') . '</label>';
 		echo '<select id="lp-cargonizer-pickup-' . esc_attr($index) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '" data-selected-pickup-point-id="' . esc_attr($selected_id) . '">';
-		foreach ($pickup_points as $point) {
-			if (!is_array($point)) {
-				continue;
+		if (is_array($pickup_points) && !empty($pickup_points)) {
+			foreach ($pickup_points as $point) {
+				if (!is_array($point)) {
+					continue;
+				}
+				$point_id = isset($point['id']) ? (string) $point['id'] : '';
+				if ($point_id === '') {
+					continue;
+				}
+				$label = isset($point['label']) ? (string) $point['label'] : $point_id;
+				echo '<option value="' . esc_attr($point_id) . '" ' . selected($selected_id, $point_id, false) . '>' . esc_html($label) . '</option>';
 			}
-			$point_id = isset($point['id']) ? (string) $point['id'] : '';
-			if ($point_id === '') {
-				continue;
-			}
-			$label = isset($point['label']) ? (string) $point['label'] : $point_id;
-			echo '<option value="' . esc_attr($point_id) . '" ' . selected($selected_id, $point_id, false) . '>' . esc_html($label) . '</option>';
+		} else {
+			echo '<option value="">' . esc_html__('Fetching pickup points…', 'lp-cargonizer') . '</option>';
 		}
 		echo '</select>';
 		echo '</div>';
@@ -99,6 +107,10 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			'point' => $available,
 			'source' => 'customer_override',
 		);
+		$existing_points = $this->find_rate_pickup_points($rate_id);
+		if (!empty($existing_points)) {
+			$map[$rate_id]['pickup_points'] = $existing_points;
+		}
 		$this->set_session_map($map);
 
 		wp_send_json_success(array(
@@ -108,6 +120,19 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	private function find_rate_pickup_point($rate_id, $pickup_point_id) {
+		$session_map = $this->get_session_map();
+		if (isset($session_map[$rate_id]['pickup_points']) && is_array($session_map[$rate_id]['pickup_points'])) {
+			foreach ($session_map[$rate_id]['pickup_points'] as $point) {
+				if (!is_array($point)) {
+					continue;
+				}
+				$point_id = isset($point['id']) ? (string) $point['id'] : '';
+				if ($point_id === $pickup_point_id) {
+					return $point;
+				}
+			}
+		}
+
 		$shipping_packages = $this->get_shipping_packages_from_session();
 		foreach ($shipping_packages as $shipping_package) {
 			$rates = isset($shipping_package['rates']) && is_array($shipping_package['rates']) ? $shipping_package['rates'] : array();
@@ -129,6 +154,21 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			}
 		}
 
+		return array();
+	}
+
+	private function find_rate_pickup_points($rate_id) {
+		$shipping_packages = $this->get_shipping_packages_from_session();
+		foreach ($shipping_packages as $shipping_package) {
+			$rates = isset($shipping_package['rates']) && is_array($shipping_package['rates']) ? $shipping_package['rates'] : array();
+			if (!isset($rates[$rate_id]) || !is_a($rates[$rate_id], 'WC_Shipping_Rate')) {
+				continue;
+			}
+			$points = $this->rate_meta($rates[$rate_id], 'krokedil_pickup_points');
+			if (is_array($points) && !empty($points)) {
+				return $points;
+			}
+		}
 		return array();
 	}
 

@@ -252,6 +252,9 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 		$selection_valid = true;
 
 		if ($rate_id !== '' && isset($pickup_selection_map[$rate_id]) && is_array($pickup_selection_map[$rate_id])) {
+			if (empty($pickup_points) && isset($pickup_selection_map[$rate_id]['pickup_points']) && is_array($pickup_selection_map[$rate_id]['pickup_points'])) {
+				$pickup_points = array_values($pickup_selection_map[$rate_id]['pickup_points']);
+			}
 			$session_selected_id = isset($pickup_selection_map[$rate_id]['id']) ? sanitize_text_field((string) $pickup_selection_map[$rate_id]['id']) : '';
 			if ($session_selected_id !== '') {
 				$selected_id = $session_selected_id;
