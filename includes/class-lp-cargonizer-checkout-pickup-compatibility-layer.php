@@ -35,6 +35,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			if (!is_a($rate, 'WC_Shipping_Rate')) {
 				continue;
 			}
+			$this->normalize_rate_krokedil_pickup_meta($rate);
 
 			$normalized_rate_id = (string) $rate->get_id();
 			$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_points_meta($this->rate_meta($rate, 'krokedil_pickup_points'));
@@ -70,6 +71,22 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		));
 
 		return $rates;
+	}
+
+	private function normalize_rate_krokedil_pickup_meta($rate) {
+		if (!is_a($rate, 'WC_Shipping_Rate')) {
+			return;
+		}
+
+		$pickup_points_meta = $this->rate_meta($rate, 'krokedil_pickup_points');
+		if (is_array($pickup_points_meta)) {
+			$rate->add_meta_data('krokedil_pickup_points', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points_meta), true);
+		}
+
+		$selected_pickup_point_meta = $this->rate_meta($rate, 'krokedil_selected_pickup_point');
+		if (is_array($selected_pickup_point_meta)) {
+			$rate->add_meta_data('krokedil_selected_pickup_point', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point_meta), true);
+		}
 	}
 
 	public function ajax_get_checkout_pickup_points() {
