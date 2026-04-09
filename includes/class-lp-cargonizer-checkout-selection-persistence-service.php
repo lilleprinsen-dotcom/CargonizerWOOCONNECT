@@ -330,13 +330,33 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	}
 
 	private function resolve_pickup_selection($rate_meta, $rate_id, $pickup_selection_map) {
-		$pickup_points = isset($rate_meta['krokedil_pickup_points']) && is_array($rate_meta['krokedil_pickup_points'])
-			? array_values($rate_meta['krokedil_pickup_points'])
-			: array();
+		$pickup_points = array();
+		if (isset($rate_meta['krokedil_pickup_points'])) {
+			$raw_pickup_points = $rate_meta['krokedil_pickup_points'];
+			if (is_string($raw_pickup_points)) {
+				$decoded_pickup_points = json_decode($raw_pickup_points, true);
+				if (is_array($decoded_pickup_points)) {
+					$raw_pickup_points = $decoded_pickup_points;
+				}
+			}
+			if (is_array($raw_pickup_points)) {
+				$pickup_points = array_values($raw_pickup_points);
+			}
+		}
 		$selected_id = isset($rate_meta['krokedil_selected_pickup_point_id']) ? sanitize_text_field((string) $rate_meta['krokedil_selected_pickup_point_id']) : '';
-		$selected_point = isset($rate_meta['krokedil_selected_pickup_point']) && is_array($rate_meta['krokedil_selected_pickup_point'])
-			? $rate_meta['krokedil_selected_pickup_point']
-			: array();
+		$selected_point = array();
+		if (isset($rate_meta['krokedil_selected_pickup_point'])) {
+			$raw_selected_point = $rate_meta['krokedil_selected_pickup_point'];
+			if (is_string($raw_selected_point)) {
+				$decoded_selected_point = json_decode($raw_selected_point, true);
+				if (is_array($decoded_selected_point)) {
+					$raw_selected_point = $decoded_selected_point;
+				}
+			}
+			if (is_array($raw_selected_point)) {
+				$selected_point = $raw_selected_point;
+			}
+		}
 		$selection_source = 'auto_nearest';
 		$selection_valid = true;
 
