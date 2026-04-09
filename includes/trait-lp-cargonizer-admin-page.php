@@ -84,10 +84,72 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			return;
 		}
 
+		$checkout_summary_html = $this->render_checkout_selection_summary_html($order);
+
 		echo '<div class="lp-cargonizer-order-actions" style="clear:both;margin-top:16px;padding-top:12px;border-top:1px solid #eee;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
 			. '<button type="button" class="button lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '">Estimer fraktkostnad</button>'
 			. '<button type="button" class="button lp-cargonizer-book-open" data-order-id="' . esc_attr($order->get_id()) . '">Book shipment</button>'
-			. '</div>';
+			. '</div>'
+			. $checkout_summary_html;
+	}
+
+	private function render_checkout_selection_summary_html($order) {
+		if (!$order || !is_a($order, 'WC_Order')) {
+			return '';
+		}
+
+		$selection = $order->get_meta('_lp_cargonizer_checkout_selection', true);
+		if (!is_array($selection)) {
+			return '';
+		}
+
+		$shipping = isset($selection['shipping']) && is_array($selection['shipping']) ? $selection['shipping'] : array();
+		$pickup = isset($selection['pickup_point']) && is_array($selection['pickup_point']) ? $selection['pickup_point'] : array();
+		$pickup_selected = isset($pickup['selected']) && is_array($pickup['selected']) ? $pickup['selected'] : array();
+		$selected_service_ids = isset($shipping['selected_service_ids']) && is_array($shipping['selected_service_ids']) ? $shipping['selected_service_ids'] : array();
+		$selected_service_ids = array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $selected_service_ids)), 'strlen'));
+
+		$method_label = isset($shipping['label']) ? sanitize_text_field((string) $shipping['label']) : '';
+		$product_id = isset($shipping['product_id']) ? sanitize_text_field((string) $shipping['product_id']) : '';
+		$agreement_id = isset($shipping['transport_agreement_id']) ? sanitize_text_field((string) $shipping['transport_agreement_id']) : '';
+		$pickup_name = isset($pickup_selected['name']) ? sanitize_text_field((string) $pickup_selected['name']) : '';
+		$pickup_id = isset($pickup['selected_id']) ? sanitize_text_field((string) $pickup['selected_id']) : '';
+		$pickup_address = trim(
+			(isset($pickup_selected['address1']) ? sanitize_text_field((string) $pickup_selected['address1']) : '')
+			. ' '
+			. (isset($pickup_selected['postcode']) ? sanitize_text_field((string) $pickup_selected['postcode']) : '')
+			. ' '
+			. (isset($pickup_selected['city']) ? sanitize_text_field((string) $pickup_selected['city']) : '')
+		);
+		$saved_at = isset($selection['saved_at_gmt']) ? sanitize_text_field((string) $selection['saved_at_gmt']) : '';
+
+		if ($method_label === '' && $product_id === '' && $pickup_id === '' && empty($selected_service_ids)) {
+			return '';
+		}
+
+		$html = '<div style="margin-top:10px;padding:10px 12px;border:1px solid #dcdcde;background:#f6f7f7;">';
+		$html .= '<strong>Kundevalgt frakt ved checkout</strong>';
+		$html .= '<div style="margin-top:6px;color:#1d2327;">Metode: ' . esc_html($method_label !== '' ? $method_label : '—');
+		if ($product_id !== '' || $agreement_id !== '') {
+			$html .= ' <span style="color:#646970;">(' . esc_html(trim('product=' . $product_id . ', agreement=' . $agreement_id, ', ')) . ')</span>';
+		}
+		$html .= '</div>';
+		if ($pickup_id !== '' || $pickup_name !== '') {
+			$html .= '<div style="margin-top:4px;color:#1d2327;">Pickup/service point: ' . esc_html($pickup_name !== '' ? $pickup_name : $pickup_id);
+			if ($pickup_address !== '') {
+				$html .= ' <span style="color:#646970;">(' . esc_html($pickup_address) . ')</span>';
+			}
+			$html .= '</div>';
+		}
+		if (!empty($selected_service_ids)) {
+			$html .= '<div style="margin-top:4px;color:#1d2327;">Valgte tjenester: ' . esc_html(implode(', ', $selected_service_ids)) . '</div>';
+		}
+		if ($saved_at !== '') {
+			$html .= '<div style="margin-top:4px;color:#646970;">Lagret (GMT): ' . esc_html($saved_at) . '</div>';
+		}
+		$html .= '</div>';
+
+		return $html;
 	}
 
 	public function render_estimate_modal() {

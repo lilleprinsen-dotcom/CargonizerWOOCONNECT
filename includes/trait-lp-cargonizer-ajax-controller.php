@@ -86,6 +86,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'items' => $items,
 			'packages' => $packages,
 			'booking_state' => $this->load_order_booking_state($order),
+			'checkout_selection' => $this->load_order_checkout_selection($order),
 			'booking_defaults' => array(
 				'notify_email_to_consignee' => isset($settings['booking_email_notification_default']) ? (int) $this->sanitize_checkbox_value($settings['booking_email_notification_default']) : 1,
 			),
@@ -100,6 +101,64 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 	private function get_booking_state_meta_key() {
 		return '_lp_cargonizer_booking_state';
+	}
+
+	private function get_checkout_selection_meta_key() {
+		return '_lp_cargonizer_checkout_selection';
+	}
+
+	private function load_order_checkout_selection($order) {
+		if (!$order || !is_a($order, 'WC_Order')) {
+			return array();
+		}
+
+		$raw = $order->get_meta($this->get_checkout_selection_meta_key(), true);
+		if (!is_array($raw)) {
+			return array();
+		}
+
+		$shipping = isset($raw['shipping']) && is_array($raw['shipping']) ? $raw['shipping'] : array();
+		$pickup_point = isset($raw['pickup_point']) && is_array($raw['pickup_point']) ? $raw['pickup_point'] : array();
+		$selected = isset($pickup_point['selected']) && is_array($pickup_point['selected']) ? $pickup_point['selected'] : array();
+		$selected_service_ids = isset($shipping['selected_service_ids']) && is_array($shipping['selected_service_ids']) ? $shipping['selected_service_ids'] : array();
+
+		$clean_service_ids = array();
+		foreach ($selected_service_ids as $service_id) {
+			$clean_service_id = sanitize_text_field((string) $service_id);
+			if ($clean_service_id !== '') {
+				$clean_service_ids[] = $clean_service_id;
+			}
+		}
+
+		return array(
+			'version' => isset($raw['version']) ? absint($raw['version']) : 0,
+			'source' => isset($raw['source']) ? sanitize_text_field((string) $raw['source']) : '',
+			'saved_at_gmt' => isset($raw['saved_at_gmt']) ? sanitize_text_field((string) $raw['saved_at_gmt']) : '',
+			'shipping' => array(
+				'method_id' => isset($shipping['method_id']) ? sanitize_text_field((string) $shipping['method_id']) : '',
+				'method_key' => isset($shipping['method_key']) ? sanitize_text_field((string) $shipping['method_key']) : '',
+				'rate_id' => isset($shipping['rate_id']) ? sanitize_text_field((string) $shipping['rate_id']) : '',
+				'label' => isset($shipping['label']) ? sanitize_text_field((string) $shipping['label']) : '',
+				'transport_agreement_id' => isset($shipping['transport_agreement_id']) ? sanitize_text_field((string) $shipping['transport_agreement_id']) : '',
+				'carrier_id' => isset($shipping['carrier_id']) ? sanitize_text_field((string) $shipping['carrier_id']) : '',
+				'product_id' => isset($shipping['product_id']) ? sanitize_text_field((string) $shipping['product_id']) : '',
+				'selected_service_ids' => array_values(array_unique($clean_service_ids)),
+			),
+			'pickup_point' => array(
+				'required' => !empty($pickup_point['required']),
+				'selected_id' => isset($pickup_point['selected_id']) ? sanitize_text_field((string) $pickup_point['selected_id']) : '',
+				'selected' => array(
+					'id' => isset($selected['id']) ? sanitize_text_field((string) $selected['id']) : '',
+					'name' => isset($selected['name']) ? sanitize_text_field((string) $selected['name']) : '',
+					'address1' => isset($selected['address1']) ? sanitize_text_field((string) $selected['address1']) : '',
+					'postcode' => isset($selected['postcode']) ? sanitize_text_field((string) $selected['postcode']) : '',
+					'city' => isset($selected['city']) ? sanitize_text_field((string) $selected['city']) : '',
+					'country' => isset($selected['country']) ? sanitize_text_field((string) $selected['country']) : '',
+					'customer_number' => isset($selected['customer_number']) ? sanitize_text_field((string) $selected['customer_number']) : '',
+				),
+				'selection_source' => isset($pickup_point['selection_source']) ? sanitize_text_field((string) $pickup_point['selection_source']) : '',
+			),
+		);
 	}
 
 	private function get_default_booking_state() {
