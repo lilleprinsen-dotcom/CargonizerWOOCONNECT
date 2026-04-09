@@ -292,8 +292,9 @@ class LP_Cargonizer_Settings_Service {
 			'low_price_strategy' => 'cheapest_eligible_live',
 			'free_shipping_strategy' => 'cheapest_standard_eligible',
 			'quote_timing_mode' => 'checkout_only',
-			'quote_timeout_seconds' => 5,
+			'quote_timeout_seconds' => 3,
 			'quote_cache_ttl_seconds' => 300,
+			'pickup_point_timeout_seconds' => 8,
 			'pickup_point_cache_ttl_seconds' => 300,
 			'debug_logging' => 0,
 		);
@@ -376,6 +377,7 @@ class LP_Cargonizer_Settings_Service {
 			'quote_timing_mode' => isset($input['quote_timing_mode']) ? sanitize_key((string) $input['quote_timing_mode']) : sanitize_key((string) $base['quote_timing_mode']),
 			'quote_timeout_seconds' => isset($input['quote_timeout_seconds']) ? $this->sanitize_non_negative_number($input['quote_timeout_seconds']) : $this->sanitize_non_negative_number($base['quote_timeout_seconds']),
 			'quote_cache_ttl_seconds' => isset($input['quote_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['quote_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['quote_cache_ttl_seconds']),
+			'pickup_point_timeout_seconds' => isset($input['pickup_point_timeout_seconds']) ? $this->sanitize_non_negative_number($input['pickup_point_timeout_seconds']) : $this->sanitize_non_negative_number($base['pickup_point_timeout_seconds']),
 			'pickup_point_cache_ttl_seconds' => isset($input['pickup_point_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['pickup_point_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['pickup_point_cache_ttl_seconds']),
 			'debug_logging' => isset($input['debug_logging']) ? $this->sanitize_checkbox_value($input['debug_logging']) : $this->sanitize_checkbox_value($base['debug_logging']),
 		);

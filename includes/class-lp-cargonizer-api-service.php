@@ -377,6 +377,11 @@ class LP_Cargonizer_Api_Service {
 		$city = isset($method['city']) ? sanitize_text_field((string) $method['city']) : '';
 		$address = isset($method['address']) ? sanitize_text_field((string) $method['address']) : '';
 		$name = isset($method['name']) ? sanitize_text_field((string) $method['name']) : '';
+		$request_timeout_seconds = isset($method['request_timeout_seconds']) ? (float) $method['request_timeout_seconds'] : 30.0;
+		if ($request_timeout_seconds <= 0) {
+			$request_timeout_seconds = 30.0;
+		}
+		$request_timeout_seconds = max(1.0, min(30.0, $request_timeout_seconds));
 
 		$result = array(
 			'success' => false,
@@ -454,7 +459,8 @@ class LP_Cargonizer_Api_Service {
 				$attempt_definition['fields'],
 				!empty($attempt_definition['use_custom']),
 				$custom_params,
-				$result['carrier_family']
+				$result['carrier_family'],
+				$request_timeout_seconds
 			);
 
 			$result['attempts'][] = $attempt_result['attempt_debug'];
@@ -498,7 +504,7 @@ class LP_Cargonizer_Api_Service {
 		return $result;
 	}
 
-	private function execute_servicepartner_lookup_attempt($label, $base_query, $included_fields, $use_custom_params, $custom_params, $carrier_family) {
+	private function execute_servicepartner_lookup_attempt($label, $base_query, $included_fields, $use_custom_params, $custom_params, $carrier_family, $request_timeout_seconds = 30.0) {
 		$query = array();
 		$omitted_params = array();
 
@@ -539,7 +545,7 @@ class LP_Cargonizer_Api_Service {
 		);
 
 		$response = wp_remote_get($request_url, array(
-			'timeout' => 30,
+			'timeout' => max(1.0, min(30.0, (float) $request_timeout_seconds)),
 			'headers' => $this->get_auth_headers(),
 		));
 
