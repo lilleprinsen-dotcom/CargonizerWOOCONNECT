@@ -38,45 +38,51 @@ Scope: compare current refactored plugin to original monolithic implementation a
 
 Run these scenarios with live checkout enabled, at least one pickup-capable method, and at least one non-pickup method:
 
-1. **Live checkout rates (baseline happy path)**
-   - Enter a Norwegian destination with postcode + city.
-   - Confirm rates appear from `lp_cargonizer_live` without page reload.
-   - Change address/postcode and verify rates refresh asynchronously.
+1. **Cart placeholder behavior (default mode)**
+   - Keep `live_checkout.quote_timing_mode = checkout_only`.
+   - On cart/add-to-cart flow, confirm no remote quote request is made and cart shows placeholder rate (`Frakt beregnes i kassen`) instead of “ingen fraktmetoder”.
 
-2. **Pickup-point selection**
+2. **Checkout live rate timing**
+   - Enter a Norwegian destination with postcode + city in checkout.
+   - Confirm real live rates from `lp_cargonizer_live` appear on checkout refresh (without full page reload).
+   - Change postcode/city and verify rates refresh asynchronously.
+
+3. **Pickup-point loading and selection**
    - Choose a pickup-capable rate.
-   - Verify pickup dropdown renders with nearest point preselected.
-   - Change selection and confirm checkout refreshes asynchronously and keeps the selected point.
+   - Verify pickup selector renders only for selected pickup-capable rate and nearest point is preselected.
+   - Change selected pickup point and verify async checkout refresh keeps the override.
 
-3. **Embedded checkout persistence assumptions (Dintero-style)**
-   - Complete checkout through a Store API / embedded checkout path.
-   - Verify compatibility endpoint `admin-ajax.php?action=lp_cargonizer_get_checkout_pickup_points` returns pickup-point context for current shipping rates.
-   - Verify order meta `_lp_cargonizer_checkout_selection` contains:
-     - selected method/rate context
-     - `krokedil_pickup_points`
-     - `krokedil_selected_pickup_point`
-     - `krokedil_selected_pickup_point_id`
-   - Verify changing pickup point dispatches `lp_cargonizer_pickup_point_updated` even when classic checkout markup listeners are not present.
+4. **Dintero active checkout load**
+   - Open checkout with embedded/Store API flow active (Dintero-style).
+   - Confirm no fatal error and compatibility endpoint `admin-ajax.php?action=lp_cargonizer_get_checkout_pickup_points` returns payload successfully.
 
-4. **Under-threshold NOK 69 behavior**
-   - Set cart subtotal below configured threshold (default NOK 1500).
-   - Confirm at least one eligible live method is priced to configured low-price value (default NOK 69).
+5. **Dintero order creation**
+   - Complete order via Store API / embedded checkout.
+   - Verify order is created and `_lp_cargonizer_checkout_selection` is saved with shipping + pickup context.
 
-5. **Over-threshold free shipping behavior**
-   - Set cart subtotal above threshold.
-   - Confirm cheapest eligible standard method is free when configured strategy is `cheapest_standard_eligible`.
+6. **Missing pickup point after recalculation**
+   - Select a pickup point, then change destination so previous pickup point is no longer returned.
+   - Verify fallback to nearest available pickup point occurs without checkout fatal/breakage.
 
-6. **Separate-package multi-colli behavior**
-   - Add products with `_wildrobot_separate_package_for_product = yes`, quantity > 1.
-   - Verify package builder splits to multiple collis and live quotes still return.
+7. **Under-threshold NOK 69 behavior**
+   - Set subtotal below threshold (default NOK 1500).
+   - Confirm at least one eligible method is shown at configured low price (default NOK 69).
 
-7. **Fallback behavior on API failure/timeout**
-   - Simulate quote failures/timeouts (bad key/network block/forced timeout).
-   - Confirm configured fallback rates are shown when quote collection yields no usable live rate.
+8. **Over-threshold free-shipping behavior**
+   - Set subtotal above threshold.
+   - Confirm cheapest eligible standard method is free when strategy is `cheapest_standard_eligible`.
 
-8. **Admin booking prefill from checkout selection**
-   - Place order with live checkout method and pickup-point selection.
-   - In admin booking modal, verify checkout selection metadata is available for prefill/override paths.
+9. **Separate-package multi-colli behavior**
+   - Use product with `_wildrobot_separate_package_for_product = yes`, quantity > 1.
+   - Verify package builder splits into multiple colli and live quotes still return.
+
+10. **Fallback behavior on quote failure**
+    - Simulate quote failure/timeout (invalid credentials/network block/forced timeout).
+    - Confirm configured fallback behavior is applied and no hard checkout failure occurs unless explicitly configured.
+
+11. **Admin booking prefill**
+    - Place order with live checkout shipping and pickup selection.
+    - In admin booking modal, verify checkout selection metadata is available for prefill while allowing admin override.
 
 ## Zip readiness
 

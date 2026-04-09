@@ -178,11 +178,19 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			}
 
 			$available = $this->find_rate_pickup_point($rate_id, $pickup_point_id);
+			$fallback_applied = false;
 			if (empty($available)) {
-				$this->log_live_checkout_event('debug', 'Rejected pickup point update: pickup id not available for selected rate.', array(
-					'rate_id' => $rate_id,
-				));
-				wp_send_json_error(array('message' => 'Pickup point not available for selected rate.'), 400);
+				$fallback_points = $this->find_rate_pickup_points($rate_id);
+				$fallback = !empty($fallback_points) && is_array($fallback_points) ? reset($fallback_points) : array();
+				if (!is_array($fallback) || empty($fallback['id'])) {
+					$this->log_live_checkout_event('debug', 'Rejected pickup point update: pickup id not available for selected rate.', array(
+						'rate_id' => $rate_id,
+					));
+					wp_send_json_error(array('message' => 'Pickup point not available for selected rate.'), 400);
+				}
+				$available = $fallback;
+				$pickup_point_id = sanitize_text_field((string) $available['id']);
+				$fallback_applied = true;
 			}
 
 			$map = $this->get_session_map();
@@ -199,6 +207,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			wp_send_json_success(array(
 				'rate_id' => $rate_id,
 				'pickup_point_id' => $pickup_point_id,
+				'fallback_applied' => $fallback_applied,
 			));
 		} catch (Throwable $throwable) {
 			$this->log_live_checkout_event('error', 'Pickup point update failed unexpectedly.', array(
@@ -305,7 +314,37 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 			$this->log_live_checkout_event('debug', 'Skipped writing pickup selection session map: WC session unavailable.');
 			return;
 		}
-		WC()->session->set(self::SESSION_KEY, is_array($map) ? $map : array());
+		WC()->session->set(self::SESSION_KEY, $this->sanitize_pickup_session_map($map));
+	}
+
+	private function sanitize_pickup_session_map($map) {
+		if (!is_array($map)) {
+			return array();
+		}
+		$normalized = array();
+		foreach ($map as $rate_id => $row) {
+			$rate_id = sanitize_text_field((string) $rate_id);
+			if ($rate_id === '' || !is_array($row)) {
+				continue;
+			}
+			$id = isset($row['id']) ? sanitize_text_field((string) $row['id']) : '';
+			$point = isset($row['point']) && is_array($row['point']) ? $row['point'] : array();
+			$pickup_points = isset($row['pickup_points']) && is_array($row['pickup_points']) ? array_values($row['pickup_points']) : array();
+			if (count($pickup_points) > 20) {
+				$pickup_points = array_slice($pickup_points, 0, 20);
+			}
+			$normalized[$rate_id] = array(
+				'id' => $id,
+				'point' => $point,
+				'pickup_points' => $pickup_points,
+				'source' => isset($row['source']) ? sanitize_key((string) $row['source']) : 'auto_nearest',
+				'rate_context' => isset($row['rate_context']) && is_array($row['rate_context']) ? $row['rate_context'] : array(),
+			);
+		}
+		if (count($normalized) > 30) {
+			$normalized = array_slice($normalized, -30, null, true);
+		}
+		return $normalized;
 	}
 
 	private function has_wc_session() {
