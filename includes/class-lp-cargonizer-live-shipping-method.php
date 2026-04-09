@@ -89,7 +89,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if (empty($live_settings['enabled'])) {
 			return;
 		}
-		if (!$this->should_run_live_quotes_in_current_request($live_settings)) {
+
+		$request_context = $this->resolve_live_quote_request_context($live_settings);
+		if (empty($request_context['allow_remote_quotes'])) {
+			if (!empty($request_context['use_cart_placeholder_rate'])) {
+				$this->add_cart_placeholder_rate();
+			}
 			return;
 		}
 
@@ -170,6 +175,18 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if ($added_rates < 1) {
 			$this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
 		}
+	}
+
+	private function add_cart_placeholder_rate() {
+		$label = __('Frakt beregnes i kassen', 'lp-cargonizer');
+		$this->add_rate(array(
+			'id' => $this->id . ':' . $this->instance_id . ':cart_placeholder',
+			'label' => $label,
+			'cost' => 0,
+			'meta_data' => array(
+				'lp_cargonizer_cart_placeholder' => 1,
+			),
+		));
 	}
 
 	private function collect_method_quotes($candidates, $package_result, $destination, $settings, $live_settings, $fallback_behavior) {
@@ -726,12 +743,37 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		return $postcode !== '' && $city !== '';
 	}
 
-	private function should_run_live_quotes_in_current_request($live_settings) {
+	private function resolve_live_quote_request_context($live_settings) {
 		$mode = isset($live_settings['quote_timing_mode']) ? sanitize_key((string) $live_settings['quote_timing_mode']) : 'checkout_only';
 		if ($mode === 'cart_and_checkout') {
-			return true;
+			return array(
+				'allow_remote_quotes' => true,
+				'use_cart_placeholder_rate' => false,
+			);
 		}
 
+		$is_checkout_context = $this->is_checkout_quote_context_request();
+		if ($is_checkout_context) {
+			return array(
+				'allow_remote_quotes' => true,
+				'use_cart_placeholder_rate' => false,
+			);
+		}
+
+		if ($this->is_cart_side_request()) {
+			return array(
+				'allow_remote_quotes' => false,
+				'use_cart_placeholder_rate' => true,
+			);
+		}
+
+		return array(
+			'allow_remote_quotes' => false,
+			'use_cart_placeholder_rate' => false,
+		);
+	}
+
+	private function is_checkout_quote_context_request() {
 		if (function_exists('is_checkout_pay_page') && is_checkout_pay_page()) {
 			return true;
 		}
@@ -744,23 +786,66 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			if ($ajax_action === 'woocommerce_update_order_review') {
 				return true;
 			}
-			if ($ajax_action === 'lp_cargonizer_get_checkout_pickup_points' || $ajax_action === 'lp_cargonizer_set_checkout_pickup_point') {
-				return true;
-			}
 		}
 
-		$request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash((string) $_SERVER['REQUEST_URI'])) : '';
-		if ($request_uri !== '' && strpos($request_uri, '/wc/store/checkout') !== false) {
+		$request_path = $this->get_request_path();
+		if ($this->is_store_api_checkout_path($request_path)) {
 			return true;
-		}
-		if ($request_uri !== '' && strpos($request_uri, '/wc/store/cart') !== false) {
-			$referer = isset($_SERVER['HTTP_REFERER']) ? sanitize_text_field(wp_unslash((string) $_SERVER['HTTP_REFERER'])) : '';
-			if ($referer !== '' && strpos($referer, '/checkout') !== false) {
-				return true;
-			}
 		}
 
 		return false;
+	}
+
+	private function is_cart_side_request() {
+		if (function_exists('is_cart') && is_cart()) {
+			return true;
+		}
+
+		if (function_exists('wp_doing_ajax') && wp_doing_ajax()) {
+			$ajax_action = isset($_REQUEST['action']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['action'])) : '';
+			$cart_ajax_actions = array(
+				'woocommerce_get_refreshed_fragments',
+				'woocommerce_update_shipping_method',
+				'woocommerce_apply_coupon',
+				'woocommerce_remove_coupon',
+				'woocommerce_remove_from_cart',
+				'woocommerce_update_order_review_expired',
+				'wc_fragments_refreshed',
+			);
+			if (in_array($ajax_action, $cart_ajax_actions, true)) {
+				return true;
+			}
+		}
+
+		$request_path = $this->get_request_path();
+		if ($this->is_store_api_cart_path($request_path)) {
+			return true;
+		}
+
+		return false;
+	}
+
+	private function is_store_api_checkout_path($request_path) {
+		if ($request_path === '') {
+			return false;
+		}
+		return strpos($request_path, '/wc/store/checkout') !== false || strpos($request_path, '/wc/store/v1/checkout') !== false;
+	}
+
+	private function is_store_api_cart_path($request_path) {
+		if ($request_path === '') {
+			return false;
+		}
+		return strpos($request_path, '/wc/store/cart') !== false || strpos($request_path, '/wc/store/v1/cart') !== false;
+	}
+
+	private function get_request_path() {
+		if (!isset($_SERVER['REQUEST_URI'])) {
+			return '';
+		}
+		$request_uri = wp_unslash((string) $_SERVER['REQUEST_URI']);
+		$path = wp_parse_url($request_uri, PHP_URL_PATH);
+		return is_string($path) ? sanitize_text_field($path) : '';
 	}
 
 	private function has_minimum_destination_for_pickup_points($destination) {
