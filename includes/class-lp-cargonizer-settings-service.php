@@ -286,6 +286,7 @@ class LP_Cargonizer_Settings_Service {
 			'enabled' => 0,
 			'norway_only_enabled' => 1,
 			'show_prices_including_vat' => 1,
+			'free_shipping_threshold_basis' => 'subtotal_incl_vat',
 			'free_shipping_threshold' => 1500,
 			'low_price_option_amount' => 69,
 			'low_price_strategy' => 'cheapest_eligible_live',
@@ -367,6 +368,7 @@ class LP_Cargonizer_Settings_Service {
 			'enabled' => isset($input['enabled']) ? $this->sanitize_checkbox_value($input['enabled']) : $this->sanitize_checkbox_value($base['enabled']),
 			'norway_only_enabled' => isset($input['norway_only_enabled']) ? $this->sanitize_checkbox_value($input['norway_only_enabled']) : $this->sanitize_checkbox_value($base['norway_only_enabled']),
 			'show_prices_including_vat' => isset($input['show_prices_including_vat']) ? $this->sanitize_checkbox_value($input['show_prices_including_vat']) : $this->sanitize_checkbox_value($base['show_prices_including_vat']),
+			'free_shipping_threshold_basis' => isset($input['free_shipping_threshold_basis']) ? sanitize_key((string) $input['free_shipping_threshold_basis']) : sanitize_key((string) $base['free_shipping_threshold_basis']),
 			'free_shipping_threshold' => isset($input['free_shipping_threshold']) ? $this->sanitize_non_negative_number($input['free_shipping_threshold']) : $this->sanitize_non_negative_number($base['free_shipping_threshold']),
 			'low_price_option_amount' => isset($input['low_price_option_amount']) ? $this->sanitize_non_negative_number($input['low_price_option_amount']) : $this->sanitize_non_negative_number($base['low_price_option_amount']),
 			'low_price_strategy' => isset($input['low_price_strategy']) ? sanitize_text_field((string) $input['low_price_strategy']) : sanitize_text_field((string) $base['low_price_strategy']),
@@ -377,6 +379,11 @@ class LP_Cargonizer_Settings_Service {
 			'pickup_point_cache_ttl_seconds' => isset($input['pickup_point_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['pickup_point_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['pickup_point_cache_ttl_seconds']),
 			'debug_logging' => isset($input['debug_logging']) ? $this->sanitize_checkbox_value($input['debug_logging']) : $this->sanitize_checkbox_value($base['debug_logging']),
 		);
+
+		$allowed_threshold_basis = array('subtotal_incl_vat', 'subtotal_excl_vat');
+		if (!in_array($output['free_shipping_threshold_basis'], $allowed_threshold_basis, true)) {
+			$output['free_shipping_threshold_basis'] = 'subtotal_incl_vat';
+		}
 
 		$allowed_low_price = array('cheapest_eligible_live', 'disabled');
 		if (!in_array($output['low_price_strategy'], $allowed_low_price, true)) {
