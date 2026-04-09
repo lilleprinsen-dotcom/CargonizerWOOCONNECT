@@ -763,14 +763,14 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 					<hr style="margin:24px 0;">
 					<h2>Live checkout shipping (grunninnstillinger)</h2>
-					<p>Dette oppsettet klargjør datamodellen for live checkout-frakt. Frontend checkout-logikk er ikke aktivert her.</p>
+					<p>Disse innstillingene styrer aktiv live checkout-frakt i WooCommerce.</p>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>
 								<th scope="row">Aktiver live checkout</th>
 								<td>
 									<input type="hidden" name="lp_cargonizer_live_checkout[enabled]" value="0">
-									<label><input type="checkbox" name="lp_cargonizer_live_checkout[enabled]" value="1" <?php checked(!empty($live_checkout['enabled'])); ?>> Aktiver dataoppsett for live checkout-metoder</label>
+										<label><input type="checkbox" name="lp_cargonizer_live_checkout[enabled]" value="1" <?php checked(!empty($live_checkout['enabled'])); ?>> Aktiver live checkout-metoder</label>
 								</td>
 							</tr>
 							<tr>
@@ -824,24 +824,21 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<input id="lp_cargonizer_live_checkout_quote_timeout_seconds" type="number" min="0" step="0.1" name="lp_cargonizer_live_checkout[quote_timeout_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_timeout_seconds']) ? $live_checkout['quote_timeout_seconds'] : 5); ?>">
 								</td>
 							</tr>
-							<tr>
-								<th scope="row"><label for="lp_cargonizer_live_checkout_quote_fallback_behavior">Quote fallback-adferd</label></th>
-								<td>
-									<select id="lp_cargonizer_live_checkout_quote_fallback_behavior" name="lp_cargonizer_live_checkout[quote_fallback_behavior]">
-										<option value="safe_fallback_rate" <?php selected(isset($live_checkout['quote_fallback_behavior']) ? $live_checkout['quote_fallback_behavior'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
-										<option value="hide_live_checkout" <?php selected(isset($live_checkout['quote_fallback_behavior']) ? $live_checkout['quote_fallback_behavior'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
-										<option value="use_last_known_rate" <?php selected(isset($live_checkout['quote_fallback_behavior']) ? $live_checkout['quote_fallback_behavior'] : 'safe_fallback_rate', 'use_last_known_rate'); ?>>Bruk sist kjente rate</option>
-									</select>
-								</td>
-							</tr>
-							<tr>
-								<th scope="row"><label for="lp_cargonizer_live_checkout_quote_cache_ttl_seconds">Quote cache TTL (sekunder)</label></th>
-								<td><input id="lp_cargonizer_live_checkout_quote_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[quote_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_cache_ttl_seconds']) ? $live_checkout['quote_cache_ttl_seconds'] : 300); ?>"></td>
-							</tr>
-							<tr>
-								<th scope="row"><label for="lp_cargonizer_live_checkout_pickup_point_cache_ttl_seconds">Pickup-point cache TTL (sekunder)</label></th>
-								<td><input id="lp_cargonizer_live_checkout_pickup_point_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[pickup_point_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['pickup_point_cache_ttl_seconds']) ? $live_checkout['pickup_point_cache_ttl_seconds'] : 300); ?>"></td>
-							</tr>
+								<tr>
+									<th scope="row"><label for="lp_cargonizer_live_checkout_quote_cache_ttl_seconds">Quote cache TTL (sekunder)</label></th>
+									<td><input id="lp_cargonizer_live_checkout_quote_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[quote_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['quote_cache_ttl_seconds']) ? $live_checkout['quote_cache_ttl_seconds'] : 300); ?>"></td>
+								</tr>
+								<tr>
+									<th scope="row"><label for="lp_cargonizer_live_checkout_pickup_point_cache_ttl_seconds">Pickup-point cache TTL (sekunder)</label></th>
+									<td><input id="lp_cargonizer_live_checkout_pickup_point_cache_ttl_seconds" type="number" min="0" step="1" name="lp_cargonizer_live_checkout[pickup_point_cache_ttl_seconds]" value="<?php echo esc_attr(isset($live_checkout['pickup_point_cache_ttl_seconds']) ? $live_checkout['pickup_point_cache_ttl_seconds'] : 300); ?>"></td>
+								</tr>
+								<tr>
+									<th scope="row">Debug-logging (live checkout)</th>
+									<td>
+										<input type="hidden" name="lp_cargonizer_live_checkout[debug_logging]" value="0">
+										<label><input type="checkbox" name="lp_cargonizer_live_checkout[debug_logging]" value="1" <?php checked(!empty($live_checkout['debug_logging'])); ?>> Aktiver debug-logging for live checkout</label>
+									</td>
+								</tr>
 						</tbody>
 					</table>
 
@@ -867,11 +864,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<h2>Checkout fallback</h2>
 					<p>
 						<label for="lp_cargonizer_checkout_fallback_on_quote_failure"><strong>Ved timeout/API-feil</strong></label><br>
-						<select id="lp_cargonizer_checkout_fallback_on_quote_failure" name="lp_cargonizer_checkout_fallback_on_quote_failure">
-							<option value="safe_fallback_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
-							<option value="block_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'block_checkout'); ?>>Blokker checkout</option>
-							<option value="hide_live_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
-						</select>
+							<select id="lp_cargonizer_checkout_fallback_on_quote_failure" name="lp_cargonizer_checkout_fallback_on_quote_failure">
+								<option value="safe_fallback_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'safe_fallback_rate'); ?>>Bruk sikker fallback-rate</option>
+								<option value="use_last_known_rate" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'use_last_known_rate'); ?>>Bruk sist kjente rate</option>
+								<option value="block_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'block_checkout'); ?>>Blokker checkout</option>
+								<option value="hide_live_checkout" <?php selected(isset($checkout_fallback['on_quote_failure']) ? $checkout_fallback['on_quote_failure'] : 'safe_fallback_rate', 'hide_live_checkout'); ?>>Skjul live checkout-metoder</option>
+							</select>
 					</p>
 					<p>
 						<input type="hidden" name="lp_cargonizer_checkout_fallback_allow_checkout" value="0">

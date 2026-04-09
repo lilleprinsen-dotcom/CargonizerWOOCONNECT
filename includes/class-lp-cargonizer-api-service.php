@@ -5,11 +5,27 @@ if (!defined('ABSPATH')) {
 }
 
 class LP_Cargonizer_Api_Service {
+	const API_BASE_URL = 'https://api.cargonizer.no';
+
 	/** @var callable */
 	private $settings_provider;
 
 	public function __construct($settings_provider) {
 		$this->settings_provider = $settings_provider;
+	}
+
+	public static function get_api_base_url() {
+		$base_url = apply_filters('lp_cargonizer_api_base_url', self::API_BASE_URL);
+		$base_url = is_string($base_url) ? trim($base_url) : self::API_BASE_URL;
+		if ($base_url === '') {
+			$base_url = self::API_BASE_URL;
+		}
+		return rtrim($base_url, '/');
+	}
+
+	public static function build_endpoint_url($path) {
+		$normalized_path = '/' . ltrim((string) $path, '/');
+		return self::get_api_base_url() . $normalized_path;
 	}
 
 	public function get_auth_headers() {
@@ -30,7 +46,7 @@ class LP_Cargonizer_Api_Service {
 
 	public function fetch_transport_agreements() {
 		try {
-			$url = 'https://api.cargonizer.no/transport_agreements.xml';
+			$url = self::build_endpoint_url('/transport_agreements.xml');
 
 			$response = wp_remote_get($url, array(
 				'timeout' => 30,
@@ -115,7 +131,7 @@ class LP_Cargonizer_Api_Service {
 		);
 
 		try {
-			$url = 'https://api.cargonizer.no/printers.xml';
+			$url = self::build_endpoint_url('/printers.xml');
 			$headers = $this->get_auth_headers();
 			if (isset($headers['X-Cargonizer-Sender'])) {
 				unset($headers['X-Cargonizer-Sender']);
@@ -506,7 +522,7 @@ class LP_Cargonizer_Api_Service {
 			}
 		}
 
-		$request_url = add_query_arg($query, 'https://api.cargonizer.no/service_partners.xml');
+		$request_url = add_query_arg($query, self::build_endpoint_url('/service_partners.xml'));
 
 		$attempt_debug = array(
 			'label' => $label,
@@ -1232,7 +1248,7 @@ class LP_Cargonizer_Api_Service {
 			'gross_cost' => '',
 		);
 
-		$response = wp_remote_post('https://api.cargonizer.no/consignments.xml', array(
+		$response = wp_remote_post(self::build_endpoint_url('/consignments.xml'), array(
 			'timeout' => 40,
 			'headers' => array_merge($this->get_auth_headers(), array(
 				'Accept' => 'application/xml',
@@ -1417,7 +1433,7 @@ class LP_Cargonizer_Api_Service {
 
 		$url = add_query_arg(array(
 			'print[printer][id]' => $printer_id,
-		), 'https://api.cargonizer.no/prints');
+		), self::build_endpoint_url('/prints'));
 
 		$response = wp_remote_post($url, array(
 			'timeout' => 40,

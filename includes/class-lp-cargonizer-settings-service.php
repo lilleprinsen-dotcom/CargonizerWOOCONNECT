@@ -76,7 +76,10 @@ class LP_Cargonizer_Settings_Service {
 				isset($current['checkout_method_rules']) && is_array($current['checkout_method_rules']) ? $current['checkout_method_rules'] : array()
 			),
 			'checkout_fallback' => $this->sanitize_checkout_fallback_settings(
-				isset($input['checkout_fallback']) && is_array($input['checkout_fallback']) ? $input['checkout_fallback'] : array(),
+				$this->prepare_checkout_fallback_input(
+					isset($input['checkout_fallback']) && is_array($input['checkout_fallback']) ? $input['checkout_fallback'] : array(),
+					isset($input['live_checkout']) && is_array($input['live_checkout']) ? $input['live_checkout'] : array()
+				),
 				isset($current['checkout_fallback']) && is_array($current['checkout_fallback']) ? $current['checkout_fallback'] : array()
 			),
 		);
@@ -214,6 +217,15 @@ class LP_Cargonizer_Settings_Service {
 		return $output;
 	}
 
+	private function prepare_checkout_fallback_input($fallback_input, $live_checkout_input) {
+		$prepared = is_array($fallback_input) ? $fallback_input : array();
+		$legacy_behavior = isset($live_checkout_input['quote_fallback_behavior']) ? sanitize_text_field((string) $live_checkout_input['quote_fallback_behavior']) : '';
+		if ($legacy_behavior !== '' && empty($prepared['on_quote_failure'])) {
+			$prepared['on_quote_failure'] = $legacy_behavior;
+		}
+		return $prepared;
+	}
+
 	private function get_live_checkout_defaults() {
 		return array(
 			'enabled' => 0,
@@ -224,9 +236,9 @@ class LP_Cargonizer_Settings_Service {
 			'low_price_strategy' => 'cheapest_eligible_live',
 			'free_shipping_strategy' => 'cheapest_standard_eligible',
 			'quote_timeout_seconds' => 5,
-			'quote_fallback_behavior' => 'safe_fallback_rate',
 			'quote_cache_ttl_seconds' => 300,
 			'pickup_point_cache_ttl_seconds' => 300,
+			'debug_logging' => 0,
 		);
 	}
 
@@ -299,9 +311,9 @@ class LP_Cargonizer_Settings_Service {
 			'low_price_strategy' => isset($input['low_price_strategy']) ? sanitize_text_field((string) $input['low_price_strategy']) : sanitize_text_field((string) $base['low_price_strategy']),
 			'free_shipping_strategy' => isset($input['free_shipping_strategy']) ? sanitize_text_field((string) $input['free_shipping_strategy']) : sanitize_text_field((string) $base['free_shipping_strategy']),
 			'quote_timeout_seconds' => isset($input['quote_timeout_seconds']) ? $this->sanitize_non_negative_number($input['quote_timeout_seconds']) : $this->sanitize_non_negative_number($base['quote_timeout_seconds']),
-			'quote_fallback_behavior' => isset($input['quote_fallback_behavior']) ? sanitize_text_field((string) $input['quote_fallback_behavior']) : sanitize_text_field((string) $base['quote_fallback_behavior']),
 			'quote_cache_ttl_seconds' => isset($input['quote_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['quote_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['quote_cache_ttl_seconds']),
 			'pickup_point_cache_ttl_seconds' => isset($input['pickup_point_cache_ttl_seconds']) ? $this->sanitize_non_negative_number($input['pickup_point_cache_ttl_seconds']) : $this->sanitize_non_negative_number($base['pickup_point_cache_ttl_seconds']),
+			'debug_logging' => isset($input['debug_logging']) ? $this->sanitize_checkbox_value($input['debug_logging']) : $this->sanitize_checkbox_value($base['debug_logging']),
 		);
 
 		$allowed_low_price = array('cheapest_eligible_live');
@@ -312,11 +324,6 @@ class LP_Cargonizer_Settings_Service {
 		$allowed_free_shipping = array('cheapest_standard_eligible', 'disabled');
 		if (!in_array($output['free_shipping_strategy'], $allowed_free_shipping, true)) {
 			$output['free_shipping_strategy'] = 'cheapest_standard_eligible';
-		}
-
-		$allowed_fallback_behavior = array('safe_fallback_rate', 'hide_live_checkout', 'use_last_known_rate');
-		if (!in_array($output['quote_fallback_behavior'], $allowed_fallback_behavior, true)) {
-			$output['quote_fallback_behavior'] = 'safe_fallback_rate';
 		}
 
 		return $output;
@@ -496,7 +503,7 @@ class LP_Cargonizer_Settings_Service {
 			$output['safe_fallback_rates'] = $this->get_checkout_fallback_defaults()['safe_fallback_rates'];
 		}
 
-		$allowed_failure_modes = array('safe_fallback_rate', 'block_checkout', 'hide_live_checkout');
+		$allowed_failure_modes = array('safe_fallback_rate', 'block_checkout', 'hide_live_checkout', 'use_last_known_rate');
 		if (!in_array($output['on_quote_failure'], $allowed_failure_modes, true)) {
 			$output['on_quote_failure'] = 'safe_fallback_rate';
 		}
