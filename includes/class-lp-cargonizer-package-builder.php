@@ -192,6 +192,10 @@ class LP_Cargonizer_Package_Builder {
 			'missing_dimensions' => false,
 			'profiles_in_use' => array(),
 			'category_slugs' => array(),
+			'has_mailbox_capable' => false,
+			'has_pickup_capable' => false,
+			'has_bulky' => false,
+			'has_high_value_secure' => false,
 		);
 
 		foreach ($packages as $package) {
@@ -211,6 +215,12 @@ class LP_Cargonizer_Package_Builder {
 					$summary['profiles_in_use'][(string) $profile_slug] = true;
 				}
 			}
+			$this->merge_flag_summary($summary, isset($package['flags']) && is_array($package['flags']) ? $package['flags'] : array());
+			if (isset($package['combined_items']) && is_array($package['combined_items'])) {
+				foreach ($package['combined_items'] as $combined_item) {
+					$this->merge_flag_summary($summary, isset($combined_item['flags']) && is_array($combined_item['flags']) ? $combined_item['flags'] : array());
+				}
+			}
 		}
 
 		$summary['profiles_in_use'] = array_keys($summary['profiles_in_use']);
@@ -222,6 +232,13 @@ class LP_Cargonizer_Package_Builder {
 		}
 		$summary['total_weight'] = round($summary['total_weight'], 3);
 		return $summary;
+	}
+
+	private function merge_flag_summary(&$summary, $flags) {
+		$summary['has_mailbox_capable'] = !empty($summary['has_mailbox_capable']) || !empty($flags['mailbox_capable']);
+		$summary['has_pickup_capable'] = !empty($summary['has_pickup_capable']) || !empty($flags['pickup_capable']);
+		$summary['has_bulky'] = !empty($summary['has_bulky']) || !empty($flags['bulky']);
+		$summary['has_high_value_secure'] = !empty($summary['has_high_value_secure']) || !empty($flags['high_value_secure']);
 	}
 
 	private function collect_category_slugs($product_id) {
@@ -249,6 +266,10 @@ class LP_Cargonizer_Package_Builder {
 				'missing_dimensions' => false,
 				'profiles_in_use' => array(),
 				'category_slugs' => array(),
+				'has_mailbox_capable' => false,
+				'has_pickup_capable' => false,
+				'has_bulky' => false,
+				'has_high_value_secure' => false,
 			),
 		);
 	}

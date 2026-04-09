@@ -263,6 +263,69 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return $result;
 	}
 
+	private function parse_csv_slug_list($raw_value) {
+		if (!is_scalar($raw_value)) {
+			return array();
+		}
+		$parts = explode(',', (string) $raw_value);
+		$list = array();
+		foreach ($parts as $part) {
+			$slug = sanitize_key(trim((string) $part));
+			if ($slug !== '') {
+				$list[] = $slug;
+			}
+		}
+		return array_values(array_unique($list));
+	}
+
+	private function parse_checkout_method_rules_editor_input($rules_input) {
+		$rules = array();
+		if (!is_array($rules_input)) {
+			return $rules;
+		}
+
+		foreach ($rules_input as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$method_key = isset($row['method_key']) ? sanitize_text_field((string) $row['method_key']) : '';
+			if ($method_key === '') {
+				continue;
+			}
+			$action = isset($row['action']) ? sanitize_key((string) $row['action']) : 'allow';
+			if (!in_array($action, array('allow', 'deny', 'decorate'), true)) {
+				$action = 'allow';
+			}
+			$conditions = array(
+				'min_order_value' => isset($row['min_order_value']) ? (string) $row['min_order_value'] : '',
+				'max_order_value' => isset($row['max_order_value']) ? (string) $row['max_order_value'] : '',
+				'min_total_weight' => isset($row['min_total_weight']) ? (string) $row['min_total_weight'] : '',
+				'max_total_weight' => isset($row['max_total_weight']) ? (string) $row['max_total_weight'] : '',
+				'has_separate_package' => isset($row['has_separate_package']) ? sanitize_key((string) $row['has_separate_package']) : 'any',
+				'has_missing_dimensions' => isset($row['has_missing_dimensions']) ? sanitize_key((string) $row['has_missing_dimensions']) : 'any',
+				'has_high_value_secure' => isset($row['has_high_value_secure']) ? sanitize_key((string) $row['has_high_value_secure']) : 'any',
+				'mailbox_capable' => isset($row['mailbox_capable']) ? sanitize_key((string) $row['mailbox_capable']) : 'any',
+				'pickup_capable' => isset($row['pickup_capable']) ? sanitize_key((string) $row['pickup_capable']) : 'any',
+				'bulky' => isset($row['bulky']) ? sanitize_key((string) $row['bulky']) : 'any',
+				'profile_slugs' => $this->parse_csv_slug_list(isset($row['profile_slugs']) ? $row['profile_slugs'] : ''),
+				'category_slugs' => $this->parse_csv_slug_list(isset($row['category_slugs']) ? $row['category_slugs'] : ''),
+			);
+			$rules[] = array(
+				'method_key' => $method_key,
+				'action' => $action,
+				'enabled' => isset($row['enabled']) ? sanitize_text_field((string) $row['enabled']) : '0',
+				'customer_title' => isset($row['customer_title']) ? sanitize_text_field((string) $row['customer_title']) : '',
+				'allow_low_price' => isset($row['allow_low_price']) ? sanitize_text_field((string) $row['allow_low_price']) : '1',
+				'allow_free_shipping' => isset($row['allow_free_shipping']) ? sanitize_text_field((string) $row['allow_free_shipping']) : '1',
+				'group_label' => isset($row['group_label']) ? sanitize_text_field((string) $row['group_label']) : '',
+				'embedded_label' => isset($row['embedded_label']) ? sanitize_text_field((string) $row['embedded_label']) : '',
+				'conditions_groups' => array($conditions),
+			);
+		}
+
+		return $rules;
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -305,7 +368,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					'fallback_sources' => $this->parse_live_checkout_lines_to_list(isset($_POST['lp_cargonizer_package_resolution_fallback_sources']) ? wp_unslash($_POST['lp_cargonizer_package_resolution_fallback_sources']) : ''),
 				),
 				'checkout_method_rules' => array(
-					'rules' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_method_rules_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules_json']) : ''),
+					'rules' => $this->parse_checkout_method_rules_editor_input(isset($_POST['lp_cargonizer_checkout_method_rules']) && is_array($_POST['lp_cargonizer_checkout_method_rules']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules']) : array()),
 				),
 				'checkout_fallback' => array(
 					'on_quote_failure' => isset($_POST['lp_cargonizer_checkout_fallback_on_quote_failure']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_on_quote_failure'])) : '',
@@ -315,6 +378,11 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			);
 
 			$new_settings = $this->sanitize_settings($new_settings);
+			$method_rules_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_method_rules_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules_json']) : '');
+			if (!empty($method_rules_json) && empty($new_settings['checkout_method_rules']['rules'])) {
+				$new_settings['checkout_method_rules']['rules'] = $method_rules_json;
+				$new_settings = $this->sanitize_settings($new_settings);
+			}
 			update_option(self::OPTION_KEY, $new_settings);
 
 			$posted_default_printer_id = isset($_POST['lp_cargonizer_default_printer_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_default_printer_id'])) : '';
@@ -759,6 +827,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					$package_resolution = isset($settings['package_resolution']) && is_array($settings['package_resolution']) ? $settings['package_resolution'] : array();
 					$checkout_method_rules = isset($settings['checkout_method_rules']) && is_array($settings['checkout_method_rules']) ? $settings['checkout_method_rules'] : array();
 					$checkout_fallback = isset($settings['checkout_fallback']) && is_array($settings['checkout_fallback']) ? $settings['checkout_fallback'] : array();
+					$flat_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
 					?>
 
 					<hr style="margin:24px 0;">
@@ -858,8 +927,100 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<textarea name="lp_cargonizer_package_resolution_fallback_sources" rows="6" class="large-text code"><?php echo esc_textarea(implode("\n", isset($package_resolution['fallback_sources']) && is_array($package_resolution['fallback_sources']) ? $package_resolution['fallback_sources'] : array())); ?></textarea>
 
 					<h2>Checkout method rules</h2>
-					<p class="description">Regler per metode som JSON-array. Hver regel bør inkludere: method_key, enabled, customer_title, allow_low_price, allow_free_shipping, conditions, group_label, embedded_label.</p>
-					<textarea name="lp_cargonizer_checkout_method_rules_json" rows="10" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
+					<p class="description">Regelredigering per metode (allow/deny/decorate). Hver rad er én regelgruppe; metoden tillates når minst én allow-regel matcher (med mindre en deny-regel matcher).</p>
+					<?php
+					$method_rule_rows = isset($checkout_method_rules['rules']) && is_array($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array();
+					if (empty($method_rule_rows)) {
+						$method_rule_rows[] = array();
+					}
+					?>
+					<table class="widefat striped" style="margin-top:8px;">
+						<thead>
+							<tr>
+								<th>Metode</th>
+								<th>Action</th>
+								<th>Aktiv</th>
+								<th>Kundetittel</th>
+								<th>Lavpris</th>
+								<th>Gratis frakt</th>
+								<th>Verdi / vekt</th>
+								<th>Profiler / kategorier</th>
+								<th>Pakke-flagg</th>
+							</tr>
+						</thead>
+						<tbody>
+						<?php foreach ($method_rule_rows as $rule_index => $rule_row) :
+							$conditions_group = array();
+							if (isset($rule_row['conditions_groups'][0]) && is_array($rule_row['conditions_groups'][0])) {
+								$conditions_group = $rule_row['conditions_groups'][0];
+							} elseif (isset($rule_row['conditions']) && is_array($rule_row['conditions'])) {
+								$conditions_group = $rule_row['conditions'];
+							}
+							?>
+							<tr>
+								<td>
+									<select name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][method_key]">
+										<option value="">—</option>
+										<?php foreach ($flat_methods as $method_row) :
+											$method_key_row = isset($method_row['key']) ? (string) $method_row['key'] : '';
+											if ($method_key_row === '') { continue; }
+											$method_label_row = isset($method_row['label']) ? (string) $method_row['label'] : $method_key_row;
+											?>
+											<option value="<?php echo esc_attr($method_key_row); ?>" <?php selected(isset($rule_row['method_key']) ? (string) $rule_row['method_key'] : '', $method_key_row); ?>><?php echo esc_html($method_label_row); ?></option>
+										<?php endforeach; ?>
+									</select>
+								</td>
+								<td>
+									<select name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][action]">
+										<option value="allow" <?php selected(isset($rule_row['action']) ? (string) $rule_row['action'] : 'allow', 'allow'); ?>>allow</option>
+										<option value="deny" <?php selected(isset($rule_row['action']) ? (string) $rule_row['action'] : '', 'deny'); ?>>deny</option>
+										<option value="decorate" <?php selected(isset($rule_row['action']) ? (string) $rule_row['action'] : '', 'decorate'); ?>>decorate</option>
+									</select>
+								</td>
+								<td>
+									<input type="hidden" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][enabled]" value="0">
+									<input type="checkbox" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][enabled]" value="1" <?php checked(!isset($rule_row['enabled']) || !empty($rule_row['enabled'])); ?>>
+								</td>
+								<td>
+									<input type="text" class="regular-text" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][customer_title]" value="<?php echo esc_attr(isset($rule_row['customer_title']) ? (string) $rule_row['customer_title'] : ''); ?>">
+									<input type="text" class="regular-text" placeholder="group_label" style="margin-top:4px;" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][group_label]" value="<?php echo esc_attr(isset($rule_row['group_label']) ? (string) $rule_row['group_label'] : ''); ?>">
+									<input type="text" class="regular-text" placeholder="embedded_label" style="margin-top:4px;" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][embedded_label]" value="<?php echo esc_attr(isset($rule_row['embedded_label']) ? (string) $rule_row['embedded_label'] : ''); ?>">
+								</td>
+								<td>
+									<input type="hidden" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][allow_low_price]" value="0">
+									<input type="checkbox" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][allow_low_price]" value="1" <?php checked(!isset($rule_row['allow_low_price']) || !empty($rule_row['allow_low_price'])); ?>>
+								</td>
+								<td>
+									<input type="hidden" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][allow_free_shipping]" value="0">
+									<input type="checkbox" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][allow_free_shipping]" value="1" <?php checked(!isset($rule_row['allow_free_shipping']) || !empty($rule_row['allow_free_shipping'])); ?>>
+								</td>
+								<td>
+									<input type="number" step="0.01" placeholder="min order" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][min_order_value]" value="<?php echo esc_attr(isset($conditions_group['min_order_value']) ? $conditions_group['min_order_value'] : ''); ?>" style="width:110px;">
+									<input type="number" step="0.01" placeholder="max order" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][max_order_value]" value="<?php echo esc_attr(isset($conditions_group['max_order_value']) ? $conditions_group['max_order_value'] : ''); ?>" style="width:110px;margin-top:4px;">
+									<input type="number" step="0.01" placeholder="min kg" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][min_total_weight]" value="<?php echo esc_attr(isset($conditions_group['min_total_weight']) ? $conditions_group['min_total_weight'] : (isset($conditions_group['min_weight']) ? $conditions_group['min_weight'] : '')); ?>" style="width:110px;margin-top:4px;">
+									<input type="number" step="0.01" placeholder="max kg" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][max_total_weight]" value="<?php echo esc_attr(isset($conditions_group['max_total_weight']) ? $conditions_group['max_total_weight'] : (isset($conditions_group['max_weight']) ? $conditions_group['max_weight'] : '')); ?>" style="width:110px;margin-top:4px;">
+								</td>
+								<td>
+									<input type="text" placeholder="profile slugs (csv)" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][profile_slugs]" value="<?php echo esc_attr(implode(', ', isset($conditions_group['profile_slugs']) && is_array($conditions_group['profile_slugs']) ? $conditions_group['profile_slugs'] : array())); ?>" style="width:170px;">
+									<input type="text" placeholder="category slugs (csv)" name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][category_slugs]" value="<?php echo esc_attr(implode(', ', isset($conditions_group['category_slugs']) && is_array($conditions_group['category_slugs']) ? $conditions_group['category_slugs'] : array())); ?>" style="width:170px;margin-top:4px;">
+								</td>
+								<td>
+									<?php foreach (array('has_separate_package' => 'Separate', 'has_missing_dimensions' => 'Missing dims', 'has_high_value_secure' => 'High value', 'mailbox_capable' => 'Mailbox', 'pickup_capable' => 'Pickup', 'bulky' => 'Bulky') as $flag_key => $flag_label) : ?>
+										<select name="lp_cargonizer_checkout_method_rules[<?php echo esc_attr($rule_index); ?>][<?php echo esc_attr($flag_key); ?>]" style="width:130px;margin:2px 0;">
+											<option value="any" <?php selected(isset($conditions_group[$flag_key]) ? (string) $conditions_group[$flag_key] : 'any', 'any'); ?>><?php echo esc_html($flag_label . ': any'); ?></option>
+											<option value="yes" <?php selected(isset($conditions_group[$flag_key]) ? (string) $conditions_group[$flag_key] : '', 'yes'); ?>><?php echo esc_html($flag_label . ': yes'); ?></option>
+											<option value="no" <?php selected(isset($conditions_group[$flag_key]) ? (string) $conditions_group[$flag_key] : '', 'no'); ?>><?php echo esc_html($flag_label . ': no'); ?></option>
+										</select><br>
+									<?php endforeach; ?>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
+					<details style="margin-top:10px;">
+						<summary>Avansert JSON (bakoverkompatibilitet)</summary>
+						<textarea name="lp_cargonizer_checkout_method_rules_json" rows="10" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
+					</details>
 
 					<h2>Checkout fallback</h2>
 					<p>
