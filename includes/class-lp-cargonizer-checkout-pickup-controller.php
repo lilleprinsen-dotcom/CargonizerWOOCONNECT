@@ -17,7 +17,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	public function enqueue_checkout_assets() {
-		if (!function_exists('is_checkout') || !is_checkout()) {
+		if (!$this->is_checkout_or_order_pay_context()) {
 			return;
 		}
 
@@ -33,6 +33,10 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	public function render_pickup_selector_for_rate($rate, $index) {
+		if (!$this->is_checkout_or_order_pay_context()) {
+			return;
+		}
+
 		if (!is_a($rate, 'WC_Shipping_Rate')) {
 			return;
 		}
@@ -88,7 +92,8 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		echo '<div class="lp-cargonizer-checkout-pickup-point" style="margin:8px 0 0 24px;">';
 		$selector_id = 'lp-cargonizer-pickup-' . $package_index . '-' . sanitize_title($current_rate_id);
 		echo '<label for="' . esc_attr($selector_id) . '" style="display:block;margin:0 0 6px;font-weight:600;">' . esc_html__('Pickup point', 'lp-cargonizer') . '</label>';
-		echo '<select id="' . esc_attr($selector_id) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '" data-selected-pickup-point-id="' . esc_attr($selected_id) . '">';
+		$selector_state = (is_array($pickup_points) && !empty($pickup_points)) ? 'loaded' : 'loading';
+		echo '<select id="' . esc_attr($selector_id) . '" class="lp-cargonizer-pickup-point-select" data-rate-id="' . esc_attr($current_rate_id) . '" data-selected-pickup-point-id="' . esc_attr($selected_id) . '" data-state="' . esc_attr($selector_state) . '">';
 		if (is_array($pickup_points) && !empty($pickup_points)) {
 			foreach ($pickup_points as $point) {
 				if (!is_array($point)) {
@@ -106,6 +111,28 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		}
 		echo '</select>';
 		echo '</div>';
+	}
+
+	private function is_checkout_or_order_pay_context() {
+		if (function_exists('is_checkout_pay_page') && is_checkout_pay_page()) {
+			return true;
+		}
+		if (function_exists('is_checkout') && is_checkout()) {
+			return true;
+		}
+		if (function_exists('wp_doing_ajax') && wp_doing_ajax()) {
+			$ajax_action = isset($_REQUEST['action']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['action'])) : '';
+			if ($ajax_action === 'woocommerce_update_order_review') {
+				return true;
+			}
+		}
+		$request_path = isset($_SERVER['REQUEST_URI']) ? wp_parse_url(wp_unslash((string) $_SERVER['REQUEST_URI']), PHP_URL_PATH) : '';
+		$request_path = is_string($request_path) ? sanitize_text_field($request_path) : '';
+		if ($request_path !== '' && (strpos($request_path, '/wc/store/checkout') !== false || strpos($request_path, '/wc/store/v1/checkout') !== false)) {
+			return true;
+		}
+
+		return false;
 	}
 
 	private function resolve_package_index_for_rate($rate) {
