@@ -408,6 +408,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$servicepartner_resolution = $this->api_service->resolve_default_servicepartner_selection($quote_method, $recipient);
 			$quote_method['servicepartner'] = isset($servicepartner_resolution['servicepartner']) ? (string) $servicepartner_resolution['servicepartner'] : '';
 			$quote_method['servicepartner_customer_number'] = isset($servicepartner_resolution['servicepartner_customer_number']) ? (string) $servicepartner_resolution['servicepartner_customer_number'] : '';
+			$quote_method['servicepartner_selected_option'] = isset($servicepartner_resolution['selected_option']) && is_array($servicepartner_resolution['selected_option']) ? $servicepartner_resolution['selected_option'] : array();
 			$quote_method['servicepartner_selection_source'] = isset($servicepartner_resolution['servicepartner_selection_source']) ? (string) $servicepartner_resolution['servicepartner_selection_source'] : 'none';
 			$quote_method['servicepartner_auto_selected'] = !empty($servicepartner_resolution['servicepartner_auto_selected']);
 		}
@@ -417,9 +418,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'packages' => $packages,
 			'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
 			'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
+			'servicepartner_selected_option' => isset($quote_method['servicepartner_selected_option']) && is_array($quote_method['servicepartner_selected_option']) ? $quote_method['servicepartner_selected_option'] : array(),
+			'servicepartner_options' => isset($servicepartner_resolution['servicepartner_options']) && is_array($servicepartner_resolution['servicepartner_options']) ? $servicepartner_resolution['servicepartner_options'] : array(),
 			'selected_service_ids' => array(),
 		), $quote_method);
-		// TODO: Keep current number/customer-number-only service_partner payload for parity; if PostNord still rejects estimates, pass full selected service partner fields in a follow-up patch.
 		if ($xml === '') {
 			return array(
 				'success' => false,

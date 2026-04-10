@@ -1033,9 +1033,80 @@ class LP_Cargonizer_Api_Service {
 			$customer_number = sanitize_text_field((string) $method['servicepartner_customer_number']);
 		}
 
+		$selection_option = array();
+		if (isset($payload['servicepartner_selected_option']) && is_array($payload['servicepartner_selected_option'])) {
+			$selection_option = $payload['servicepartner_selected_option'];
+		} elseif (isset($method['servicepartner_selected_option']) && is_array($method['servicepartner_selected_option'])) {
+			$selection_option = $method['servicepartner_selected_option'];
+		}
+		$selection_raw = isset($selection_option['raw']) && is_array($selection_option['raw']) ? $selection_option['raw'] : $selection_option;
+		$selection_source = is_array($selection_raw) ? $selection_raw : array();
+
+		if ($selection_value !== '' && isset($payload['servicepartner_options']) && is_array($payload['servicepartner_options'])) {
+			foreach ($payload['servicepartner_options'] as $option) {
+				if (!is_array($option)) {
+					continue;
+				}
+				$option_value = isset($option['value']) ? sanitize_text_field((string) $option['value']) : '';
+				if ($option_value !== '' && $option_value === $selection_value) {
+					$selection_source = isset($option['raw']) && is_array($option['raw']) ? $option['raw'] : $option;
+					break;
+				}
+			}
+		}
+
+		$resolve_selection_field = function ($field_key, $method_field_keys = array()) use ($payload, $method, $selection_source) {
+			$candidates = array();
+			if (isset($payload[$field_key])) {
+				$candidates[] = $payload[$field_key];
+			}
+			if (isset($method[$field_key])) {
+				$candidates[] = $method[$field_key];
+			}
+			foreach ($method_field_keys as $method_field_key) {
+				if (isset($payload[$method_field_key])) {
+					$candidates[] = $payload[$method_field_key];
+				}
+				if (isset($method[$method_field_key])) {
+					$candidates[] = $method[$method_field_key];
+				}
+			}
+			if (isset($selection_source[$field_key])) {
+				$candidates[] = $selection_source[$field_key];
+			}
+			foreach ($method_field_keys as $method_field_key) {
+				if (isset($selection_source[$method_field_key])) {
+					$candidates[] = $selection_source[$method_field_key];
+				}
+			}
+
+			foreach ($candidates as $candidate) {
+				$clean = sanitize_text_field((string) $candidate);
+				if ($clean !== '') {
+					return $clean;
+				}
+			}
+
+			return '';
+		};
+
+		$name = $resolve_selection_field('name', array('servicepartner_name'));
+		$address1 = $resolve_selection_field('address1', array('address_1', 'servicepartner_address1', 'servicepartner_address_1'));
+		$address2 = $resolve_selection_field('address2', array('address_2', 'servicepartner_address2', 'servicepartner_address_2'));
+		$postcode = $resolve_selection_field('postcode', array('zip', 'servicepartner_postcode'));
+		$city = $resolve_selection_field('city', array('servicepartner_city'));
+		$country = $resolve_selection_field('country', array('country_code', 'servicepartner_country'));
+		$country = $this->sanitize_country_code($country);
+
 		return array(
 			'number' => $selection_value,
 			'customer_number' => $customer_number,
+			'name' => $name,
+			'address1' => $address1,
+			'address2' => $address2,
+			'postcode' => $postcode,
+			'city' => $city,
+			'country' => $country,
 		);
 	}
 
@@ -1193,6 +1264,24 @@ class LP_Cargonizer_Api_Service {
 			if ($servicepartner_selection['customer_number'] !== '') {
 				$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
 			}
+			if ($servicepartner_selection['name'] !== '') {
+				$service_partner->addChild('name', (string) $servicepartner_selection['name']);
+			}
+			if ($servicepartner_selection['address1'] !== '') {
+				$service_partner->addChild('address1', (string) $servicepartner_selection['address1']);
+			}
+			if ($servicepartner_selection['address2'] !== '') {
+				$service_partner->addChild('address2', (string) $servicepartner_selection['address2']);
+			}
+			if ($servicepartner_selection['postcode'] !== '') {
+				$service_partner->addChild('postcode', (string) $servicepartner_selection['postcode']);
+			}
+			if ($servicepartner_selection['city'] !== '') {
+				$service_partner->addChild('city', (string) $servicepartner_selection['city']);
+			}
+			if ($servicepartner_selection['country'] !== '') {
+				$service_partner->addChild('country', (string) $servicepartner_selection['country']);
+			}
 		}
 
 		$all_service_ids = array();
@@ -1326,6 +1415,24 @@ class LP_Cargonizer_Api_Service {
 			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
 			if ($servicepartner_selection['customer_number'] !== '') {
 				$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
+			}
+			if ($servicepartner_selection['name'] !== '') {
+				$service_partner->addChild('name', (string) $servicepartner_selection['name']);
+			}
+			if ($servicepartner_selection['address1'] !== '') {
+				$service_partner->addChild('address1', (string) $servicepartner_selection['address1']);
+			}
+			if ($servicepartner_selection['address2'] !== '') {
+				$service_partner->addChild('address2', (string) $servicepartner_selection['address2']);
+			}
+			if ($servicepartner_selection['postcode'] !== '') {
+				$service_partner->addChild('postcode', (string) $servicepartner_selection['postcode']);
+			}
+			if ($servicepartner_selection['city'] !== '') {
+				$service_partner->addChild('city', (string) $servicepartner_selection['city']);
+			}
+			if ($servicepartner_selection['country'] !== '') {
+				$service_partner->addChild('country', (string) $servicepartner_selection['country']);
 			}
 		}
 
