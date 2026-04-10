@@ -957,9 +957,11 @@ class LP_Cargonizer_Api_Service {
 		$delivery_to_pickup_point = !empty($method['delivery_to_pickup_point']);
 		$delivery_to_home = !empty($method['delivery_to_home']);
 		$strict_pickup_product_ids = array(
+			'mypack',
 			'mypack_collect',
 			'mypack_small',
 			'mypack_service_point',
+			'postnord_mypack',
 			'postnord_service_point',
 			'postnord_parcel_locker',
 			'postnord_mypack_collect',
