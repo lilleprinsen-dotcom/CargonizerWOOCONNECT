@@ -997,6 +997,7 @@ class LP_Cargonizer_Api_Service {
 	}
 
 	public function method_requires_servicepartner_for_estimate($method) {
+		// Checkout estimate invariant: some PostNord methods require service_partner on /consignment_costs.xml.
 		$product_id = strtolower(sanitize_text_field(isset($method['product_id']) ? (string) $method['product_id'] : ''));
 		if ($this->is_method_explicitly_pickup_point($method)) {
 			return true;
