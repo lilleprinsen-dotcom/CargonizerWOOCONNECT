@@ -1023,7 +1023,7 @@ class LP_Cargonizer_Api_Service {
 
 	public function sanitize_country_code($value) {
 		$country = strtoupper(sanitize_text_field((string) $value));
-		if ($country !== '' && strlen($country) <= 2) {
+		if ($country !== '' && strlen($country) === 2 && ctype_alpha($country)) {
 			return $country;
 		}
 
@@ -1039,6 +1039,29 @@ class LP_Cargonizer_Api_Service {
 		$label = trim(sanitize_text_field((string) $value));
 		if ($label === '') {
 			return '';
+		}
+
+		$upper_label = strtoupper($label);
+		$known_aliases = array(
+			'NO' => 'NO',
+			'NOR' => 'NO',
+			'NORGE' => 'NO',
+			'NORWAY' => 'NO',
+			'DK' => 'DK',
+			'DNK' => 'DK',
+			'DANMARK' => 'DK',
+			'DENMARK' => 'DK',
+			'SE' => 'SE',
+			'SWE' => 'SE',
+			'SVERIGE' => 'SE',
+			'SWEDEN' => 'SE',
+			'FI' => 'FI',
+			'FIN' => 'FI',
+			'SUOMI' => 'FI',
+			'FINLAND' => 'FI',
+		);
+		if (isset($known_aliases[$upper_label])) {
+			return $known_aliases[$upper_label];
 		}
 
 		if (!function_exists('WC')) {
