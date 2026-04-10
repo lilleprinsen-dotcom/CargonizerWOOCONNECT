@@ -436,6 +436,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$requires_servicepartner_for_estimate = $this->api_service->method_requires_servicepartner_for_estimate($quote_method);
 		$has_manual_servicepartner = isset($quote_method['servicepartner']) && sanitize_text_field((string) $quote_method['servicepartner']) !== '';
 		$servicepartner_resolution = array();
+		// Resolve servicepartner before estimation; pickup-selector UI flow stays separate.
 		if ($requires_servicepartner_for_estimate && !$has_manual_servicepartner) {
 			$servicepartner_resolution = $this->api_service->resolve_default_servicepartner_selection($quote_method, $recipient);
 			$quote_method['servicepartner'] = isset($servicepartner_resolution['servicepartner']) ? (string) $servicepartner_resolution['servicepartner'] : '';
