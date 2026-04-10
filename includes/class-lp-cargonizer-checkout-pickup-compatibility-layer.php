@@ -6,10 +6,14 @@ if (!defined('ABSPATH')) {
 
 class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 	const AJAX_ACTION_GET = 'lp_cargonizer_get_checkout_pickup_points';
+	const PICKUP_POINT_REQUEST_LOCK_TTL_SECONDS = 12;
+	const PICKUP_POINT_FAILURE_CACHE_TTL_SECONDS = 45;
 	/** @var LP_Cargonizer_Settings_Service */
 	private $settings_service;
 	/** @var LP_Cargonizer_Api_Service */
 	private $api_service;
+	/** @var array<string,mixed> */
+	private $transient_memo = array();
 
 	public function __construct() {
 		$this->settings_service = new LP_Cargonizer_Settings_Service(LP_Cargonizer_Connector::OPTION_KEY, LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY);
@@ -298,6 +302,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		$pickup_timeout = max(1.0, min(30.0, $pickup_timeout));
 		$lookup_method['request_timeout_seconds'] = $pickup_timeout;
 		$cache_ttl = isset($live_settings['pickup_point_cache_ttl_seconds']) ? max(0, (int) $live_settings['pickup_point_cache_ttl_seconds']) : 300;
+		$failure_cache_ttl = self::PICKUP_POINT_FAILURE_CACHE_TTL_SECONDS;
 		$custom = $this->api_service->detect_servicepartner_custom_params($lookup_method);
 		$cache_key = 'lp_carg_pickup_' . md5(wp_json_encode(array(
 			'transport_agreement_id' => $lookup_method['agreement_id'],
@@ -310,8 +315,9 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			'request_timeout_seconds' => $pickup_timeout,
 			'custom' => isset($custom['params']) ? $custom['params'] : array(),
 		)));
+		$lock_key = 'lp_carg_pickup_lock_' . md5($cache_key);
 		if ($cache_ttl > 0) {
-			$cached = get_transient($cache_key);
+			$cached = $this->get_memoized_transient($cache_key);
 			if (is_array($cached)) {
 				$result['points'] = array_values($cached);
 				$result['state'] = empty($result['points']) ? 'unavailable' : 'loaded';
@@ -321,6 +327,12 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 				return $result;
 			}
 		}
+		if ($this->is_transient_lock_active($lock_key)) {
+			$result['state'] = 'loading';
+			$result['message'] = 'Pickup points are being refreshed.';
+			return $result;
+		}
+		set_transient($lock_key, 1, self::PICKUP_POINT_REQUEST_LOCK_TTL_SECONDS);
 
 		$api_result = $this->api_service->fetch_servicepartner_options($lookup_method);
 		$options = isset($api_result['options']) && is_array($api_result['options']) ? $api_result['options'] : array();
@@ -332,9 +344,11 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		if (empty($api_result['success'])) {
 			$lookup_result['state'] = 'error';
 			$lookup_result['message'] = isset($api_result['error_message']) ? (string) $api_result['error_message'] : 'Pickup point lookup failed.';
-			if ($cache_ttl > 0) {
-				set_transient($cache_key, array(), $cache_ttl);
+			if ($failure_cache_ttl > 0) {
+				set_transient($cache_key, array(), $failure_cache_ttl);
+				$this->transient_memo[$cache_key] = array();
 			}
+			delete_transient($lock_key);
 			return $lookup_result;
 		}
 		$points = array();
@@ -363,11 +377,27 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		$points = $this->sort_pickup_points_deterministically($points);
 		if ($cache_ttl > 0) {
 			set_transient($cache_key, $points, $cache_ttl);
+			$this->transient_memo[$cache_key] = $points;
 		}
+		delete_transient($lock_key);
 		$lookup_result['points'] = $points;
 		$lookup_result['state'] = empty($points) ? 'unavailable' : 'loaded';
 		$lookup_result['message'] = empty($points) ? 'No pickup points returned for selected rate.' : '';
 		return $lookup_result;
+	}
+
+	private function get_memoized_transient($cache_key) {
+		$cache_key = (string) $cache_key;
+		if (array_key_exists($cache_key, $this->transient_memo)) {
+			return $this->transient_memo[$cache_key];
+		}
+		$value = get_transient($cache_key);
+		$this->transient_memo[$cache_key] = $value;
+		return $value;
+	}
+
+	private function is_transient_lock_active($lock_key) {
+		return !empty($this->get_memoized_transient($lock_key));
 	}
 
 	private function resolve_point_by_id($pickup_points, $point_id) {
