@@ -508,9 +508,11 @@
 			function isMethodExplicitlyPickupPoint(method){
 				if (!method) { return false; }
 				var strictPickupIds = [
+					'mypack',
 					'mypack_collect',
 					'mypack_small',
 					'mypack_service_point',
+					'postnord_mypack',
 					'postnord_service_point',
 					'postnord_parcel_locker',
 					'postnord_mypack_collect',
