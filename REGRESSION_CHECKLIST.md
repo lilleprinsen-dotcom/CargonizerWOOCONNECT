@@ -104,6 +104,11 @@ Run these scenarios with live checkout enabled, at least one pickup-capable meth
     - Disable/fail the parallel execution path for uncached quote collection.
     - Verify quote collection still succeeds using sequential fallback and rates are returned.
 
+17. **Dintero pickup export without street address**
+    - Use Norway destination with postcode + city populated, but leave street address empty during checkout.
+    - Verify pickup-capable rates still carry `krokedil_pickup_points`, `krokedil_selected_pickup_point`, and `krokedil_selected_pickup_point_id` in shipping rate meta.
+    - Verify Dintero/embedded checkout can present pickup choices from server-side rate meta without relying on frontend AJAX pickup hydration.
+
 ## Zip readiness
 
 The plugin directory is structurally complete and ready for external zipping.
