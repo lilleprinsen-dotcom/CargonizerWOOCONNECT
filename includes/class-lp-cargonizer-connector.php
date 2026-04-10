@@ -495,6 +495,10 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->is_method_explicitly_home_delivery($method);
 	}
 
+	private function method_requires_servicepartner_for_estimate($method) {
+		return $this->api_service->method_requires_servicepartner_for_estimate($method);
+	}
+
 	private function resolve_default_servicepartner_selection($method_payload, $recipient) {
 		return $this->api_service->resolve_default_servicepartner_selection($method_payload, $recipient);
 	}
