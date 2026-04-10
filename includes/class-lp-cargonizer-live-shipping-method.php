@@ -7,7 +7,6 @@ if (!defined('ABSPATH')) {
 class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 	const METHOD_ID = LP_Cargonizer_Live_Checkout::METHOD_ID;
 	const LAST_NO_RATES_STATUS_TRANSIENT = 'lp_cargonizer_last_no_rates_status';
-	const QUOTE_REQUEST_LOCK_TTL_SECONDS = 12;
 	const PICKUP_POINT_REQUEST_LOCK_TTL_SECONDS = 12;
 
 	/** @var LP_Cargonizer_Settings_Service */
@@ -227,7 +226,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$this->apply_checkout_price_adjustments($quotes, $order_value, $live_settings, $rules_by_method);
 
 			$added_rates = 0;
-			$pickup_required_pending_async_points = 0;
+			$pickup_required_without_points = 0;
 			foreach ($quotes as $quote) {
 				$rate_id = $this->build_checkout_rate_id($quote);
 				$meta_data = array(
@@ -250,17 +249,17 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				if (!empty($quote['pickup_required'])) {
 					$pickup_points = isset($quote['resolved_pickup_points']) && is_array($quote['resolved_pickup_points']) ? $quote['resolved_pickup_points'] : array();
 					if (empty($pickup_points)) {
-						$pickup_points = $this->get_cached_pickup_points_for_rate($quote, $destination, $live_settings);
+						$pickup_points = $this->get_pickup_points_for_rate($quote, $destination, $live_settings);
 					}
 					if (empty($pickup_points)) {
-						$pickup_required_pending_async_points++;
-					} else {
-						$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
-						$selected_pickup_point = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
-						$meta_data['krokedil_pickup_points'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points);
-						$meta_data['krokedil_selected_pickup_point'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point);
-						$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
+						$pickup_required_without_points++;
+						continue;
 					}
+					$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
+					$selected_pickup_point = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
+					$meta_data['krokedil_pickup_points'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points);
+					$meta_data['krokedil_selected_pickup_point'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point);
+					$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
 				}
 
 				$this->add_rate(array(
@@ -279,22 +278,22 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'pruned_count' => $pruned_count,
 				'quoted_count' => $quoted_count,
 				'successful_quote_count' => $successful_quote_count,
-				'pickup_required_pending_async_points' => $pickup_required_pending_async_points,
+				'pickup_required_without_points' => $pickup_required_without_points,
 				'returned_count' => $added_rates,
 				'fallback_mode' => $fallback_behavior,
 			));
 
 			if ($added_rates < 1) {
 				$fallback_result = $this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
-				$reason_code = 'quote_api_failure';
-				$reason_group = 'api';
+				$reason_code = $pickup_required_without_points > 0 ? 'pickup_point_required_no_points' : 'quote_api_failure';
+				$reason_group = $pickup_required_without_points > 0 ? 'pickup_points' : 'api';
 				$this->record_last_no_rates_status($reason_code, $reason_group, 'No checkout rates were added after quote processing.', array(
 					'request_context' => $request_context,
 					'destination' => $destination_context,
 					'candidate_count' => $candidate_count,
 					'quoted_count' => $quoted_count,
 					'successful_quote_count' => $successful_quote_count,
-					'pickup_required_pending_async_points' => $pickup_required_pending_async_points,
+					'pickup_required_without_points' => $pickup_required_without_points,
 					'fallback' => $fallback_result,
 				));
 				return;
@@ -326,88 +325,30 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'failures' => array(),
 			'auth_failure_detected' => false,
 		);
-		$contexts = array();
-		$uncached_contexts = array();
-		$cached_quotes = array();
-
-		foreach ($candidates as $index => $method) {
-			$context = $this->prepare_quote_request_context($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior, $index);
-			$contexts[] = $context;
-			if (!empty($context['error_result'])) {
-				$failure_entry = $this->build_quote_failure_entry($context['error_result'], $method);
-				if ($this->is_auth_related_quote_failure($failure_entry)) {
-					$diagnostics['auth_failure_detected'] = true;
-				}
-				$diagnostics['failures'][] = $failure_entry;
-				continue;
-			}
-			if (!empty($context['cached_quote'])) {
-				$cached_quotes[$index] = $context['cached_quote'];
-				continue;
-			}
-			$uncached_contexts[] = $context;
-		}
-
-		$remote_results = array();
-		$locked_failures = array();
-		$contexts_to_execute = array();
-		foreach ($uncached_contexts as $context) {
-			$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
-			if (!$this->try_acquire_quote_lock($context)) {
-				$locked_quote = $this->resolve_quote_when_request_locked($context);
-				if (!empty($locked_quote['success'])) {
-					$cached_quotes[$index] = $locked_quote;
-					continue;
-				}
-				$locked_failures[$index] = array(
-					'method_key' => isset($context['method_key']) ? (string) $context['method_key'] : '',
-					'reason_code' => 'quote_request_locked',
-				);
-				continue;
-			}
-			$contexts_to_execute[] = $context;
-		}
-		if (!empty($contexts_to_execute)) {
-			$remote_results = $this->execute_uncached_quote_requests($contexts_to_execute, $live_settings);
-		}
-
-		foreach ($contexts as $context) {
-			$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
-			if (!empty($context['error_result'])) {
-				continue;
-			}
-			if (isset($cached_quotes[$index]) && is_array($cached_quotes[$index])) {
-				$quotes[] = $cached_quotes[$index];
-				continue;
-			}
-			if (isset($locked_failures[$index]) && is_array($locked_failures[$index])) {
-				$diagnostics['failures'][] = $locked_failures[$index];
-				continue;
-			}
-			$remote_result = isset($remote_results[$index]) && is_array($remote_results[$index]) ? $remote_results[$index] : array(
-				'type' => 'wp_remote',
-				'wp_error' => 'Missing remote quote result.',
-			);
-			$quote = $this->build_quote_from_remote_result($context, $remote_result);
-			$this->release_quote_lock($context);
+		foreach ($candidates as $method) {
+			$quote = $this->build_quote_for_method($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
 			if (!empty($quote['success'])) {
 				$quotes[] = $quote;
 				continue;
 			}
-			$failure_entry = $this->build_quote_failure_entry($quote, isset($context['method']) ? $context['method'] : array());
-			if ($this->is_auth_related_quote_failure($failure_entry)) {
+			$failure_entry = array(
+				'method_key' => isset($quote['method_key']) ? (string) $quote['method_key'] : (isset($method['key']) ? sanitize_text_field((string) $method['key']) : ''),
+				'reason_code' => isset($quote['reason_code']) ? (string) $quote['reason_code'] : 'quote_api_failure',
+				'http_status' => isset($quote['http_status']) ? (int) $quote['http_status'] : 0,
+				'error' => isset($quote['error']) ? (string) $quote['error'] : '',
+			);
+			if ($failure_entry['http_status'] === 401 || $failure_entry['http_status'] === 403 || $failure_entry['reason_code'] === 'auth_or_config_problem') {
 				$diagnostics['auth_failure_detected'] = true;
 			}
 			$diagnostics['failures'][] = $failure_entry;
 		}
-
 		return array(
 			'quotes' => $quotes,
 			'diagnostics' => $diagnostics,
 		);
 	}
 
-	private function prepare_quote_request_context($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior, $quote_index) {
+	private function build_quote_for_method($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior) {
 		$method_key = isset($method['key']) ? (string) $method['key'] : '';
 		$method_pricing = $this->resolve_method_pricing($method_key, $settings);
 		$recipient = array(
@@ -422,54 +363,27 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$package_summary = isset($package_result['summary']) && is_array($package_result['summary']) ? $package_result['summary'] : array();
 		if (empty($recipient['postcode']) || $recipient['country'] === '') {
 			return array(
-				'quote_index' => (int) $quote_index,
-				'method' => $method,
-				'error_result' => array(
-					'success' => false,
-					'method_key' => $method_key,
-					'reason_code' => 'destination_incomplete',
-				),
+				'success' => false,
+				'method_key' => $method_key,
+				'reason_code' => 'destination_incomplete',
 			);
-		}
-
-		$quote_method = is_array($method) ? $method : array();
-		$requires_servicepartner_for_estimate = $this->api_service->method_requires_servicepartner_for_estimate($quote_method);
-		$has_manual_servicepartner = isset($quote_method['servicepartner']) && sanitize_text_field((string) $quote_method['servicepartner']) !== '';
-		$servicepartner_resolution = array();
-		// Resolve servicepartner before estimation; pickup-selector UI flow stays separate.
-		if ($requires_servicepartner_for_estimate && !$has_manual_servicepartner) {
-			$servicepartner_resolution = $this->api_service->resolve_default_servicepartner_selection($quote_method, $recipient);
-			$quote_method['servicepartner'] = isset($servicepartner_resolution['servicepartner']) ? (string) $servicepartner_resolution['servicepartner'] : '';
-			$quote_method['servicepartner_customer_number'] = isset($servicepartner_resolution['servicepartner_customer_number']) ? (string) $servicepartner_resolution['servicepartner_customer_number'] : '';
-			$quote_method['servicepartner_selection_source'] = isset($servicepartner_resolution['servicepartner_selection_source']) ? (string) $servicepartner_resolution['servicepartner_selection_source'] : 'none';
-			$quote_method['servicepartner_auto_selected'] = !empty($servicepartner_resolution['servicepartner_auto_selected']);
-			if (!empty($servicepartner_resolution) && $quote_method['servicepartner'] === '') {
-				$this->log_live_checkout_event('warning', 'Live quote estimate requires servicepartner but none could be resolved.', array(
-					'method_key' => $method_key,
-					'carrier_id' => isset($quote_method['carrier_id']) ? (string) $quote_method['carrier_id'] : '',
-					'product_id' => isset($quote_method['product_id']) ? (string) $quote_method['product_id'] : '',
-				));
-			}
 		}
 
 		$cache_ttl = isset($live_settings['quote_cache_ttl_seconds']) ? max(0, (int) $live_settings['quote_cache_ttl_seconds']) : 0;
 		$cache_key = 'lp_carg_quote_' . md5(wp_json_encode(array(
 			'method_key' => $method_key,
-			'agreement_id' => isset($quote_method['agreement_id']) ? (string) $quote_method['agreement_id'] : '',
-			'carrier_id' => isset($quote_method['carrier_id']) ? (string) $quote_method['carrier_id'] : '',
-			'product_id' => isset($quote_method['product_id']) ? (string) $quote_method['product_id'] : '',
+			'agreement_id' => isset($method['agreement_id']) ? (string) $method['agreement_id'] : '',
+			'carrier_id' => isset($method['carrier_id']) ? (string) $method['carrier_id'] : '',
+			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
 			'recipient' => $recipient,
 			'packages' => $packages,
 			'package_summary' => $package_summary,
 			'method_pricing' => $method_pricing,
 			'method_context' => array(
-				'delivery_to_pickup_point' => !empty($quote_method['delivery_to_pickup_point']) ? 1 : 0,
-				'delivery_to_home' => !empty($quote_method['delivery_to_home']) ? 1 : 0,
-				'mailbox_like' => $this->is_method_mailbox_like($quote_method) ? 1 : 0,
-				'pickup_like' => $this->api_service->is_method_explicitly_pickup_point($quote_method) ? 1 : 0,
-				'requires_servicepartner_for_estimate' => $requires_servicepartner_for_estimate ? 1 : 0,
-				'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
-				'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
+				'delivery_to_pickup_point' => !empty($method['delivery_to_pickup_point']) ? 1 : 0,
+				'delivery_to_home' => !empty($method['delivery_to_home']) ? 1 : 0,
+				'mailbox_like' => $this->is_method_mailbox_like($method) ? 1 : 0,
+				'pickup_like' => $this->api_service->is_method_explicitly_pickup_point($method) ? 1 : 0,
 			),
 			'pricing_context' => array(
 				'show_prices_including_vat' => !empty($live_settings['show_prices_including_vat']),
@@ -477,154 +391,41 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'quote_fallback_behavior' => (string) $fallback_behavior,
 			),
 		)));
-		$cached_quote = null;
 		if ($cache_ttl > 0) {
 			$cached = get_transient($cache_key);
 			if (is_array($cached) && !empty($cached['success'])) {
-				$cached_quote = $cached;
-			}
-		}
-		$lock_key = $this->build_quote_lock_key($cache_key);
-		if ($cached_quote === null && $this->is_transient_lock_active($lock_key)) {
-			$cached_quote = $this->resolve_quote_when_request_locked(array(
-				'cache_key' => $cache_key,
-				'fallback_behavior' => $fallback_behavior,
-			));
-		}
-
-		$xml = '';
-		if ($cached_quote === null) {
-			$xml = $this->api_service->build_estimate_request_xml(array(
-				'recipient' => $recipient,
-				'packages' => $packages,
-				'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
-				'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
-				'selected_service_ids' => array(),
-			), $quote_method);
-			if ($xml === '') {
-				return array(
-					'quote_index' => (int) $quote_index,
-					'method' => $method,
-					'error_result' => array(
-						'success' => false,
-						'method_key' => $method_key,
-						'reason_code' => 'quote_api_failure',
-					),
-				);
+				return $cached;
 			}
 		}
 
-		return array(
-			'quote_index' => (int) $quote_index,
-			'method' => $quote_method,
-			'method_key' => $method_key,
-			'method_pricing' => $method_pricing,
+		$quote_method = is_array($method) ? $method : array();
+		$servicepartner_resolution = array();
+		$manual_servicepartner = isset($quote_method['servicepartner']) ? sanitize_text_field((string) $quote_method['servicepartner']) : '';
+		if ($this->api_service->method_requires_servicepartner_for_estimate($quote_method) && $manual_servicepartner === '') {
+			$quote_method['request_timeout_seconds'] = $this->resolve_pickup_lookup_timeout($live_settings);
+			$servicepartner_resolution = $this->api_service->resolve_default_servicepartner_selection($quote_method, $recipient);
+			$quote_method['servicepartner'] = isset($servicepartner_resolution['servicepartner']) ? (string) $servicepartner_resolution['servicepartner'] : '';
+			$quote_method['servicepartner_customer_number'] = isset($servicepartner_resolution['servicepartner_customer_number']) ? (string) $servicepartner_resolution['servicepartner_customer_number'] : '';
+			$quote_method['servicepartner_selection_source'] = isset($servicepartner_resolution['servicepartner_selection_source']) ? (string) $servicepartner_resolution['servicepartner_selection_source'] : 'none';
+			$quote_method['servicepartner_auto_selected'] = !empty($servicepartner_resolution['servicepartner_auto_selected']);
+		}
+
+		$xml = $this->api_service->build_estimate_request_xml(array(
 			'recipient' => $recipient,
 			'packages' => $packages,
-			'package_summary' => $package_summary,
-			'cache_ttl' => $cache_ttl,
-			'cache_key' => $cache_key,
-			'lock_key' => $lock_key,
-			'fallback_behavior' => $fallback_behavior,
-			'settings' => $settings,
-			'live_settings' => $live_settings,
-			'cached_quote' => $cached_quote,
-			'request_xml' => $xml,
-			'servicepartner_resolution' => $servicepartner_resolution,
-		);
-	}
-
-	private function execute_uncached_quote_requests($contexts, $live_settings) {
-		$results = array();
-		$candidate_count = is_array($contexts) ? count($contexts) : 0;
-		$parallelism = (int) apply_filters('lp_cargonizer_live_quote_parallelism', 4, $candidate_count, $live_settings);
-		$parallelism = max(1, $parallelism);
-		$can_use_parallel = $this->can_use_parallel_quote_execution() && $candidate_count > 1;
-		$mode = ($can_use_parallel && $parallelism > 1) ? 'parallel' : 'sequential';
-		$this->log_live_checkout_event('debug', 'Live quote collection executor mode selected.', array(
-			'mode' => $mode,
-			'uncached_method_count' => $candidate_count,
-			'parallelism' => $parallelism,
-		));
-
-		if ($mode === 'parallel') {
-			return $this->execute_uncached_quote_requests_parallel($contexts, $live_settings, $parallelism);
+			'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
+			'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
+			'selected_service_ids' => array(),
+		), $quote_method);
+		// TODO: Keep current number/customer-number-only service_partner payload for parity; if PostNord still rejects estimates, pass full selected service partner fields in a follow-up patch.
+		if ($xml === '') {
+			return array(
+				'success' => false,
+				'method_key' => $method_key,
+				'reason_code' => 'quote_api_failure',
+			);
 		}
-		foreach ($contexts as $context) {
-			$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
-			$results[$index] = $this->execute_single_uncached_quote_request($context, $live_settings);
-		}
-		return $results;
-	}
 
-	private function can_use_parallel_quote_execution() {
-		return function_exists('curl_init') && function_exists('curl_setopt') && function_exists('curl_exec') && function_exists('curl_multi_init') && function_exists('curl_multi_exec') && function_exists('curl_multi_select');
-	}
-
-	private function execute_uncached_quote_requests_parallel($contexts, $live_settings, $parallelism) {
-		$results = array();
-		$chunks = array_chunk($contexts, max(1, (int) $parallelism));
-		$timeout = $this->resolve_frontend_quote_timeout($live_settings);
-		$timeout_seconds = max(1, (int) ceil($timeout));
-		foreach ($chunks as $chunk) {
-			$multi = curl_multi_init();
-			$handles = array();
-			foreach ($chunk as $context) {
-				$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
-				$request_xml = isset($context['request_xml']) ? (string) $context['request_xml'] : '';
-				$headers = array_merge($this->api_service->get_auth_headers(), array(
-					'Accept' => 'application/xml',
-					'Content-Type' => 'application/xml',
-				));
-				$header_lines = array();
-				foreach ($headers as $header_name => $header_value) {
-					$header_lines[] = $header_name . ': ' . $header_value;
-				}
-				$ch = curl_init();
-				curl_setopt($ch, CURLOPT_URL, LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'));
-				curl_setopt($ch, CURLOPT_POST, true);
-				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-				curl_setopt($ch, CURLOPT_HTTPHEADER, $header_lines);
-				curl_setopt($ch, CURLOPT_POSTFIELDS, $request_xml);
-				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout_seconds);
-				curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout_seconds);
-				curl_multi_add_handle($multi, $ch);
-				$handles[$index] = $ch;
-			}
-
-			$running = null;
-			do {
-				$multi_status = curl_multi_exec($multi, $running);
-				if ($running > 0 && $multi_status === CURLM_OK) {
-					curl_multi_select($multi, 1.0);
-				}
-			} while ($running > 0 && $multi_status === CURLM_OK);
-
-			foreach ($handles as $index => $handle) {
-				$body = curl_multi_getcontent($handle);
-				$error_message = curl_error($handle);
-				$http_status = (int) curl_getinfo($handle, CURLINFO_HTTP_CODE);
-				if ($error_message !== '') {
-					$results[$index] = array(
-						'type' => 'curl_multi',
-						'wp_error' => $error_message,
-					);
-				} else {
-					$results[$index] = array(
-						'type' => 'curl_multi',
-						'http_status' => $http_status,
-						'body' => is_string($body) ? $body : '',
-					);
-				}
-				curl_multi_remove_handle($multi, $handle);
-				curl_close($handle);
-			}
-			curl_multi_close($multi);
-		}
-		return $results;
-	}
-
-	private function execute_single_uncached_quote_request($context, $live_settings) {
 		$timeout = $this->resolve_frontend_quote_timeout($live_settings);
 		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => $timeout,
@@ -632,38 +433,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'Accept' => 'application/xml',
 				'Content-Type' => 'application/xml',
 			)),
-			'body' => isset($context['request_xml']) ? (string) $context['request_xml'] : '',
+			'body' => (string) $xml,
 		));
 		if (is_wp_error($response)) {
-			return array(
-				'type' => 'wp_remote',
-				'wp_error' => $response->get_error_message(),
-			);
-		}
-		return array(
-			'type' => 'wp_remote',
-			'http_status' => (int) wp_remote_retrieve_response_code($response),
-			'body' => (string) wp_remote_retrieve_body($response),
-		);
-	}
-
-	private function build_quote_from_remote_result($context, $remote_result) {
-		$method = isset($context['method']) && is_array($context['method']) ? $context['method'] : array();
-		$method_key = isset($context['method_key']) ? (string) $context['method_key'] : '';
-		$fallback_behavior = isset($context['fallback_behavior']) ? (string) $context['fallback_behavior'] : 'none';
-		$cache_key = isset($context['cache_key']) ? (string) $context['cache_key'] : '';
-		$packages = isset($context['packages']) && is_array($context['packages']) ? $context['packages'] : array();
-		$package_summary = isset($context['package_summary']) && is_array($context['package_summary']) ? $context['package_summary'] : array();
-		$method_pricing = isset($context['method_pricing']) && is_array($context['method_pricing']) ? $context['method_pricing'] : array();
-		$cache_ttl = isset($context['cache_ttl']) ? max(0, (int) $context['cache_ttl']) : 0;
-		$settings = isset($context['settings']) && is_array($context['settings']) ? $context['settings'] : array();
-		$live_settings = isset($context['live_settings']) && is_array($context['live_settings']) ? $context['live_settings'] : array();
-		$servicepartner_resolution = isset($context['servicepartner_resolution']) && is_array($context['servicepartner_resolution']) ? $context['servicepartner_resolution'] : array();
-
-		if (!empty($remote_result['wp_error'])) {
 			$this->log_live_checkout_event('warning', 'Live quote request failed.', array(
 				'method_key' => $method_key,
-				'error' => (string) $remote_result['wp_error'],
+				'error' => $response->get_error_message(),
 			));
 			$fallback_quote = $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 			if (!empty($fallback_quote['success'])) {
@@ -673,12 +448,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'success' => false,
 				'method_key' => $method_key,
 				'reason_code' => 'quote_api_failure',
-				'error' => (string) $remote_result['wp_error'],
+				'error' => $response->get_error_message(),
 			);
 		}
 
-		$status = isset($remote_result['http_status']) ? (int) $remote_result['http_status'] : 0;
-		$body = isset($remote_result['body']) ? (string) $remote_result['body'] : '';
+		$status = (int) wp_remote_retrieve_response_code($response);
+		$body = (string) wp_remote_retrieve_body($response);
 		if ($status < 200 || $status >= 300 || $body === '') {
 			$this->log_live_checkout_event('warning', 'Live quote response was not successful.', array(
 				'method_key' => $method_key,
@@ -712,7 +487,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			);
 		}
 
-		$bring_handling = $this->estimator_service->get_bring_manual_handling_fee($packages, $method);
+		$bring_handling = $this->estimator_service->get_bring_manual_handling_fee($packages, $quote_method);
 		$calc = $this->estimator_service->calculate_estimate_from_price_source(array(
 			'source' => isset($selected['source']) ? $selected['source'] : '',
 			'value' => (string) $live_price,
@@ -743,30 +518,30 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			? (float) $calc['rounded_price']
 			: (float) $calc['final_price_ex_vat'];
 		$display_cost = $this->convert_customer_visible_amount_to_rate_cost($customer_visible_cost, $live_settings);
-		$customer_title = $this->resolve_customer_title($method, $settings);
+		$customer_title = $this->resolve_customer_title($quote_method, $settings);
 		$resolved_pickup_points = array();
 		if (!empty($servicepartner_resolution['servicepartner_options']) && is_array($servicepartner_resolution['servicepartner_options'])) {
 			$resolved_pickup_points = $this->normalize_pickup_points_from_servicepartner_options($servicepartner_resolution['servicepartner_options'], array(
-				'country' => isset($context['recipient']['country']) ? $context['recipient']['country'] : '',
+				'country' => isset($recipient['country']) ? $recipient['country'] : '',
 			));
 		}
 		$quote = array(
 			'success' => true,
 			'method_key' => $method_key,
-			'agreement_id' => isset($method['agreement_id']) ? (string) $method['agreement_id'] : '',
-			'carrier_id' => isset($method['carrier_id']) ? (string) $method['carrier_id'] : '',
-			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
+			'agreement_id' => isset($quote_method['agreement_id']) ? (string) $quote_method['agreement_id'] : '',
+			'carrier_id' => isset($quote_method['carrier_id']) ? (string) $quote_method['carrier_id'] : '',
+			'product_id' => isset($quote_method['product_id']) ? (string) $quote_method['product_id'] : '',
 			'label' => $customer_title,
 			'live_price' => (float) $live_price,
 			'customer_visible_cost' => round(max(0, $customer_visible_cost), 2),
 			'display_cost' => round(max(0, $display_cost), 2),
-			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method) && !empty($package_summary['all_pickup_capable']),
-			'pickup_required' => $this->api_service->is_method_explicitly_pickup_point($method) && empty($method['delivery_to_home']),
-			'method_payload' => $method,
-			'servicepartner' => isset($method['servicepartner']) ? (string) $method['servicepartner'] : '',
-			'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? (string) $method['servicepartner_customer_number'] : '',
-			'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? (string) $method['servicepartner_selection_source'] : '',
-			'servicepartner_auto_selected' => !empty($method['servicepartner_auto_selected']),
+			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($quote_method) && !empty($package_summary['all_pickup_capable']),
+			'pickup_required' => $this->api_service->is_method_explicitly_pickup_point($quote_method) && empty($quote_method['delivery_to_home']),
+			'method_payload' => $quote_method,
+			'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
+			'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
+			'servicepartner_selection_source' => isset($quote_method['servicepartner_selection_source']) ? (string) $quote_method['servicepartner_selection_source'] : '',
+			'servicepartner_auto_selected' => !empty($quote_method['servicepartner_auto_selected']),
 			'resolved_pickup_points' => $resolved_pickup_points,
 		);
 
@@ -776,21 +551,6 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		set_transient($this->get_last_known_quote_cache_key($cache_key), $quote, DAY_IN_SECONDS * 30);
 
 		return $quote;
-	}
-
-	private function build_quote_failure_entry($quote, $method) {
-		return array(
-			'method_key' => isset($quote['method_key']) ? (string) $quote['method_key'] : (isset($method['key']) ? sanitize_text_field((string) $method['key']) : ''),
-			'reason_code' => isset($quote['reason_code']) ? (string) $quote['reason_code'] : 'quote_api_failure',
-			'http_status' => isset($quote['http_status']) ? (int) $quote['http_status'] : 0,
-			'error' => isset($quote['error']) ? (string) $quote['error'] : '',
-		);
-	}
-
-	private function is_auth_related_quote_failure($failure_entry) {
-		$http_status = isset($failure_entry['http_status']) ? (int) $failure_entry['http_status'] : 0;
-		$reason_code = isset($failure_entry['reason_code']) ? (string) $failure_entry['reason_code'] : '';
-		return $http_status === 401 || $http_status === 403 || $reason_code === 'auth_or_config_problem';
 	}
 
 	private function apply_checkout_price_adjustments(&$quotes, $order_value, $live_settings, $rules_by_method) {
@@ -1167,94 +927,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		return $this->sort_pickup_points_deterministically($points);
 	}
 
-	private function build_quote_lock_key($cache_key) {
-		return 'lp_carg_quote_lock_' . md5((string) $cache_key);
-	}
-
-	private function try_acquire_quote_lock($context) {
-		$lock_key = isset($context['lock_key']) ? (string) $context['lock_key'] : '';
-		if ($lock_key === '') {
-			return true;
-		}
-		if ($this->is_transient_lock_active($lock_key)) {
-			return false;
-		}
-		set_transient($lock_key, 1, self::QUOTE_REQUEST_LOCK_TTL_SECONDS);
-		return true;
-	}
-
-	private function release_quote_lock($context) {
-		$lock_key = isset($context['lock_key']) ? (string) $context['lock_key'] : '';
-		if ($lock_key === '') {
-			return;
-		}
-		delete_transient($lock_key);
-	}
-
-	private function resolve_quote_when_request_locked($context) {
-		$cache_key = isset($context['cache_key']) ? (string) $context['cache_key'] : '';
-		$fallback_behavior = isset($context['fallback_behavior']) ? (string) $context['fallback_behavior'] : 'none';
-		if ($cache_key === '') {
-			return array();
-		}
-		$cached = get_transient($cache_key);
-		if (is_array($cached) && !empty($cached['success'])) {
-			return $cached;
-		}
-		$fallback_quote = $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
-		if (!empty($fallback_quote['success'])) {
-			return $fallback_quote;
-		}
-		return array();
-	}
-
 	private function is_transient_lock_active($lock_key) {
 		return !empty(get_transient($lock_key));
 	}
 
 	private function build_pickup_lock_key($cache_key) {
 		return 'lp_carg_pickup_lock_' . md5((string) $cache_key);
-	}
-
-	private function get_cached_pickup_points_for_rate($quote, $destination, $live_settings) {
-		if (!$this->has_minimum_destination_for_pickup_points($destination)) {
-			return array();
-		}
-
-		$method = isset($quote['method_payload']) && is_array($quote['method_payload']) ? $quote['method_payload'] : array();
-		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
-		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
-		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
-		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
-		$pickup_timeout = $this->resolve_pickup_lookup_timeout($live_settings);
-		$lookup_method = array_merge($method, array(
-			'agreement_id' => isset($quote['agreement_id']) ? $quote['agreement_id'] : '',
-			'carrier_id' => isset($quote['carrier_id']) ? $quote['carrier_id'] : '',
-			'product_id' => isset($quote['product_id']) ? $quote['product_id'] : '',
-			'country' => $country,
-			'postcode' => $postcode,
-			'city' => $city,
-			'address' => $address,
-			'request_timeout_seconds' => $pickup_timeout,
-		));
-		$custom = $this->api_service->detect_servicepartner_custom_params($lookup_method);
-		$cache_key = 'lp_carg_pickup_' . md5(wp_json_encode(array(
-			'transport_agreement_id' => isset($lookup_method['agreement_id']) ? (string) $lookup_method['agreement_id'] : '',
-			'carrier' => isset($lookup_method['carrier_id']) ? (string) $lookup_method['carrier_id'] : '',
-			'product' => isset($lookup_method['product_id']) ? (string) $lookup_method['product_id'] : '',
-			'country' => $country,
-			'postcode' => $postcode,
-			'city' => $city,
-			'address' => $address,
-			'request_timeout_seconds' => $pickup_timeout,
-			'custom' => isset($custom['params']) ? $custom['params'] : array(),
-		)));
-		$cached = get_transient($cache_key);
-		if (!is_array($cached) || empty($cached)) {
-			return array();
-		}
-
-		return array_values($cached);
 	}
 
 	private function resolve_selected_pickup_point($rate_id, $pickup_points) {
