@@ -997,12 +997,16 @@ class LP_Cargonizer_Api_Service {
 	}
 
 	public function method_requires_servicepartner_for_estimate($method) {
-		// Checkout estimate invariant: some PostNord methods require service_partner on /consignment_costs.xml.
-		$product_id = strtolower(sanitize_text_field(isset($method['product_id']) ? (string) $method['product_id'] : ''));
-		if ($this->is_method_explicitly_pickup_point($method)) {
-			return true;
+		$carrier_id = strtolower(sanitize_text_field(isset($method['carrier_id']) ? (string) $method['carrier_id'] : ''));
+		$carrier_name = strtolower(sanitize_text_field(isset($method['carrier_name']) ? (string) $method['carrier_name'] : ''));
+		$is_postnord_family = $carrier_id === 'postnord' || $carrier_id === 'tollpost_globe' || strpos($carrier_name, 'postnord') !== false || strpos($carrier_name, 'tollpost') !== false;
+		if (!$is_postnord_family) {
+			return false;
 		}
-		return in_array($product_id, array('mypack_small_home', 'postnord_mypack_small_home'), true);
+		if (!$this->is_method_explicitly_pickup_point($method)) {
+			return false;
+		}
+		return !$this->is_method_explicitly_home_delivery($method);
 	}
 
 	private function extract_servicepartner_selection($payload, $method) {
