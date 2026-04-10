@@ -1,4 +1,4 @@
-# Final Regression Checklist (2026-04-08)
+# Final Regression Checklist (2026-04-10)
 
 Scope: compare current refactored plugin to original monolithic implementation at commit `deb7659`.
 
@@ -83,6 +83,26 @@ Run these scenarios with live checkout enabled, at least one pickup-capable meth
 11. **Admin booking prefill**
     - Place order with live checkout shipping and pickup selection.
     - In admin booking modal, verify checkout selection metadata is available for prefill while allowing admin override.
+
+12. **Multiple eligible methods (4–7 methods) with fast response**
+    - Configure rules so 4–7 methods are eligible for the same Norwegian destination.
+    - Refresh checkout and verify rates return quickly (cache-first behavior) and render without waiting for pickup-point payload completion.
+
+13. **Pickup-capable rate visible before pickup points load**
+    - Ensure at least one returned rate requires pickup points.
+    - Verify the pickup-capable shipping rate is displayed/selectable before pickup-point data is fully loaded.
+
+14. **Temporary pickup lookup failure does not remove shipping rate**
+    - Simulate temporary failure in pickup lookup path for a pickup-capable method.
+    - Verify the shipping rate itself remains visible/selectable; only pickup-point data is deferred/retried/fallback-handled.
+
+15. **Repeated checkout refreshes do not duplicate identical remote requests**
+    - Trigger rapid repeated checkout updates (postcode edits, shipping toggles, repeated refresh events).
+    - Verify request locking / short failure cache prevent duplicate identical concurrent upstream requests.
+
+16. **Sequential fallback works when parallel executor is unavailable**
+    - Disable/fail the parallel execution path for uncached quote collection.
+    - Verify quote collection still succeeds using sequential fallback and rates are returned.
 
 ## Zip readiness
 
