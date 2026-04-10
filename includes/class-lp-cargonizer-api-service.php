@@ -996,6 +996,14 @@ class LP_Cargonizer_Api_Service {
 		return $delivery_to_home || in_array($product_id, $strict_home_product_ids, true) || $has_home_phrase;
 	}
 
+	public function method_requires_servicepartner_for_estimate($method) {
+		$product_id = strtolower(sanitize_text_field(isset($method['product_id']) ? (string) $method['product_id'] : ''));
+		if ($this->is_method_explicitly_pickup_point($method)) {
+			return true;
+		}
+		return in_array($product_id, array('mypack_small_home', 'postnord_mypack_small_home'), true);
+	}
+
 	private function extract_servicepartner_selection($payload, $method) {
 		$selection_value = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
 		$customer_number = isset($payload['servicepartner_customer_number']) ? sanitize_text_field((string) $payload['servicepartner_customer_number']) : '';
