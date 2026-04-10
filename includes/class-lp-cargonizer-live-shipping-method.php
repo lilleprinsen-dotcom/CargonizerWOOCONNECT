@@ -321,30 +321,65 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'failures' => array(),
 			'auth_failure_detected' => false,
 		);
-		foreach ($candidates as $method) {
-			$quote = $this->build_quote_for_method($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior);
+		$contexts = array();
+		$uncached_contexts = array();
+		$cached_quotes = array();
+
+		foreach ($candidates as $index => $method) {
+			$context = $this->prepare_quote_request_context($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior, $index);
+			$contexts[] = $context;
+			if (!empty($context['error_result'])) {
+				$failure_entry = $this->build_quote_failure_entry($context['error_result'], $method);
+				if ($this->is_auth_related_quote_failure($failure_entry)) {
+					$diagnostics['auth_failure_detected'] = true;
+				}
+				$diagnostics['failures'][] = $failure_entry;
+				continue;
+			}
+			if (!empty($context['cached_quote'])) {
+				$cached_quotes[$index] = $context['cached_quote'];
+				continue;
+			}
+			$uncached_contexts[] = $context;
+		}
+
+		$remote_results = array();
+		if (!empty($uncached_contexts)) {
+			$remote_results = $this->execute_uncached_quote_requests($uncached_contexts, $live_settings);
+		}
+
+		foreach ($contexts as $context) {
+			$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
+			if (!empty($context['error_result'])) {
+				continue;
+			}
+			if (isset($cached_quotes[$index]) && is_array($cached_quotes[$index])) {
+				$quotes[] = $cached_quotes[$index];
+				continue;
+			}
+			$remote_result = isset($remote_results[$index]) && is_array($remote_results[$index]) ? $remote_results[$index] : array(
+				'type' => 'wp_remote',
+				'wp_error' => 'Missing remote quote result.',
+			);
+			$quote = $this->build_quote_from_remote_result($context, $remote_result);
 			if (!empty($quote['success'])) {
 				$quotes[] = $quote;
 				continue;
 			}
-			$failure_entry = array(
-				'method_key' => isset($quote['method_key']) ? (string) $quote['method_key'] : (isset($method['key']) ? sanitize_text_field((string) $method['key']) : ''),
-				'reason_code' => isset($quote['reason_code']) ? (string) $quote['reason_code'] : 'quote_api_failure',
-				'http_status' => isset($quote['http_status']) ? (int) $quote['http_status'] : 0,
-				'error' => isset($quote['error']) ? (string) $quote['error'] : '',
-			);
-			if ($failure_entry['http_status'] === 401 || $failure_entry['http_status'] === 403 || $failure_entry['reason_code'] === 'auth_or_config_problem') {
+			$failure_entry = $this->build_quote_failure_entry($quote, isset($context['method']) ? $context['method'] : array());
+			if ($this->is_auth_related_quote_failure($failure_entry)) {
 				$diagnostics['auth_failure_detected'] = true;
 			}
 			$diagnostics['failures'][] = $failure_entry;
 		}
+
 		return array(
 			'quotes' => $quotes,
 			'diagnostics' => $diagnostics,
 		);
 	}
 
-	private function build_quote_for_method($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior) {
+	private function prepare_quote_request_context($method, $package_result, $destination, $settings, $live_settings, $fallback_behavior, $quote_index) {
 		$method_key = isset($method['key']) ? (string) $method['key'] : '';
 		$method_pricing = $this->resolve_method_pricing($method_key, $settings);
 		$recipient = array(
@@ -359,9 +394,13 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$package_summary = isset($package_result['summary']) && is_array($package_result['summary']) ? $package_result['summary'] : array();
 		if (empty($recipient['postcode']) || $recipient['country'] === '') {
 			return array(
-				'success' => false,
-				'method_key' => $method_key,
-				'reason_code' => 'destination_incomplete',
+				'quote_index' => (int) $quote_index,
+				'method' => $method,
+				'error_result' => array(
+					'success' => false,
+					'method_key' => $method_key,
+					'reason_code' => 'destination_incomplete',
+				),
 			);
 		}
 
@@ -387,26 +426,142 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'quote_fallback_behavior' => (string) $fallback_behavior,
 			),
 		)));
+		$cached_quote = null;
 		if ($cache_ttl > 0) {
 			$cached = get_transient($cache_key);
 			if (is_array($cached) && !empty($cached['success'])) {
-				return $cached;
+				$cached_quote = $cached;
 			}
 		}
 
-		$xml = $this->api_service->build_estimate_request_xml(array(
-			'recipient' => $recipient,
-			'packages' => $packages,
-			'selected_service_ids' => array(),
-		), $method);
-		if ($xml === '') {
-			return array(
-				'success' => false,
-				'method_key' => $method_key,
-				'reason_code' => 'quote_api_failure',
-			);
+		$xml = '';
+		if ($cached_quote === null) {
+			$xml = $this->api_service->build_estimate_request_xml(array(
+				'recipient' => $recipient,
+				'packages' => $packages,
+				'selected_service_ids' => array(),
+			), $method);
+			if ($xml === '') {
+				return array(
+					'quote_index' => (int) $quote_index,
+					'method' => $method,
+					'error_result' => array(
+						'success' => false,
+						'method_key' => $method_key,
+						'reason_code' => 'quote_api_failure',
+					),
+				);
+			}
 		}
 
+		return array(
+			'quote_index' => (int) $quote_index,
+			'method' => $method,
+			'method_key' => $method_key,
+			'method_pricing' => $method_pricing,
+			'packages' => $packages,
+			'package_summary' => $package_summary,
+			'cache_ttl' => $cache_ttl,
+			'cache_key' => $cache_key,
+			'fallback_behavior' => $fallback_behavior,
+			'settings' => $settings,
+			'live_settings' => $live_settings,
+			'cached_quote' => $cached_quote,
+			'request_xml' => $xml,
+		);
+	}
+
+	private function execute_uncached_quote_requests($contexts, $live_settings) {
+		$results = array();
+		$candidate_count = is_array($contexts) ? count($contexts) : 0;
+		$parallelism = (int) apply_filters('lp_cargonizer_live_quote_parallelism', 4, $candidate_count, $live_settings);
+		$parallelism = max(1, $parallelism);
+		$can_use_parallel = $this->can_use_parallel_quote_execution() && $candidate_count > 1;
+		$mode = ($can_use_parallel && $parallelism > 1) ? 'parallel' : 'sequential';
+		$this->log_live_checkout_event('debug', 'Live quote collection executor mode selected.', array(
+			'mode' => $mode,
+			'uncached_method_count' => $candidate_count,
+			'parallelism' => $parallelism,
+		));
+
+		if ($mode === 'parallel') {
+			return $this->execute_uncached_quote_requests_parallel($contexts, $live_settings, $parallelism);
+		}
+		foreach ($contexts as $context) {
+			$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
+			$results[$index] = $this->execute_single_uncached_quote_request($context, $live_settings);
+		}
+		return $results;
+	}
+
+	private function can_use_parallel_quote_execution() {
+		return function_exists('curl_init') && function_exists('curl_setopt') && function_exists('curl_exec') && function_exists('curl_multi_init') && function_exists('curl_multi_exec') && function_exists('curl_multi_select');
+	}
+
+	private function execute_uncached_quote_requests_parallel($contexts, $live_settings, $parallelism) {
+		$results = array();
+		$chunks = array_chunk($contexts, max(1, (int) $parallelism));
+		$timeout = $this->resolve_frontend_quote_timeout($live_settings);
+		$timeout_seconds = max(1, (int) ceil($timeout));
+		foreach ($chunks as $chunk) {
+			$multi = curl_multi_init();
+			$handles = array();
+			foreach ($chunk as $context) {
+				$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
+				$request_xml = isset($context['request_xml']) ? (string) $context['request_xml'] : '';
+				$headers = array_merge($this->api_service->get_auth_headers(), array(
+					'Accept' => 'application/xml',
+					'Content-Type' => 'application/xml',
+				));
+				$header_lines = array();
+				foreach ($headers as $header_name => $header_value) {
+					$header_lines[] = $header_name . ': ' . $header_value;
+				}
+				$ch = curl_init();
+				curl_setopt($ch, CURLOPT_URL, LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'));
+				curl_setopt($ch, CURLOPT_POST, true);
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+				curl_setopt($ch, CURLOPT_HTTPHEADER, $header_lines);
+				curl_setopt($ch, CURLOPT_POSTFIELDS, $request_xml);
+				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout_seconds);
+				curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout_seconds);
+				curl_multi_add_handle($multi, $ch);
+				$handles[$index] = $ch;
+			}
+
+			$running = null;
+			do {
+				$multi_status = curl_multi_exec($multi, $running);
+				if ($running > 0 && $multi_status === CURLM_OK) {
+					curl_multi_select($multi, 1.0);
+				}
+			} while ($running > 0 && $multi_status === CURLM_OK);
+
+			foreach ($handles as $index => $handle) {
+				$body = curl_multi_getcontent($handle);
+				$error_message = curl_error($handle);
+				$http_status = (int) curl_getinfo($handle, CURLINFO_HTTP_CODE);
+				if ($error_message !== '') {
+					$results[$index] = array(
+						'type' => 'curl_multi',
+						'wp_error' => $error_message,
+					);
+				} else {
+					$results[$index] = array(
+						'type' => 'curl_multi',
+						'http_status' => $http_status,
+						'body' => is_string($body) ? $body : '',
+					);
+				}
+				curl_multi_remove_handle($multi, $handle);
+				curl_close($handle);
+			}
+			curl_multi_close($multi);
+		}
+		return $results;
+	}
+
+	private function execute_single_uncached_quote_request($context, $live_settings) {
 		$timeout = $this->resolve_frontend_quote_timeout($live_settings);
 		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => $timeout,
@@ -414,12 +569,37 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'Accept' => 'application/xml',
 				'Content-Type' => 'application/xml',
 			)),
-			'body' => (string) $xml,
+			'body' => isset($context['request_xml']) ? (string) $context['request_xml'] : '',
 		));
 		if (is_wp_error($response)) {
+			return array(
+				'type' => 'wp_remote',
+				'wp_error' => $response->get_error_message(),
+			);
+		}
+		return array(
+			'type' => 'wp_remote',
+			'http_status' => (int) wp_remote_retrieve_response_code($response),
+			'body' => (string) wp_remote_retrieve_body($response),
+		);
+	}
+
+	private function build_quote_from_remote_result($context, $remote_result) {
+		$method = isset($context['method']) && is_array($context['method']) ? $context['method'] : array();
+		$method_key = isset($context['method_key']) ? (string) $context['method_key'] : '';
+		$fallback_behavior = isset($context['fallback_behavior']) ? (string) $context['fallback_behavior'] : 'none';
+		$cache_key = isset($context['cache_key']) ? (string) $context['cache_key'] : '';
+		$packages = isset($context['packages']) && is_array($context['packages']) ? $context['packages'] : array();
+		$package_summary = isset($context['package_summary']) && is_array($context['package_summary']) ? $context['package_summary'] : array();
+		$method_pricing = isset($context['method_pricing']) && is_array($context['method_pricing']) ? $context['method_pricing'] : array();
+		$cache_ttl = isset($context['cache_ttl']) ? max(0, (int) $context['cache_ttl']) : 0;
+		$settings = isset($context['settings']) && is_array($context['settings']) ? $context['settings'] : array();
+		$live_settings = isset($context['live_settings']) && is_array($context['live_settings']) ? $context['live_settings'] : array();
+
+		if (!empty($remote_result['wp_error'])) {
 			$this->log_live_checkout_event('warning', 'Live quote request failed.', array(
 				'method_key' => $method_key,
-				'error' => $response->get_error_message(),
+				'error' => (string) $remote_result['wp_error'],
 			));
 			$fallback_quote = $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
 			if (!empty($fallback_quote['success'])) {
@@ -429,12 +609,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'success' => false,
 				'method_key' => $method_key,
 				'reason_code' => 'quote_api_failure',
-				'error' => $response->get_error_message(),
+				'error' => (string) $remote_result['wp_error'],
 			);
 		}
 
-		$status = (int) wp_remote_retrieve_response_code($response);
-		$body = (string) wp_remote_retrieve_body($response);
+		$status = isset($remote_result['http_status']) ? (int) $remote_result['http_status'] : 0;
+		$body = isset($remote_result['body']) ? (string) $remote_result['body'] : '';
 		if ($status < 200 || $status >= 300 || $body === '') {
 			$this->log_live_checkout_event('warning', 'Live quote response was not successful.', array(
 				'method_key' => $method_key,
@@ -521,6 +701,21 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		set_transient($this->get_last_known_quote_cache_key($cache_key), $quote, DAY_IN_SECONDS * 30);
 
 		return $quote;
+	}
+
+	private function build_quote_failure_entry($quote, $method) {
+		return array(
+			'method_key' => isset($quote['method_key']) ? (string) $quote['method_key'] : (isset($method['key']) ? sanitize_text_field((string) $method['key']) : ''),
+			'reason_code' => isset($quote['reason_code']) ? (string) $quote['reason_code'] : 'quote_api_failure',
+			'http_status' => isset($quote['http_status']) ? (int) $quote['http_status'] : 0,
+			'error' => isset($quote['error']) ? (string) $quote['error'] : '',
+		);
+	}
+
+	private function is_auth_related_quote_failure($failure_entry) {
+		$http_status = isset($failure_entry['http_status']) ? (int) $failure_entry['http_status'] : 0;
+		$reason_code = isset($failure_entry['reason_code']) ? (string) $failure_entry['reason_code'] : '';
+		return $http_status === 401 || $http_status === 403 || $reason_code === 'auth_or_config_problem';
 	}
 
 	private function apply_checkout_price_adjustments(&$quotes, $order_value, $live_settings, $rules_by_method) {
