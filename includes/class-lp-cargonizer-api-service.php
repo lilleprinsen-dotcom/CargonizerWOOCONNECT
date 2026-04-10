@@ -9,9 +9,25 @@ class LP_Cargonizer_Api_Service {
 
 	/** @var callable */
 	private $settings_provider;
+	private $last_xml_build_error = array();
 
 	public function __construct($settings_provider) {
 		$this->settings_provider = $settings_provider;
+	}
+
+	public function get_last_xml_build_error() {
+		return is_array($this->last_xml_build_error) ? $this->last_xml_build_error : array();
+	}
+
+	private function clear_last_xml_build_error() {
+		$this->last_xml_build_error = array();
+	}
+
+	private function set_last_xml_build_error($message, $context = array()) {
+		$this->last_xml_build_error = array(
+			'message' => sanitize_text_field((string) $message),
+			'context' => is_array($context) ? $context : array(),
+		);
 	}
 
 	public static function get_api_base_url() {
@@ -398,6 +414,8 @@ class LP_Cargonizer_Api_Service {
 			'winning_attempt_label' => '',
 			'last_nonempty_http_status' => 0,
 			'parser_debug' => array(),
+			'recipient_country_raw' => isset($method['country']) ? sanitize_text_field((string) $method['country']) : '',
+			'recipient_country_normalized' => $country,
 		);
 
 		if ($country === '' || $postcode === '') {
@@ -1100,7 +1118,41 @@ class LP_Cargonizer_Api_Service {
 		return preg_replace('/[^A-Za-z0-9\- ]/', '', sanitize_text_field((string) $value));
 	}
 
+	private function resolve_recipient_country_code($recipient, $method = array()) {
+		$recipient = is_array($recipient) ? $recipient : array();
+		$method = is_array($method) ? $method : array();
+		$candidates = array(
+			isset($recipient['country']) ? $recipient['country'] : '',
+			isset($recipient['shipping_country']) ? $recipient['shipping_country'] : '',
+			isset($recipient['billing_country']) ? $recipient['billing_country'] : '',
+			isset($method['country']) ? $method['country'] : '',
+			isset($method['destination_country']) ? $method['destination_country'] : '',
+		);
+
+		$raw_input = '';
+		foreach ($candidates as $candidate) {
+			$candidate_text = sanitize_text_field((string) $candidate);
+			if ($candidate_text === '') {
+				continue;
+			}
+			$raw_input = $candidate_text;
+			$normalized = $this->sanitize_country_code($candidate_text);
+			if ($normalized !== '') {
+				return array(
+					'raw' => $raw_input,
+					'normalized' => $normalized,
+				);
+			}
+		}
+
+		return array(
+			'raw' => $raw_input,
+			'normalized' => '',
+		);
+	}
+
 	public function build_estimate_request_xml($payload, $method) {
+		$this->clear_last_xml_build_error();
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$servicepartner_selection = $this->extract_servicepartner_selection($payload, $method);
@@ -1108,6 +1160,18 @@ class LP_Cargonizer_Api_Service {
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
 		if (!class_exists('SimpleXMLElement')) {
+			return '';
+		}
+
+		$country_resolution = $this->resolve_recipient_country_code($recipient, $method);
+		if (!isset($country_resolution['normalized']) || $country_resolution['normalized'] === '') {
+			$this->set_last_xml_build_error(
+				'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.',
+				array(
+					'recipient_country_raw' => isset($country_resolution['raw']) ? (string) $country_resolution['raw'] : '',
+					'recipient_country_normalized' => '',
+				)
+			);
 			return '';
 		}
 
@@ -1122,9 +1186,7 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('address2', (string) (isset($recipient['address_2']) ? $recipient['address_2'] : ''));
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
-		$recipient_country = isset($recipient['country']) ? (string) $recipient['country'] : '';
-		$recipient_country_code = $this->sanitize_country_code($recipient_country);
-		$consignee->addChild('country', (string) ($recipient_country_code !== '' ? $recipient_country_code : $recipient_country));
+		$consignee->addChild('country', (string) $country_resolution['normalized']);
 		if ($servicepartner_selection['number'] !== '') {
 			$service_partner = $parts->addChild('service_partner');
 			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
@@ -1199,6 +1261,7 @@ class LP_Cargonizer_Api_Service {
 	}
 
 	public function build_booking_consignment_xml($payload, $method, $options = array()) {
+		$this->clear_last_xml_build_error();
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$order_number = isset($payload['order_number']) ? sanitize_text_field((string) $payload['order_number']) : '';
@@ -1211,6 +1274,18 @@ class LP_Cargonizer_Api_Service {
 		$booking_request = isset($options['booking_request']) ? (bool) $options['booking_request'] : false;
 
 		if (!class_exists('SimpleXMLElement')) {
+			return '';
+		}
+
+		$country_resolution = $this->resolve_recipient_country_code($recipient, $method);
+		if (!isset($country_resolution['normalized']) || $country_resolution['normalized'] === '') {
+			$this->set_last_xml_build_error(
+				'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.',
+				array(
+					'recipient_country_raw' => isset($country_resolution['raw']) ? (string) $country_resolution['raw'] : '',
+					'recipient_country_normalized' => '',
+				)
+			);
 			return '';
 		}
 
@@ -1231,9 +1306,7 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('address2', (string) (isset($recipient['address_2']) ? $recipient['address_2'] : ''));
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
-		$recipient_country = isset($recipient['country']) ? (string) $recipient['country'] : '';
-		$recipient_country_code = $this->sanitize_country_code($recipient_country);
-		$consignee->addChild('country', (string) ($recipient_country_code !== '' ? $recipient_country_code : $recipient_country));
+		$consignee->addChild('country', (string) $country_resolution['normalized']);
 
 		$email = isset($recipient['email']) ? trim((string) $recipient['email']) : '';
 		if ($email !== '') {
