@@ -22,6 +22,7 @@ class LP_Cargonizer_Connector {
 	const NONCE_ACTION_OPTIMIZE_DSV = 'lp_cargonizer_optimize_dsv_estimates';
 	const NONCE_ACTION_SERVICEPARTNERS = 'lp_cargonizer_fetch_servicepartners';
 	const NONCE_ACTION_PRINTERS = 'lp_cargonizer_get_printers';
+	const NONCE_ACTION_ADMIN_SERVICEPOINT_DIAGNOSTIC = 'lp_cargonizer_admin_servicepoint_diagnostic';
 	const NONCE_ACTION_BOOK = 'lp_cargonizer_book_shipment';
 	/** @var LP_Cargonizer_Settings_Service */
 	private $settings_service;
