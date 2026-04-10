@@ -331,6 +331,7 @@ class LP_Cargonizer_Settings_Service {
 	private function get_package_resolution_defaults() {
 		return array(
 			'package_build_mode' => 'combined_single',
+			'separate_package_strategy' => 'keep_separate_colli',
 			'fallback_sources' => array(
 				'product_dimensions',
 				'product_override',
@@ -510,10 +511,16 @@ class LP_Cargonizer_Settings_Service {
 			'package_build_mode' => isset($input['package_build_mode'])
 				? sanitize_key((string) $input['package_build_mode'])
 				: sanitize_key((string) (isset($base['package_build_mode']) ? $base['package_build_mode'] : 'combined_single')),
+			'separate_package_strategy' => isset($input['separate_package_strategy'])
+				? sanitize_key((string) $input['separate_package_strategy'])
+				: sanitize_key((string) (isset($base['separate_package_strategy']) ? $base['separate_package_strategy'] : 'keep_separate_colli')),
 			'fallback_sources' => array(),
 		);
 		if (!in_array($output['package_build_mode'], array('combined_single', 'split_by_profile', 'separate_bulky_profiles'), true)) {
 			$output['package_build_mode'] = 'combined_single';
+		}
+		if (!in_array($output['separate_package_strategy'], array('keep_separate_colli', 'merge_non_separate_into_first_separate'), true)) {
+			$output['separate_package_strategy'] = 'keep_separate_colli';
 		}
 		$sources = isset($input['fallback_sources']) && is_array($input['fallback_sources']) ? $input['fallback_sources'] : (isset($base['fallback_sources']) && is_array($base['fallback_sources']) ? $base['fallback_sources'] : array());
 		$allowed = array(

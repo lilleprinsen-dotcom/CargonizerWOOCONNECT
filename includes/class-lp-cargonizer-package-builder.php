@@ -139,6 +139,7 @@ class LP_Cargonizer_Package_Builder {
 			$combined_colli = $this->build_combined_colli($combined);
 		}
 		$result['packages'] = array_merge($combined_colli, $separate_packages);
+		$result['packages'] = $this->apply_separate_package_strategy($result['packages']);
 		$result['summary'] = $this->build_summary($result['packages'], array(
 			'profiles_in_use' => array_keys($profiles_in_use),
 			'category_slugs' => array_values(array_unique(array_filter($category_slugs))),
@@ -343,5 +344,86 @@ class LP_Cargonizer_Package_Builder {
 			$mode = 'combined_single';
 		}
 		return $mode;
+	}
+
+	private function get_separate_package_strategy() {
+		$settings = is_callable($this->settings_provider) ? call_user_func($this->settings_provider) : array();
+		$strategy = isset($settings['package_resolution']['separate_package_strategy'])
+			? sanitize_key((string) $settings['package_resolution']['separate_package_strategy'])
+			: 'keep_separate_colli';
+		if (!in_array($strategy, array('keep_separate_colli', 'merge_non_separate_into_first_separate'), true)) {
+			$strategy = 'keep_separate_colli';
+		}
+		return $strategy;
+	}
+
+	private function apply_separate_package_strategy($packages) {
+		if (!is_array($packages) || empty($packages)) {
+			return array();
+		}
+
+		$strategy = $this->get_separate_package_strategy();
+		if ($strategy !== 'merge_non_separate_into_first_separate') {
+			return $packages;
+		}
+
+		$first_separate_index = -1;
+		foreach ($packages as $index => $package) {
+			if (!empty($package['is_separate_package'])) {
+				$first_separate_index = (int) $index;
+				break;
+			}
+		}
+
+		if ($first_separate_index < 0) {
+			return $packages;
+		}
+
+		$merged = $packages;
+		$remove_indexes = array();
+		foreach ($merged as $index => $package) {
+			if ((int) $index === $first_separate_index || !empty($package['is_separate_package'])) {
+				continue;
+			}
+			$merged[$first_separate_index] = $this->merge_packages($merged[$first_separate_index], $package);
+			$remove_indexes[] = (int) $index;
+		}
+
+		if (empty($remove_indexes)) {
+			return $merged;
+		}
+
+		foreach ($remove_indexes as $remove_index) {
+			unset($merged[$remove_index]);
+		}
+
+		return array_values($merged);
+	}
+
+	private function merge_packages($target, $source) {
+		$target_weight = isset($target['weight']) ? (float) $target['weight'] : 0;
+		$source_weight = isset($source['weight']) ? (float) $source['weight'] : 0;
+		$target['weight'] = round($target_weight + $source_weight, 3);
+		$target['length'] = round(max(isset($target['length']) ? (float) $target['length'] : 0, isset($source['length']) ? (float) $source['length'] : 0), 3);
+		$target['width'] = round(max(isset($target['width']) ? (float) $target['width'] : 0, isset($source['width']) ? (float) $source['width'] : 0), 3);
+		$target['height'] = round(max(isset($target['height']) ? (float) $target['height'] : 0, isset($source['height']) ? (float) $source['height'] : 0), 3);
+		$target['missing_dimensions'] = !empty($target['missing_dimensions']) || !empty($source['missing_dimensions']);
+
+		$target_items = isset($target['combined_items']) && is_array($target['combined_items']) ? $target['combined_items'] : array($target);
+		$source_items = isset($source['combined_items']) && is_array($source['combined_items']) ? $source['combined_items'] : array($source);
+		$target['combined_items'] = array_merge($target_items, $source_items);
+
+		$target_profiles = isset($target['profile_slugs']) && is_array($target['profile_slugs']) ? $target['profile_slugs'] : array();
+		$source_profiles = isset($source['profile_slugs']) && is_array($source['profile_slugs']) ? $source['profile_slugs'] : array();
+		if (isset($source['profile_slug']) && $source['profile_slug'] !== '') {
+			$source_profiles[] = (string) $source['profile_slug'];
+		}
+		if (isset($target['profile_slug']) && $target['profile_slug'] !== '') {
+			$target_profiles[] = (string) $target['profile_slug'];
+		}
+		$target['profile_slugs'] = array_values(array_unique(array_filter(array_merge($target_profiles, $source_profiles))));
+
+		$target['combined_profile_scope'] = '';
+		return $target;
 	}
 }
