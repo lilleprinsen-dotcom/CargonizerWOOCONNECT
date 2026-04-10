@@ -654,6 +654,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				),
 				'package_resolution' => array(
 					'package_build_mode' => isset($_POST['lp_cargonizer_package_build_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_package_build_mode'])) : 'combined_single',
+					'separate_package_strategy' => isset($_POST['lp_cargonizer_separate_package_strategy']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_separate_package_strategy'])) : 'keep_separate_colli',
 					'fallback_sources' => $this->parse_live_checkout_lines_to_list(isset($_POST['lp_cargonizer_package_resolution_fallback_sources']) ? wp_unslash($_POST['lp_cargonizer_package_resolution_fallback_sources']) : ''),
 				),
 				'checkout_method_rules' => array(
@@ -1850,6 +1851,13 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							<option value="combined_single" <?php selected(isset($package_resolution['package_build_mode']) ? $package_resolution['package_build_mode'] : 'combined_single', 'combined_single'); ?>>En kombinert kolli (dagens enkle oppførsel)</option>
 							<option value="split_by_profile" <?php selected(isset($package_resolution['package_build_mode']) ? $package_resolution['package_build_mode'] : 'combined_single', 'split_by_profile'); ?>>Del opp per profil</option>
 							<option value="separate_bulky_profiles" <?php selected(isset($package_resolution['package_build_mode']) ? $package_resolution['package_build_mode'] : 'combined_single', 'separate_bulky_profiles'); ?>>Del opp per profil + separate bulky-produkter</option>
+						</select>
+					</p>
+					<p>
+						<label for="lp_cargonizer_separate_package_strategy"><strong>Separate pakker + øvrige varer</strong></label><br>
+						<select id="lp_cargonizer_separate_package_strategy" name="lp_cargonizer_separate_package_strategy">
+							<option value="keep_separate_colli" <?php selected(isset($package_resolution['separate_package_strategy']) ? $package_resolution['separate_package_strategy'] : 'keep_separate_colli', 'keep_separate_colli'); ?>>Lag separate kolli (ett kolli for separat-pakken + ett for øvrige varer)</option>
+							<option value="merge_non_separate_into_first_separate" <?php selected(isset($package_resolution['separate_package_strategy']) ? $package_resolution['separate_package_strategy'] : 'keep_separate_colli', 'merge_non_separate_into_first_separate'); ?>>Legg øvrige varer inn i første separate pakke</option>
 						</select>
 					</p>
 					<p class="description">Fallback-kilder i prioritert rekkefølge, én per linje. Tillatte verdier: product_dimensions, product_override, shipping_class_profile, category_profile, value_rule, default_profile.</p>
