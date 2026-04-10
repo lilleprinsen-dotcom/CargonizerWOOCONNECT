@@ -1,6 +1,6 @@
 # LIVE_CHECKOUT_SPEC
 
-Last updated: 2026-04-09  
+Last updated: 2026-04-10  
 Status: Implementation contract for checkout-extension prompts
 
 ## 1) Current codebase baseline (must be treated as authoritative)
@@ -34,6 +34,29 @@ Status: Implementation contract for checkout-extension prompts
   - classic checkout hooks, and
   - Store API (Blocks) order-save hooks.
 - Existing admin “Book shipment” flow must later prefill from saved checkout choice while retaining admin override.
+
+### Fast-checkout architecture (implemented contract)
+
+1. **Pickup-point loading is non-blocking for shipping-rate generation.**
+   - Shipping rates must be generated and returned without waiting for pickup-point lookups.
+   - Pickup lookup latency/failures must not suppress otherwise valid rates.
+
+2. **Selected-rate pickup points are lazy-loaded asynchronously.**
+   - Pickup-point fetch is deferred until a pickup-capable rate is selected.
+   - Pickup data refreshes asynchronously and does not block checkout rate rendering.
+
+3. **Quote collection is cache-first with parallel uncached execution + sequential fallback.**
+   - Quote collection first serves cache hits.
+   - Remaining uncached quote requests may execute in parallel.
+   - If parallel execution is unavailable/fails, sequential execution must continue as fallback.
+
+4. **Request locks + short failure caching prevent request storms.**
+   - In-flight request locks prevent duplicate identical upstream calls during concurrent checkout refreshes.
+   - Short-lived failure caching throttles rapid retries after transient upstream errors/timeouts.
+
+5. **Admin estimator and admin booking invariants remain unchanged.**
+   - Existing admin estimator behavior is preserved.
+   - Existing admin booking behavior is preserved.
 
 ## 3) Required invariants to preserve during all later prompts
 
