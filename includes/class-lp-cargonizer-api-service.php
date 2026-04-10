@@ -1023,10 +1023,54 @@ class LP_Cargonizer_Api_Service {
 
 	public function sanitize_country_code($value) {
 		$country = strtoupper(sanitize_text_field((string) $value));
-		if ($country === '' || strlen($country) > 2) {
+		if ($country !== '' && strlen($country) <= 2) {
+			return $country;
+		}
+
+		$resolved = $this->resolve_country_code_from_label($value);
+		if ($resolved !== '') {
+			return $resolved;
+		}
+
+		return '';
+	}
+
+	private function resolve_country_code_from_label($value) {
+		$label = trim(sanitize_text_field((string) $value));
+		if ($label === '') {
 			return '';
 		}
-		return $country;
+
+		if (!function_exists('WC')) {
+			return '';
+		}
+
+		$woocommerce = WC();
+		if (!is_object($woocommerce) || !isset($woocommerce->countries) || !is_object($woocommerce->countries) || !method_exists($woocommerce->countries, 'get_countries')) {
+			return '';
+		}
+
+		$countries = $woocommerce->countries->get_countries();
+		if (!is_array($countries) || empty($countries)) {
+			return '';
+		}
+
+		$normalize = function ($text) {
+			if (function_exists('mb_strtolower')) {
+				return mb_strtolower((string) $text);
+			}
+			return strtolower((string) $text);
+		};
+
+		$label_normalized = $normalize($label);
+		foreach ($countries as $code => $name) {
+			if ($normalize($name) === $label_normalized) {
+				$clean_code = strtoupper(sanitize_text_field((string) $code));
+				return strlen($clean_code) <= 2 ? $clean_code : '';
+			}
+		}
+
+		return '';
 	}
 
 	public function sanitize_postcode($value) {
@@ -1055,7 +1099,9 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('address2', (string) (isset($recipient['address_2']) ? $recipient['address_2'] : ''));
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
-		$consignee->addChild('country', (string) (isset($recipient['country']) ? $recipient['country'] : ''));
+		$recipient_country = isset($recipient['country']) ? (string) $recipient['country'] : '';
+		$recipient_country_code = $this->sanitize_country_code($recipient_country);
+		$consignee->addChild('country', (string) ($recipient_country_code !== '' ? $recipient_country_code : $recipient_country));
 		if ($servicepartner_selection['number'] !== '') {
 			$service_partner = $parts->addChild('service_partner');
 			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
@@ -1162,7 +1208,9 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('address2', (string) (isset($recipient['address_2']) ? $recipient['address_2'] : ''));
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
-		$consignee->addChild('country', (string) (isset($recipient['country']) ? $recipient['country'] : ''));
+		$recipient_country = isset($recipient['country']) ? (string) $recipient['country'] : '';
+		$recipient_country_code = $this->sanitize_country_code($recipient_country);
+		$consignee->addChild('country', (string) ($recipient_country_code !== '' ? $recipient_country_code : $recipient_country));
 
 		$email = isset($recipient['email']) ? trim((string) $recipient['email']) : '';
 		if ($email !== '') {
