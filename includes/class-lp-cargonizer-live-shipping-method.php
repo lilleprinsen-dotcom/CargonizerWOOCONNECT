@@ -248,7 +248,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				}
 
 				if (!empty($quote['pickup_required'])) {
-					$pickup_points = $this->get_cached_pickup_points_for_rate($quote, $destination, $live_settings);
+					$pickup_points = isset($quote['resolved_pickup_points']) && is_array($quote['resolved_pickup_points']) ? $quote['resolved_pickup_points'] : array();
+					if (empty($pickup_points)) {
+						$pickup_points = $this->get_cached_pickup_points_for_rate($quote, $destination, $live_settings);
+					}
 					if (empty($pickup_points)) {
 						$pickup_required_pending_async_points++;
 					} else {
@@ -429,21 +432,43 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			);
 		}
 
+		$quote_method = is_array($method) ? $method : array();
+		$requires_servicepartner_for_estimate = $this->api_service->method_requires_servicepartner_for_estimate($quote_method);
+		$has_manual_servicepartner = isset($quote_method['servicepartner']) && sanitize_text_field((string) $quote_method['servicepartner']) !== '';
+		$servicepartner_resolution = array();
+		if ($requires_servicepartner_for_estimate && !$has_manual_servicepartner) {
+			$servicepartner_resolution = $this->api_service->resolve_default_servicepartner_selection($quote_method, $recipient);
+			$quote_method['servicepartner'] = isset($servicepartner_resolution['servicepartner']) ? (string) $servicepartner_resolution['servicepartner'] : '';
+			$quote_method['servicepartner_customer_number'] = isset($servicepartner_resolution['servicepartner_customer_number']) ? (string) $servicepartner_resolution['servicepartner_customer_number'] : '';
+			$quote_method['servicepartner_selection_source'] = isset($servicepartner_resolution['servicepartner_selection_source']) ? (string) $servicepartner_resolution['servicepartner_selection_source'] : 'none';
+			$quote_method['servicepartner_auto_selected'] = !empty($servicepartner_resolution['servicepartner_auto_selected']);
+			if (!empty($servicepartner_resolution) && $quote_method['servicepartner'] === '') {
+				$this->log_live_checkout_event('warning', 'Live quote estimate requires servicepartner but none could be resolved.', array(
+					'method_key' => $method_key,
+					'carrier_id' => isset($quote_method['carrier_id']) ? (string) $quote_method['carrier_id'] : '',
+					'product_id' => isset($quote_method['product_id']) ? (string) $quote_method['product_id'] : '',
+				));
+			}
+		}
+
 		$cache_ttl = isset($live_settings['quote_cache_ttl_seconds']) ? max(0, (int) $live_settings['quote_cache_ttl_seconds']) : 0;
 		$cache_key = 'lp_carg_quote_' . md5(wp_json_encode(array(
 			'method_key' => $method_key,
-			'agreement_id' => isset($method['agreement_id']) ? (string) $method['agreement_id'] : '',
-			'carrier_id' => isset($method['carrier_id']) ? (string) $method['carrier_id'] : '',
-			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
+			'agreement_id' => isset($quote_method['agreement_id']) ? (string) $quote_method['agreement_id'] : '',
+			'carrier_id' => isset($quote_method['carrier_id']) ? (string) $quote_method['carrier_id'] : '',
+			'product_id' => isset($quote_method['product_id']) ? (string) $quote_method['product_id'] : '',
 			'recipient' => $recipient,
 			'packages' => $packages,
 			'package_summary' => $package_summary,
 			'method_pricing' => $method_pricing,
 			'method_context' => array(
-				'delivery_to_pickup_point' => !empty($method['delivery_to_pickup_point']) ? 1 : 0,
-				'delivery_to_home' => !empty($method['delivery_to_home']) ? 1 : 0,
-				'mailbox_like' => $this->is_method_mailbox_like($method) ? 1 : 0,
-				'pickup_like' => $this->api_service->is_method_explicitly_pickup_point($method) ? 1 : 0,
+				'delivery_to_pickup_point' => !empty($quote_method['delivery_to_pickup_point']) ? 1 : 0,
+				'delivery_to_home' => !empty($quote_method['delivery_to_home']) ? 1 : 0,
+				'mailbox_like' => $this->is_method_mailbox_like($quote_method) ? 1 : 0,
+				'pickup_like' => $this->api_service->is_method_explicitly_pickup_point($quote_method) ? 1 : 0,
+				'requires_servicepartner_for_estimate' => $requires_servicepartner_for_estimate ? 1 : 0,
+				'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
+				'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
 			),
 			'pricing_context' => array(
 				'show_prices_including_vat' => !empty($live_settings['show_prices_including_vat']),
@@ -471,8 +496,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$xml = $this->api_service->build_estimate_request_xml(array(
 				'recipient' => $recipient,
 				'packages' => $packages,
+				'servicepartner' => isset($quote_method['servicepartner']) ? (string) $quote_method['servicepartner'] : '',
+				'servicepartner_customer_number' => isset($quote_method['servicepartner_customer_number']) ? (string) $quote_method['servicepartner_customer_number'] : '',
 				'selected_service_ids' => array(),
-			), $method);
+			), $quote_method);
 			if ($xml === '') {
 				return array(
 					'quote_index' => (int) $quote_index,
@@ -488,9 +515,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 
 		return array(
 			'quote_index' => (int) $quote_index,
-			'method' => $method,
+			'method' => $quote_method,
 			'method_key' => $method_key,
 			'method_pricing' => $method_pricing,
+			'recipient' => $recipient,
 			'packages' => $packages,
 			'package_summary' => $package_summary,
 			'cache_ttl' => $cache_ttl,
@@ -501,6 +529,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'live_settings' => $live_settings,
 			'cached_quote' => $cached_quote,
 			'request_xml' => $xml,
+			'servicepartner_resolution' => $servicepartner_resolution,
 		);
 	}
 
@@ -628,6 +657,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$cache_ttl = isset($context['cache_ttl']) ? max(0, (int) $context['cache_ttl']) : 0;
 		$settings = isset($context['settings']) && is_array($context['settings']) ? $context['settings'] : array();
 		$live_settings = isset($context['live_settings']) && is_array($context['live_settings']) ? $context['live_settings'] : array();
+		$servicepartner_resolution = isset($context['servicepartner_resolution']) && is_array($context['servicepartner_resolution']) ? $context['servicepartner_resolution'] : array();
 
 		if (!empty($remote_result['wp_error'])) {
 			$this->log_live_checkout_event('warning', 'Live quote request failed.', array(
@@ -713,6 +743,12 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			: (float) $calc['final_price_ex_vat'];
 		$display_cost = $this->convert_customer_visible_amount_to_rate_cost($customer_visible_cost, $live_settings);
 		$customer_title = $this->resolve_customer_title($method, $settings);
+		$resolved_pickup_points = array();
+		if (!empty($servicepartner_resolution['servicepartner_options']) && is_array($servicepartner_resolution['servicepartner_options'])) {
+			$resolved_pickup_points = $this->normalize_pickup_points_from_servicepartner_options($servicepartner_resolution['servicepartner_options'], array(
+				'country' => isset($context['recipient']['country']) ? $context['recipient']['country'] : '',
+			));
+		}
 		$quote = array(
 			'success' => true,
 			'method_key' => $method_key,
@@ -726,6 +762,11 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'pickup_capable' => $this->api_service->is_method_explicitly_pickup_point($method) && !empty($package_summary['all_pickup_capable']),
 			'pickup_required' => $this->api_service->is_method_explicitly_pickup_point($method) && empty($method['delivery_to_home']),
 			'method_payload' => $method,
+			'servicepartner' => isset($method['servicepartner']) ? (string) $method['servicepartner'] : '',
+			'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? (string) $method['servicepartner_customer_number'] : '',
+			'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? (string) $method['servicepartner_selection_source'] : '',
+			'servicepartner_auto_selected' => !empty($method['servicepartner_auto_selected']),
+			'resolved_pickup_points' => $resolved_pickup_points,
 		);
 
 		if ($cache_ttl > 0) {
@@ -1085,6 +1126,20 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'http_status' => isset($result['http_status']) ? (int) $result['http_status'] : 0,
 			));
 		}
+		$points = $this->normalize_pickup_points_from_servicepartner_options($options, array(
+			'country' => $country,
+		));
+
+		if ($cache_ttl > 0) {
+			set_transient($cache_key, $points, $cache_ttl);
+		}
+		delete_transient($lock_key);
+
+		return $points;
+	}
+
+	private function normalize_pickup_points_from_servicepartner_options($options, $defaults = array()) {
+		$default_country = isset($defaults['country']) ? (string) $defaults['country'] : '';
 		$points = array();
 		foreach ($options as $option) {
 			if (!is_array($option)) {
@@ -1102,20 +1157,13 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'address2' => isset($raw['address2']) ? (string) $raw['address2'] : '',
 				'postcode' => isset($raw['postcode']) ? (string) $raw['postcode'] : '',
 				'city' => isset($raw['city']) ? (string) $raw['city'] : '',
-				'country' => isset($raw['country']) ? (string) $raw['country'] : $country,
+				'country' => isset($raw['country']) ? (string) $raw['country'] : $default_country,
 				'customer_number' => isset($option['customer_number']) ? (string) $option['customer_number'] : '',
 				'distance_meters' => isset($option['distance_meters']) && is_numeric($option['distance_meters']) ? (float) $option['distance_meters'] : null,
 				'label' => isset($option['label']) ? (string) $option['label'] : $point_id,
 			));
 		}
-		$points = $this->sort_pickup_points_deterministically($points);
-
-		if ($cache_ttl > 0) {
-			set_transient($cache_key, $points, $cache_ttl);
-		}
-		delete_transient($lock_key);
-
-		return $points;
+		return $this->sort_pickup_points_deterministically($points);
 	}
 
 	private function build_quote_lock_key($cache_key) {
