@@ -570,9 +570,6 @@ class LP_Cargonizer_Api_Service {
 			$error_message = $error_details['message'] !== '' ? $error_details['message'] : ($body === '' ? 'Tom respons fra API.' : 'Uventet API-respons.');
 			$attempt_debug['parser_result_summary'] = array('error' => $error_message);
 			$is_terminal_error = in_array($http_status, array(401, 403), true);
-			if (!$is_terminal_error && $http_status >= 400 && $http_status < 500 && ($http_status !== 404 && $http_status !== 422)) {
-				$is_terminal_error = true;
-			}
 			return array(
 				'attempt_debug' => $attempt_debug,
 				'raw_response_body' => $body,
