@@ -394,22 +394,11 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			}
 		}
 
-		$estimate_payload = array(
+		$xml = $this->api_service->build_estimate_request_xml(array(
 			'recipient' => $recipient,
 			'packages' => $packages,
 			'selected_service_ids' => array(),
-		);
-		if ($this->api_service->is_method_explicitly_pickup_point($method)) {
-			$resolved_servicepartner = $this->api_service->resolve_default_servicepartner_selection($method, $recipient);
-			if (!empty($resolved_servicepartner['servicepartner'])) {
-				$estimate_payload['servicepartner'] = (string) $resolved_servicepartner['servicepartner'];
-				if (!empty($resolved_servicepartner['servicepartner_customer_number'])) {
-					$estimate_payload['servicepartner_customer_number'] = (string) $resolved_servicepartner['servicepartner_customer_number'];
-				}
-			}
-		}
-
-		$xml = $this->api_service->build_estimate_request_xml($estimate_payload, $method);
+		), $method);
 		if ($xml === '') {
 			return array(
 				'success' => false,
