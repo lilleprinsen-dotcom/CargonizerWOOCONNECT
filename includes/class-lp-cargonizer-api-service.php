@@ -1028,6 +1028,9 @@ class LP_Cargonizer_Api_Service {
 
 	private function extract_servicepartner_selection($payload, $method) {
 		$selection_value = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
+		if ($selection_value === '' && isset($method['servicepartner'])) {
+			$selection_value = sanitize_text_field((string) $method['servicepartner']);
+		}
 		$customer_number = isset($payload['servicepartner_customer_number']) ? sanitize_text_field((string) $payload['servicepartner_customer_number']) : '';
 		if ($customer_number === '' && isset($method['servicepartner_customer_number'])) {
 			$customer_number = sanitize_text_field((string) $method['servicepartner_customer_number']);
@@ -1042,15 +1045,25 @@ class LP_Cargonizer_Api_Service {
 		$selection_raw = isset($selection_option['raw']) && is_array($selection_option['raw']) ? $selection_option['raw'] : $selection_option;
 		$selection_source = is_array($selection_raw) ? $selection_raw : array();
 
-		if ($selection_value !== '' && isset($payload['servicepartner_options']) && is_array($payload['servicepartner_options'])) {
-			foreach ($payload['servicepartner_options'] as $option) {
-				if (!is_array($option)) {
-					continue;
-				}
-				$option_value = isset($option['value']) ? sanitize_text_field((string) $option['value']) : '';
-				if ($option_value !== '' && $option_value === $selection_value) {
-					$selection_source = isset($option['raw']) && is_array($option['raw']) ? $option['raw'] : $option;
-					break;
+		if ($selection_value !== '') {
+			$option_sources = array();
+			if (isset($payload['servicepartner_options']) && is_array($payload['servicepartner_options'])) {
+				$option_sources[] = $payload['servicepartner_options'];
+			}
+			if (isset($method['servicepartner_options']) && is_array($method['servicepartner_options'])) {
+				$option_sources[] = $method['servicepartner_options'];
+			}
+
+			foreach ($option_sources as $option_source) {
+				foreach ($option_source as $option) {
+					if (!is_array($option)) {
+						continue;
+					}
+					$option_value = isset($option['value']) ? sanitize_text_field((string) $option['value']) : '';
+					if ($option_value !== '' && $option_value === $selection_value) {
+						$selection_source = isset($option['raw']) && is_array($option['raw']) ? $option['raw'] : $option;
+						break 2;
+					}
 				}
 			}
 		}
@@ -1097,6 +1110,12 @@ class LP_Cargonizer_Api_Service {
 		$city = $resolve_selection_field('city', array('servicepartner_city'));
 		$country = $resolve_selection_field('country', array('country_code', 'servicepartner_country'));
 		$country = $this->sanitize_country_code($country);
+		if ($country === '') {
+			$country = $this->sanitize_country_code(isset($payload['recipient']['country']) ? $payload['recipient']['country'] : '');
+		}
+		if ($country === '') {
+			$country = $this->sanitize_country_code(isset($method['country']) ? $method['country'] : '');
+		}
 
 		return array(
 			'number' => $selection_value,
