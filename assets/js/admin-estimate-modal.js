@@ -363,6 +363,7 @@
 						product_name: input.getAttribute('data-product-name') || '',
 						is_manual: input.getAttribute('data-is-manual') === '1',
 						is_manual_norgespakke: input.getAttribute('data-is-manual-norgespakke') === '1',
+						use_sms_service: !!(input.getAttribute('data-sms-service-id') || ''),
 						sms_service_id: input.getAttribute('data-sms-service-id') || '',
 						sms_service_name: input.getAttribute('data-sms-service-name') || '',
 						services: services,
