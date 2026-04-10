@@ -537,6 +537,79 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return $payload;
 	}
 
+	private function get_admin_pickup_lookup_timeout_seconds($settings) {
+		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		$pickup_timeout = isset($live_settings['pickup_point_timeout_seconds']) ? (float) $live_settings['pickup_point_timeout_seconds'] : 8.0;
+		if ($pickup_timeout <= 0) {
+			$pickup_timeout = 8.0;
+		}
+		return max(1.0, min(30.0, $pickup_timeout));
+	}
+
+	private function get_admin_servicepartner_docs_expectation($method) {
+		$product_id = isset($method['product_id']) ? sanitize_key((string) $method['product_id']) : '';
+		$product_name_raw = isset($method['product_name']) ? (string) $method['product_name'] : '';
+		$product_name = sanitize_text_field($product_name_raw);
+		$product_name_lc = function_exists('mb_strtolower') ? mb_strtolower($product_name_raw, 'UTF-8') : strtolower($product_name_raw);
+		$requires_by_product_id = in_array($product_id, array(
+			'mypack_collect',
+			'postnord_mypack_collect',
+			'mypack_small_home',
+			'postnord_mypack_small_home',
+		), true);
+		if ($requires_by_product_id) {
+			return array(
+				'docs_require_servicepartner' => true,
+				'docs_reason' => 'Logistra docs: product_id "' . $product_id . '" requires <parts><service_partner> for this shipment type.',
+			);
+		}
+		if ($product_name_lc !== '' && strpos($product_name_lc, 'return dropoff') !== false) {
+			return array(
+				'docs_require_servicepartner' => true,
+				'docs_reason' => 'Logistra docs: product name indicates Return Dropoff, which requires <parts><service_partner>.',
+			);
+		}
+		return array(
+			'docs_require_servicepartner' => false,
+			'docs_reason' => 'No explicit Logistra docs requirement matched for service_partner based on product_id/product_name.',
+		);
+	}
+
+	private function run_admin_estimate_diagnostic($packages, $recipient, $method_payload, $pricing_config) {
+		$xml = $this->build_estimate_request_xml(array(
+			'recipient' => $recipient,
+			'packages' => $packages,
+			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
+			'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+			'use_sms_service' => !empty($method_payload['use_sms_service']),
+			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
+			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
+		), $method_payload);
+
+		$estimate_result = $this->run_consignment_estimate_for_packages($packages, $recipient, $method_payload, $pricing_config);
+		$raw_excerpt = isset($estimate_result['raw_response']) ? (string) $estimate_result['raw_response'] : '';
+		if (strlen($raw_excerpt) > 1000) {
+			$raw_excerpt = substr($raw_excerpt, 0, 1000);
+		}
+
+		return array(
+			'status' => isset($estimate_result['status']) && $estimate_result['status'] === 'ok' ? 'ok' : 'failed',
+			'xml_preview' => (string) $xml,
+			'http_status' => isset($estimate_result['http_status']) ? (int) $estimate_result['http_status'] : 0,
+			'raw_response_excerpt' => $raw_excerpt,
+			'error' => isset($estimate_result['error']) ? sanitize_text_field((string) $estimate_result['error']) : '',
+			'error_code' => isset($estimate_result['error_code']) ? sanitize_text_field((string) $estimate_result['error_code']) : '',
+			'error_type' => isset($estimate_result['error_type']) ? sanitize_text_field((string) $estimate_result['error_type']) : '',
+			'error_details' => isset($estimate_result['error_details']) ? sanitize_text_field((string) $estimate_result['error_details']) : '',
+			'parsed_error_message' => isset($estimate_result['parsed_error_message']) ? sanitize_text_field((string) $estimate_result['parsed_error_message']) : '',
+			'gross_amount' => isset($estimate_result['gross_amount']) ? (string) $estimate_result['gross_amount'] : '',
+			'net_amount' => isset($estimate_result['net_amount']) ? (string) $estimate_result['net_amount'] : '',
+			'estimated_cost' => isset($estimate_result['estimated_cost']) ? (string) $estimate_result['estimated_cost'] : '',
+			'selected_price_source' => isset($estimate_result['selected_price_source']) ? (string) $estimate_result['selected_price_source'] : '',
+			'selected_price_value' => isset($estimate_result['selected_price_value']) ? (string) $estimate_result['selected_price_value'] : '',
+		);
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -549,6 +622,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$current_user_default_printer_id = is_scalar($current_user_default_printer_id) ? sanitize_text_field((string) $current_user_default_printer_id) : '';
 		$result   = null;
 		$method_refresh = null;
+		$admin_servicepoint_diag_result = null;
 
 		// Lagre innstillinger
 		if (
@@ -663,6 +737,200 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				echo '<div class="notice notice-error"><p>' . esc_html($method_refresh['message']) . '</p></div>';
 			}
 		}
+
+		if (
+			isset($_POST['lp_cargonizer_run_servicepoint_diagnostic'])
+			&& isset($_POST['_wpnonce'])
+			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_ADMIN_SERVICEPOINT_DIAGNOSTIC)
+		) {
+			if (!current_user_can('manage_woocommerce')) {
+				echo '<div class="notice notice-error"><p>Mangler tilgang til å kjøre diagnostikk.</p></div>';
+			} else {
+				$available_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+				$available_map = array();
+				foreach ($available_methods as $available_method) {
+					if (!is_array($available_method)) {
+						continue;
+					}
+					$method_key = isset($available_method['key']) ? sanitize_text_field((string) $available_method['key']) : '';
+					if ($method_key !== '') {
+						$available_map[$method_key] = $available_method;
+					}
+				}
+				$selected_method_key = isset($_POST['lp_cargonizer_diag_method_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_method_key'])) : '';
+				$selected_method = isset($available_map[$selected_method_key]) ? $available_map[$selected_method_key] : null;
+
+				if (!$selected_method) {
+					echo '<div class="notice notice-error"><p>Velg en gyldig metode for diagnostikk.</p></div>';
+				} else {
+					$recipient = array(
+						'name' => isset($_POST['lp_cargonizer_diag_recipient_name']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_recipient_name'])) : '',
+						'address_1' => isset($_POST['lp_cargonizer_diag_address_1']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_address_1'])) : '',
+						'postcode' => isset($_POST['lp_cargonizer_diag_postcode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_postcode'])) : '',
+						'city' => isset($_POST['lp_cargonizer_diag_city']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_city'])) : '',
+						'country' => isset($_POST['lp_cargonizer_diag_country']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_country'])) : 'NO',
+					);
+					if ($recipient['country'] === '') {
+						$recipient['country'] = 'NO';
+					}
+					$package = array(
+						'weight' => isset($_POST['lp_cargonizer_diag_weight_kg']) ? (float) wp_unslash($_POST['lp_cargonizer_diag_weight_kg']) : 1.0,
+						'length' => isset($_POST['lp_cargonizer_diag_length_cm']) ? (float) wp_unslash($_POST['lp_cargonizer_diag_length_cm']) : 10.0,
+						'width' => isset($_POST['lp_cargonizer_diag_width_cm']) ? (float) wp_unslash($_POST['lp_cargonizer_diag_width_cm']) : 10.0,
+						'height' => isset($_POST['lp_cargonizer_diag_height_cm']) ? (float) wp_unslash($_POST['lp_cargonizer_diag_height_cm']) : 10.0,
+					);
+					$packages = array($package);
+
+					$manual_servicepartner = isset($_POST['lp_cargonizer_diag_manual_servicepartner']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_manual_servicepartner'])) : '';
+					$manual_servicepartner_customer_number = isset($_POST['lp_cargonizer_diag_manual_servicepartner_customer_number']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_manual_servicepartner_customer_number'])) : '';
+					$run_without_servicepartner_first = !empty($_POST['lp_cargonizer_diag_run_without_servicepartner_first']);
+					$run_with_auto_selected_servicepartner = !empty($_POST['lp_cargonizer_diag_run_with_auto_selected_servicepartner']);
+
+					$selected_method['servicepartner'] = '';
+					$selected_method['servicepartner_customer_number'] = '';
+					$pricing_map = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
+					$pricing_config = isset($pricing_map[$selected_method_key]) && is_array($pricing_map[$selected_method_key]) ? $pricing_map[$selected_method_key] : array();
+					$selected_method['request_timeout_seconds'] = $this->get_admin_pickup_lookup_timeout_seconds($settings);
+
+					$docs_expectation = $this->get_admin_servicepartner_docs_expectation($selected_method);
+					$method_summary = array(
+						'method_key' => $selected_method_key,
+						'agreement_id' => isset($selected_method['agreement_id']) ? sanitize_text_field((string) $selected_method['agreement_id']) : '',
+						'carrier_id' => isset($selected_method['carrier_id']) ? sanitize_text_field((string) $selected_method['carrier_id']) : '',
+						'carrier_name' => isset($selected_method['carrier_name']) ? sanitize_text_field((string) $selected_method['carrier_name']) : '',
+						'product_id' => isset($selected_method['product_id']) ? sanitize_text_field((string) $selected_method['product_id']) : '',
+						'product_name' => isset($selected_method['product_name']) ? sanitize_text_field((string) $selected_method['product_name']) : '',
+						'delivery_to_pickup_point' => !empty($selected_method['delivery_to_pickup_point']),
+						'delivery_to_home' => !empty($selected_method['delivery_to_home']),
+						'is_method_explicitly_pickup_point' => $this->is_method_explicitly_pickup_point($selected_method),
+						'is_method_explicitly_home_delivery' => $this->is_method_explicitly_home_delivery($selected_method),
+						'method_requires_servicepartner_for_estimate' => $this->method_requires_servicepartner_for_estimate($selected_method),
+						'docs_expectation' => $docs_expectation,
+					);
+
+					$lookup_method = array_merge($selected_method, array(
+						'country' => $recipient['country'],
+						'postcode' => $recipient['postcode'],
+						'city' => $recipient['city'],
+						'address' => $recipient['address_1'],
+						'name' => $recipient['name'],
+					));
+					$servicepoint_lookup = $this->fetch_servicepartner_options($lookup_method);
+					$options = isset($servicepoint_lookup['options']) && is_array($servicepoint_lookup['options']) ? $servicepoint_lookup['options'] : array();
+					$option_summaries = array();
+					$option_count = 0;
+					foreach ($options as $option) {
+						if (!is_array($option)) {
+							continue;
+						}
+						$option_count++;
+						if (count($option_summaries) >= 10) {
+							continue;
+						}
+						$option_summaries[] = array(
+							'number' => isset($option['number']) ? sanitize_text_field((string) $option['number']) : '',
+							'value' => isset($option['value']) ? sanitize_text_field((string) $option['value']) : '',
+							'customer_number' => isset($option['customer_number']) ? sanitize_text_field((string) $option['customer_number']) : '',
+							'name' => isset($option['name']) ? sanitize_text_field((string) $option['name']) : '',
+							'address1' => isset($option['address1']) ? sanitize_text_field((string) $option['address1']) : '',
+							'postcode' => isset($option['postcode']) ? sanitize_text_field((string) $option['postcode']) : '',
+							'city' => isset($option['city']) ? sanitize_text_field((string) $option['city']) : '',
+							'country' => isset($option['country']) ? sanitize_text_field((string) $option['country']) : '',
+							'distance_meters' => isset($option['distance_meters']) ? sanitize_text_field((string) $option['distance_meters']) : '',
+						);
+					}
+
+					$auto_selection = $this->resolve_default_servicepartner_selection($lookup_method, $recipient);
+					$auto_servicepartner = isset($auto_selection['servicepartner']) ? sanitize_text_field((string) $auto_selection['servicepartner']) : '';
+					$auto_customer_number = isset($auto_selection['servicepartner_customer_number']) ? sanitize_text_field((string) $auto_selection['servicepartner_customer_number']) : '';
+
+					$estimate_without = null;
+					if ($run_without_servicepartner_first) {
+						$without_method_payload = $selected_method;
+						$without_method_payload['servicepartner'] = '';
+						$without_method_payload['servicepartner_customer_number'] = '';
+						$estimate_without = $this->run_admin_estimate_diagnostic($packages, $recipient, $without_method_payload, $pricing_config);
+					}
+
+					$estimate_auto = null;
+					if ($run_with_auto_selected_servicepartner && $auto_servicepartner !== '') {
+						$auto_method_payload = $selected_method;
+						$auto_method_payload['servicepartner'] = $auto_servicepartner;
+						$auto_method_payload['servicepartner_customer_number'] = $auto_customer_number;
+						$estimate_auto = $this->run_admin_estimate_diagnostic($packages, $recipient, $auto_method_payload, $pricing_config);
+					}
+
+					$estimate_manual = null;
+					if ($manual_servicepartner !== '') {
+						$manual_method_payload = $selected_method;
+						$manual_method_payload['servicepartner'] = $manual_servicepartner;
+						$manual_method_payload['servicepartner_customer_number'] = $manual_servicepartner_customer_number;
+						$estimate_manual = $this->run_admin_estimate_diagnostic($packages, $recipient, $manual_method_payload, $pricing_config);
+					}
+
+					$conclusion = 'No deterministic conclusion matched from current diagnostic output.';
+					$docs_require = !empty($docs_expectation['docs_require_servicepartner']);
+					$plugin_classification_requires = !empty($method_summary['method_requires_servicepartner_for_estimate']);
+					$lookup_success = !empty($servicepoint_lookup['success']) && $option_count > 0;
+					$without_failed = is_array($estimate_without) && (isset($estimate_without['status']) ? (string) $estimate_without['status'] : '') !== 'ok';
+					$auto_ok = is_array($estimate_auto) && (isset($estimate_auto['status']) ? (string) $estimate_auto['status'] : '') === 'ok';
+					$manual_ok = is_array($estimate_manual) && (isset($estimate_manual['status']) ? (string) $estimate_manual['status'] : '') === 'ok';
+					$servicepartner_success = $auto_ok || $manual_ok;
+					$servicepartner_failed = (is_array($estimate_auto) || is_array($estimate_manual)) && !$servicepartner_success;
+					$without_ok = is_array($estimate_without) && (isset($estimate_without['status']) ? (string) $estimate_without['status'] : '') === 'ok';
+
+					if (!$lookup_success) {
+						$conclusion = 'Conclusion: service point lookup failed before pricing.';
+					} elseif ($without_failed && $servicepartner_success) {
+						$conclusion = 'Conclusion: method requires servicepartner before quote estimation.';
+					} elseif ($docs_require && !$plugin_classification_requires) {
+						$conclusion = 'Conclusion: plugin classification is not aligned with Logistra docs for this method.';
+					} elseif ($lookup_success && $servicepartner_failed) {
+						$conclusion = 'Conclusion: lookup works, but estimate payload or product handling is still wrong.';
+					} elseif ($without_ok && ($estimate_auto === null || $auto_ok) && ($estimate_manual === null || $manual_ok)) {
+						$conclusion = 'Conclusion: servicepartner is not the blocking issue for this method/destination/package combination.';
+					}
+
+					$admin_servicepoint_diag_result = array(
+						'input' => array(
+							'recipient' => $recipient,
+							'package' => $package,
+							'manual_servicepartner' => $manual_servicepartner,
+							'manual_servicepartner_customer_number' => $manual_servicepartner_customer_number,
+							'run_without_servicepartner_first' => $run_without_servicepartner_first,
+							'run_with_auto_selected_servicepartner' => $run_with_auto_selected_servicepartner,
+						),
+						'method_summary' => $method_summary,
+						'servicepoint_lookup' => array(
+							'success' => !empty($servicepoint_lookup['success']),
+							'error_message' => isset($servicepoint_lookup['error_message']) ? (string) $servicepoint_lookup['error_message'] : '',
+							'http_status' => isset($servicepoint_lookup['http_status']) ? (int) $servicepoint_lookup['http_status'] : 0,
+							'request_url' => isset($servicepoint_lookup['request_url']) ? (string) $servicepoint_lookup['request_url'] : '',
+							'winning_attempt_label' => isset($servicepoint_lookup['winning_attempt_label']) ? (string) $servicepoint_lookup['winning_attempt_label'] : '',
+							'carrier_family' => isset($servicepoint_lookup['carrier_family']) ? (string) $servicepoint_lookup['carrier_family'] : '',
+							'omitted_params' => isset($servicepoint_lookup['omitted_params']) ? $servicepoint_lookup['omitted_params'] : array(),
+							'custom_params_debug' => isset($servicepoint_lookup['custom_params_debug']) ? $servicepoint_lookup['custom_params_debug'] : array(),
+							'parser_debug' => isset($servicepoint_lookup['parser_debug']) ? $servicepoint_lookup['parser_debug'] : array(),
+							'attempts' => isset($servicepoint_lookup['attempts']) ? $servicepoint_lookup['attempts'] : array(),
+							'option_count' => $option_count,
+							'first_options' => $option_summaries,
+						),
+						'auto_selection' => array(
+							'servicepartner' => $auto_servicepartner,
+							'servicepartner_customer_number' => $auto_customer_number,
+							'servicepartner_selection_source' => isset($auto_selection['servicepartner_selection_source']) ? (string) $auto_selection['servicepartner_selection_source'] : '',
+							'servicepartner_auto_selected' => !empty($auto_selection['servicepartner_auto_selected']),
+							'auto_selection_reason' => isset($auto_selection['auto_selection_reason']) ? (string) $auto_selection['auto_selection_reason'] : '',
+							'selected_option_summary' => isset($auto_selection['selected_option']) && is_array($auto_selection['selected_option']) ? $auto_selection['selected_option'] : array(),
+						),
+						'estimate_without_servicepartner' => $estimate_without,
+						'estimate_with_auto_selected_servicepartner' => $estimate_auto,
+						'estimate_with_manual_override' => $estimate_manual,
+						'conclusion' => $conclusion,
+					);
+				}
+			}
+		}
 		?>
 		<div class="wrap">
 			<h1>Cargonizer for WooCommerce</h1>
@@ -755,6 +1023,153 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</ul>
 				</div>
 			<?php endif; ?>
+
+			<?php
+			$diag_selected_method_key = isset($_POST['lp_cargonizer_diag_method_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_method_key'])) : '';
+			$diag_recipient_name = isset($_POST['lp_cargonizer_diag_recipient_name']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_recipient_name'])) : 'Diagnostic recipient';
+			$diag_address_1 = isset($_POST['lp_cargonizer_diag_address_1']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_address_1'])) : '';
+			$diag_postcode = isset($_POST['lp_cargonizer_diag_postcode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_postcode'])) : '';
+			$diag_city = isset($_POST['lp_cargonizer_diag_city']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_city'])) : '';
+			$diag_country = isset($_POST['lp_cargonizer_diag_country']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_country'])) : 'NO';
+			$diag_weight_kg = isset($_POST['lp_cargonizer_diag_weight_kg']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_weight_kg'])) : '1';
+			$diag_length_cm = isset($_POST['lp_cargonizer_diag_length_cm']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_length_cm'])) : '10';
+			$diag_width_cm = isset($_POST['lp_cargonizer_diag_width_cm']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_width_cm'])) : '10';
+			$diag_height_cm = isset($_POST['lp_cargonizer_diag_height_cm']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_height_cm'])) : '10';
+			$diag_manual_servicepartner = isset($_POST['lp_cargonizer_diag_manual_servicepartner']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_manual_servicepartner'])) : '';
+			$diag_manual_customer_number = isset($_POST['lp_cargonizer_diag_manual_servicepartner_customer_number']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_diag_manual_servicepartner_customer_number'])) : '';
+			$diag_run_without = !isset($_POST['lp_cargonizer_run_servicepoint_diagnostic']) || !empty($_POST['lp_cargonizer_diag_run_without_servicepartner_first']);
+			$diag_run_with_auto = !isset($_POST['lp_cargonizer_run_servicepoint_diagnostic']) || !empty($_POST['lp_cargonizer_diag_run_with_auto_selected_servicepartner']);
+			?>
+			<div style="background:#fff;border:1px solid #ddd;padding:20px;margin:20px 0;max-width:1100px;">
+				<h2>Pickup/service point diagnostics</h2>
+				<p class="description">Admin-only testverktøy for å sammenligne servicepunkt-oppslag og estimate med/uten servicepartner. Påvirker ikke checkout-runtime.</p>
+				<form method="post">
+					<?php wp_nonce_field(self::NONCE_ACTION_ADMIN_SERVICEPOINT_DIAGNOSTIC); ?>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_diag_method_key">Method</label></th>
+								<td>
+									<select name="lp_cargonizer_diag_method_key" id="lp_cargonizer_diag_method_key" required>
+										<option value="">Velg metode</option>
+										<?php foreach ($settings['available_methods'] as $method_option) : ?>
+											<?php
+											$method_key = isset($method_option['key']) ? sanitize_text_field((string) $method_option['key']) : '';
+											if ($method_key === '') { continue; }
+											$method_label = isset($method_option['label']) ? sanitize_text_field((string) $method_option['label']) : '';
+											$fallback_label = trim(
+												(isset($method_option['agreement_id']) ? sanitize_text_field((string) $method_option['agreement_id']) : '—')
+												. ' / '
+												. (isset($method_option['product_id']) ? sanitize_text_field((string) $method_option['product_id']) : '—')
+												. ' / '
+												. (isset($method_option['carrier_id']) ? sanitize_text_field((string) $method_option['carrier_id']) : '—')
+											);
+											?>
+											<option value="<?php echo esc_attr($method_key); ?>" <?php selected($diag_selected_method_key, $method_key); ?>>
+												<?php echo esc_html($method_label !== '' ? $method_label : $fallback_label); ?>
+											</option>
+										<?php endforeach; ?>
+									</select>
+								</td>
+							</tr>
+							<tr><th scope="row">Recipient</th><td>
+								<input type="text" name="lp_cargonizer_diag_recipient_name" value="<?php echo esc_attr($diag_recipient_name); ?>" placeholder="Name" class="regular-text" />
+								<input type="text" name="lp_cargonizer_diag_address_1" value="<?php echo esc_attr($diag_address_1); ?>" placeholder="Address 1" class="regular-text" />
+								<input type="text" name="lp_cargonizer_diag_postcode" value="<?php echo esc_attr($diag_postcode); ?>" placeholder="Postcode" style="max-width:120px;" />
+								<input type="text" name="lp_cargonizer_diag_city" value="<?php echo esc_attr($diag_city); ?>" placeholder="City" class="regular-text" />
+								<input type="text" name="lp_cargonizer_diag_country" value="<?php echo esc_attr($diag_country); ?>" placeholder="Country" style="max-width:100px;" />
+							</td></tr>
+							<tr><th scope="row">Package</th><td>
+								<input type="number" step="0.01" min="0" name="lp_cargonizer_diag_weight_kg" value="<?php echo esc_attr($diag_weight_kg); ?>" placeholder="Weight kg" style="max-width:120px;" />
+								<input type="number" step="0.01" min="0" name="lp_cargonizer_diag_length_cm" value="<?php echo esc_attr($diag_length_cm); ?>" placeholder="Length cm" style="max-width:120px;" />
+								<input type="number" step="0.01" min="0" name="lp_cargonizer_diag_width_cm" value="<?php echo esc_attr($diag_width_cm); ?>" placeholder="Width cm" style="max-width:120px;" />
+								<input type="number" step="0.01" min="0" name="lp_cargonizer_diag_height_cm" value="<?php echo esc_attr($diag_height_cm); ?>" placeholder="Height cm" style="max-width:120px;" />
+							</td></tr>
+							<tr><th scope="row">Manual override</th><td>
+								<input type="text" name="lp_cargonizer_diag_manual_servicepartner" value="<?php echo esc_attr($diag_manual_servicepartner); ?>" placeholder="servicepartner number" class="regular-text" />
+								<input type="text" name="lp_cargonizer_diag_manual_servicepartner_customer_number" value="<?php echo esc_attr($diag_manual_customer_number); ?>" placeholder="servicepartner customer number" class="regular-text" />
+							</td></tr>
+							<tr><th scope="row">Estimate runs</th><td>
+								<label style="display:block;margin-bottom:4px;"><input type="checkbox" name="lp_cargonizer_diag_run_without_servicepartner_first" value="1" <?php checked($diag_run_without); ?>> run_without_servicepartner_first</label>
+								<label style="display:block;"><input type="checkbox" name="lp_cargonizer_diag_run_with_auto_selected_servicepartner" value="1" <?php checked($diag_run_with_auto); ?>> run_with_auto_selected_servicepartner</label>
+							</td></tr>
+						</tbody>
+					</table>
+					<p><button type="submit" name="lp_cargonizer_run_servicepoint_diagnostic" class="button button-secondary">Run pickup/service point diagnostics</button></p>
+				</form>
+				<?php if (is_array($admin_servicepoint_diag_result)) : ?>
+					<h3>Input summary</h3>
+					<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html(wp_json_encode($admin_servicepoint_diag_result['input'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
+
+					<h3>Method classification vs docs expectation</h3>
+					<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html(wp_json_encode($admin_servicepoint_diag_result['method_summary'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
+
+					<h3>Service-point lookup</h3>
+					<table class="widefat striped" style="margin-bottom:10px;">
+						<tbody>
+							<tr><th>success</th><td><?php echo !empty($admin_servicepoint_diag_result['servicepoint_lookup']['success']) ? 'true' : 'false'; ?></td></tr>
+							<tr><th>error_message</th><td><?php echo esc_html((string) $admin_servicepoint_diag_result['servicepoint_lookup']['error_message']); ?></td></tr>
+							<tr><th>http_status</th><td><?php echo esc_html((string) $admin_servicepoint_diag_result['servicepoint_lookup']['http_status']); ?></td></tr>
+							<tr><th>request_url</th><td><code><?php echo esc_html((string) $admin_servicepoint_diag_result['servicepoint_lookup']['request_url']); ?></code></td></tr>
+							<tr><th>winning_attempt_label</th><td><?php echo esc_html((string) $admin_servicepoint_diag_result['servicepoint_lookup']['winning_attempt_label']); ?></td></tr>
+							<tr><th>carrier_family</th><td><?php echo esc_html((string) $admin_servicepoint_diag_result['servicepoint_lookup']['carrier_family']); ?></td></tr>
+							<tr><th>option count</th><td><?php echo esc_html((string) $admin_servicepoint_diag_result['servicepoint_lookup']['option_count']); ?></td></tr>
+						</tbody>
+					</table>
+					<?php if (!empty($admin_servicepoint_diag_result['servicepoint_lookup']['first_options'])) : ?>
+							<table class="widefat striped" style="margin-bottom:10px;">
+								<thead><tr><th>number/value</th><th>customer_number</th><th>name</th><th>address1</th><th>postcode</th><th>city</th><th>country</th><th>distance_meters</th></tr></thead>
+							<tbody>
+								<?php foreach ($admin_servicepoint_diag_result['servicepoint_lookup']['first_options'] as $opt) : ?>
+									<tr>
+										<td><?php echo esc_html((string) ($opt['number'] !== '' ? $opt['number'] : $opt['value'])); ?></td>
+										<td><?php echo esc_html((string) $opt['customer_number']); ?></td>
+										<td><?php echo esc_html((string) $opt['name']); ?></td>
+										<td><?php echo esc_html((string) $opt['address1']); ?></td>
+										<td><?php echo esc_html((string) $opt['postcode']); ?></td>
+										<td><?php echo esc_html((string) $opt['city']); ?></td>
+										<td><?php echo esc_html((string) $opt['country']); ?></td>
+										<td><?php echo esc_html((string) $opt['distance_meters']); ?></td>
+									</tr>
+								<?php endforeach; ?>
+							</tbody>
+						</table>
+					<?php endif; ?>
+					<details><summary>attempts</summary><pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html(wp_json_encode($admin_servicepoint_diag_result['servicepoint_lookup']['attempts'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
+					<details><summary>parser_debug</summary><pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html(wp_json_encode($admin_servicepoint_diag_result['servicepoint_lookup']['parser_debug'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
+					<details><summary>custom_params_debug</summary><pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html(wp_json_encode($admin_servicepoint_diag_result['servicepoint_lookup']['custom_params_debug'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre></details>
+
+					<h3>Auto-selection</h3>
+					<pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html(wp_json_encode($admin_servicepoint_diag_result['auto_selection'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></pre>
+
+					<?php $diag_estimate_sections = array(
+						'Estimate without servicepartner' => $admin_servicepoint_diag_result['estimate_without_servicepartner'],
+						'Estimate with auto-selected servicepartner' => $admin_servicepoint_diag_result['estimate_with_auto_selected_servicepartner'],
+						'Estimate with manual override' => $admin_servicepoint_diag_result['estimate_with_manual_override'],
+					); ?>
+					<?php foreach ($diag_estimate_sections as $section_title => $section_payload) : ?>
+						<?php if (!is_array($section_payload)) { continue; } ?>
+						<h3><?php echo esc_html($section_title); ?></h3>
+						<table class="widefat striped" style="margin-bottom:10px;">
+							<tbody>
+								<tr><th>status</th><td><?php echo esc_html((string) $section_payload['status']); ?></td></tr>
+								<tr><th>http_status</th><td><?php echo esc_html((string) $section_payload['http_status']); ?></td></tr>
+								<tr><th>parsed_error_message</th><td><?php echo esc_html((string) $section_payload['parsed_error_message']); ?></td></tr>
+								<tr><th>gross_amount</th><td><?php echo esc_html((string) $section_payload['gross_amount']); ?></td></tr>
+								<tr><th>net_amount</th><td><?php echo esc_html((string) $section_payload['net_amount']); ?></td></tr>
+								<tr><th>estimated_cost</th><td><?php echo esc_html((string) $section_payload['estimated_cost']); ?></td></tr>
+								<tr><th>selected_price_source</th><td><?php echo esc_html((string) $section_payload['selected_price_source']); ?></td></tr>
+								<tr><th>selected_price_value</th><td><?php echo esc_html((string) $section_payload['selected_price_value']); ?></td></tr>
+							</tbody>
+						</table>
+						<details><summary>XML preview</summary><pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html((string) $section_payload['xml_preview']); ?></pre></details>
+						<details><summary>raw response excerpt</summary><pre style="white-space:pre-wrap;background:#f6f7f7;padding:12px;border:1px solid #ddd;"><?php echo esc_html((string) $section_payload['raw_response_excerpt']); ?></pre></details>
+					<?php endforeach; ?>
+
+					<h3>Final conclusion</h3>
+					<p><strong><?php echo esc_html((string) $admin_servicepoint_diag_result['conclusion']); ?></strong></p>
+				<?php endif; ?>
+			</div>
 
 			<div style="background:#fff;border:1px solid #ddd;padding:20px;margin:20px 0;max-width:900px;">
 				<h2>Tilkobling</h2>
