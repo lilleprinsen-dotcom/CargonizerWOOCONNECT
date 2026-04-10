@@ -67,6 +67,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		$settings = $this->get_settings();
+		$recipient_country = $this->resolve_recipient_country_for_context($order);
 		$data = array(
 			'order' => array(
 				'number' => $order->get_order_number(),
@@ -79,7 +80,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'address_2' => $order->get_shipping_address_2(),
 				'postcode' => $order->get_shipping_postcode(),
 				'city' => $order->get_shipping_city(),
-				'country' => $order->get_shipping_country(),
+				'country' => isset($recipient_country['normalized']) && $recipient_country['normalized'] !== '' ? $recipient_country['normalized'] : '',
 				'email' => $order->get_billing_email(),
 				'phone' => $order->get_billing_phone(),
 			),
@@ -369,6 +370,44 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return $method_payload;
 	}
 
+	private function resolve_recipient_country_for_context($order = null, $context = array()) {
+		$context = is_array($context) ? $context : array();
+		$candidates = array();
+
+		if ($order && is_a($order, 'WC_Order')) {
+			$candidates[] = array('source' => 'shipping_country', 'value' => $order->get_shipping_country());
+			$candidates[] = array('source' => 'billing_country', 'value' => $order->get_billing_country());
+		}
+
+		$candidates[] = array('source' => 'method_country', 'value' => isset($context['country']) ? $context['country'] : '');
+		$candidates[] = array('source' => 'destination_country', 'value' => isset($context['destination_country']) ? $context['destination_country'] : '');
+
+		$first_raw = '';
+		foreach ($candidates as $candidate) {
+			$raw_value = sanitize_text_field((string) $candidate['value']);
+			if ($raw_value === '') {
+				continue;
+			}
+			if ($first_raw === '') {
+				$first_raw = $raw_value;
+			}
+			$normalized = $this->sanitize_country_code($raw_value);
+			if ($normalized !== '') {
+				return array(
+					'raw' => $raw_value,
+					'normalized' => $normalized,
+					'source' => $candidate['source'],
+				);
+			}
+		}
+
+		return array(
+			'raw' => $first_raw,
+			'normalized' => '',
+			'source' => '',
+		);
+	}
+
 	private function resolve_booking_estimated_shipping_price($booking_result, $recipient, $packages, $method_payload) {
 		$selection = array(
 			'estimated_shipping_price' => 'ikke tilgjengelig',
@@ -496,18 +535,22 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$method_payload['sms_service_name'] = $sms_service['service_name'];
 		}
 
+		$recipient_country = $this->resolve_recipient_country_for_context($order, $method_payload);
 		$recipient = array(
 			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
 			'address_1' => $order->get_shipping_address_1(),
 			'address_2' => $order->get_shipping_address_2(),
 			'postcode' => $order->get_shipping_postcode(),
 			'city' => $order->get_shipping_city(),
-			'country' => $order->get_shipping_country(),
+			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
 			'email' => $order->get_billing_email(),
 			'phone' => $order->get_billing_phone(),
 		);
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+		if ($recipient['country'] === '') {
+			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.'), 400);
 		}
 		if ($notify_email_to_consignee && trim((string) $recipient['email']) === '') {
 			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
@@ -547,7 +590,11 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		));
 
 		if ($xml === '') {
-			wp_send_json_error(array('message' => 'Kunne ikke bygge booking-XML.'), 500);
+			$xml_build_error = $this->get_last_xml_build_error();
+			wp_send_json_error(array(
+				'message' => isset($xml_build_error['message']) && $xml_build_error['message'] !== '' ? $xml_build_error['message'] : 'Kunne ikke bygge booking-XML.',
+				'debug' => isset($xml_build_error['context']) ? $xml_build_error['context'] : array(),
+			), 500);
 		}
 
 		$booking_result = $this->create_booking_consignment($xml);
@@ -742,10 +789,22 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		);
 
 		if ($order) {
-			$method['country'] = $order->get_shipping_country() !== '' ? $order->get_shipping_country() : $method['country'];
+			$recipient_country = $this->resolve_recipient_country_for_context($order, $method);
+			$method['country'] = isset($recipient_country['normalized']) && $recipient_country['normalized'] !== '' ? $recipient_country['normalized'] : $method['country'];
 			$method['postcode'] = $order->get_shipping_postcode() !== '' ? $order->get_shipping_postcode() : $method['postcode'];
 			$method['city'] = $order->get_shipping_city() !== '' ? $order->get_shipping_city() : $method['city'];
 			$method['address'] = $order->get_shipping_address_1() !== '' ? $order->get_shipping_address_1() : $method['address'];
+		}
+		$method_country_resolution = $this->resolve_recipient_country_for_context($order, $method);
+		$method['country'] = isset($method_country_resolution['normalized']) ? $method_country_resolution['normalized'] : '';
+		if ($method['country'] === '') {
+			wp_send_json_error(array(
+				'message' => 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.',
+				'debug' => array(
+					'recipient_country_raw' => isset($method_country_resolution['raw']) ? $method_country_resolution['raw'] : '',
+					'recipient_country_normalized' => '',
+				),
+			), 200);
 		}
 
 		$servicepartner_result = $this->fetch_servicepartner_options($method);
@@ -845,17 +904,21 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			);
 		}
 
+		$recipient_country = $this->resolve_recipient_country_for_context($order);
 		$recipient = array(
 			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
 			'address_1' => $order->get_shipping_address_1(),
 			'address_2' => $order->get_shipping_address_2(),
 			'postcode' => $order->get_shipping_postcode(),
 			'city' => $order->get_shipping_city(),
-			'country' => $order->get_shipping_country(),
+			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
 		);
 
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+		if ($recipient['country'] === '') {
+			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.'), 400);
 		}
 
 		$results = array();
@@ -943,6 +1006,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
 				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 				'servicepartner_auto_selected' => false,
+				'servicepartner_auto_selected_note' => '',
 				'auto_selection_reason' => $method_payload['servicepartner'] !== '' ? 'manual_selection_present' : '',
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
@@ -1015,6 +1079,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					'carrier_name' => $method_payload['carrier_name'],
 					'product_name' => $method_payload['product_name'],
 					'country' => isset($recipient['country']) ? $recipient['country'] : '',
+					'recipient_country_raw' => isset($recipient_country['raw']) ? $recipient_country['raw'] : '',
+					'recipient_country_normalized' => isset($recipient['country']) ? $recipient['country'] : '',
 					'postcode' => isset($recipient['postcode']) ? $recipient['postcode'] : '',
 					'number_of_packages' => count($clean_packages),
 					'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
@@ -1043,7 +1109,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				$item['servicepartner_fetch'] = isset($resolved_selection['servicepartner_fetch']) ? $resolved_selection['servicepartner_fetch'] : array();
 				$item['servicepartner_options'] = isset($resolved_selection['servicepartner_options']) ? $resolved_selection['servicepartner_options'] : array();
 				if ($item['servicepartner_auto_selected']) {
-					$item['human_error'] = 'Nærmeste servicepartner ble valgt automatisk.';
+					$item['servicepartner_auto_selected_note'] = 'Nærmeste servicepartner ble valgt automatisk.';
 				}
 			}
 
@@ -1344,16 +1410,20 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			);
 		}
 
+		$recipient_country = $this->resolve_recipient_country_for_context($order);
 		$recipient = array(
 			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
 			'address_1' => $order->get_shipping_address_1(),
 			'address_2' => $order->get_shipping_address_2(),
 			'postcode' => $order->get_shipping_postcode(),
 			'city' => $order->get_shipping_city(),
-			'country' => $order->get_shipping_country(),
+			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
 		);
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+		if ($recipient['country'] === '') {
+			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.'), 400);
 		}
 
 		$results = array();
@@ -1426,6 +1496,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
 				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 				'servicepartner_auto_selected' => false,
+				'servicepartner_auto_selected_note' => '',
 				'auto_selection_reason' => $method_payload['servicepartner'] !== '' ? 'manual_selection_present' : '',
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
@@ -1497,6 +1568,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					'carrier_name' => $method_payload['carrier_name'],
 					'product_name' => $method_payload['product_name'],
 					'country' => isset($recipient['country']) ? $recipient['country'] : '',
+					'recipient_country_raw' => isset($recipient_country['raw']) ? $recipient_country['raw'] : '',
+					'recipient_country_normalized' => isset($recipient['country']) ? $recipient['country'] : '',
 					'postcode' => isset($recipient['postcode']) ? $recipient['postcode'] : '',
 					'number_of_packages' => count($clean_packages),
 					'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),

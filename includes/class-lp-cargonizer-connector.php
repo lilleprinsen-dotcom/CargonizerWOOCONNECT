@@ -385,6 +385,10 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->build_booking_consignment_xml($payload, $method, $options);
 	}
 
+	private function get_last_xml_build_error() {
+		return $this->api_service->get_last_xml_build_error();
+	}
+
 	private function create_booking_consignment($xml) {
 		return $this->api_service->create_booking_consignment($xml);
 	}
@@ -610,6 +614,13 @@ class LP_Cargonizer_Connector {
 			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
 		), $method_payload);
+		if ($xml === '') {
+			$xml_build_error = $this->get_last_xml_build_error();
+			$result['error'] = isset($xml_build_error['message']) && $xml_build_error['message'] !== '' ? (string) $xml_build_error['message'] : 'Kunne ikke bygge estimate-XML.';
+			$result['parsed_error_message'] = $result['error'];
+			$result['error_details'] = isset($xml_build_error['context']) && is_array($xml_build_error['context']) ? wp_json_encode($xml_build_error['context']) : '';
+			return $result;
+		}
 
 		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => 40,
