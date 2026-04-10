@@ -581,6 +581,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			'packages' => $packages,
 			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
 			'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+			'servicepartner_selected_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
+			'servicepartner_options' => isset($method_payload['servicepartner_options']) && is_array($method_payload['servicepartner_options']) ? $method_payload['servicepartner_options'] : array(),
 			'use_sms_service' => !empty($method_payload['use_sms_service']),
 			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
@@ -858,6 +860,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						$auto_method_payload = $selected_method;
 						$auto_method_payload['servicepartner'] = $auto_servicepartner;
 						$auto_method_payload['servicepartner_customer_number'] = $auto_customer_number;
+						$auto_method_payload['servicepartner_selected_option'] = isset($auto_selection['selected_option']) && is_array($auto_selection['selected_option']) ? $auto_selection['selected_option'] : array();
 						$estimate_auto = $this->run_admin_estimate_diagnostic($packages, $recipient, $auto_method_payload, $pricing_config);
 					}
 
