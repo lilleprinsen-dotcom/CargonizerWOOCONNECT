@@ -862,7 +862,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			if ($point_id === '') {
 				continue;
 			}
-			$points[] = array(
+			$points[] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point(array(
 				'id' => $point_id,
 				'name' => isset($raw['name']) ? (string) $raw['name'] : '',
 				'address1' => isset($raw['address1']) ? (string) $raw['address1'] : '',
@@ -873,7 +873,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'customer_number' => isset($option['customer_number']) ? (string) $option['customer_number'] : '',
 				'distance_meters' => isset($option['distance_meters']) && is_numeric($option['distance_meters']) ? (float) $option['distance_meters'] : null,
 				'label' => isset($option['label']) ? (string) $option['label'] : $point_id,
-			);
+			));
 		}
 		$points = $this->sort_pickup_points_deterministically($points);
 
@@ -885,6 +885,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 	}
 
 	private function resolve_selected_pickup_point($rate_id, $pickup_points) {
+		$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_points($pickup_points);
 		$first = reset($pickup_points);
 		if (!is_array($first)) {
 			return array('id' => '', 'point' => array());
