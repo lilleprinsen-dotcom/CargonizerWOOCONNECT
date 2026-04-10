@@ -588,8 +588,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
 		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
 		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
-		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
-		return $country === 'NO' && $postcode !== '' && $city !== '' && $address !== '';
+		return $country === 'NO' && $postcode !== '' && $city !== '';
 	}
 
 	private function sort_pickup_points_deterministically($pickup_points) {

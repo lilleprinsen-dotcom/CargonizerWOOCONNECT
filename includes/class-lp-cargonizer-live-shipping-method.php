@@ -232,6 +232,8 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				$meta_data = array(
 					'transport_agreement_id' => $quote['agreement_id'],
 					'carrier_id' => $quote['carrier_id'],
+					'carrier' => $quote['carrier_id'],
+					'udc_carrier_id' => $quote['carrier_id'],
 					'product_id' => $quote['product_id'],
 					'method_key' => $quote['method_key'],
 				);
@@ -1191,11 +1193,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
 		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
 		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
-		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
 		if ($country !== 'NO') {
 			return false;
 		}
-		return $postcode !== '' && $city !== '' && $address !== '';
+		return $postcode !== '' && $city !== '';
 	}
 
 	private function log_live_checkout_event($level, $message, $context = array()) {

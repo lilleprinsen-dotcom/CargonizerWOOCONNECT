@@ -26,6 +26,14 @@
 - If there is any doubt between cleaner code and exact behavior parity, choose exact behavior parity.
 
 
+
+## Dintero embedded checkout pickup-point guardrail (added 2026-04-10)
+
+- Dintero / embedded checkout reads pickup choices server-side from `WC_Shipping_Rate` meta, not from this plugin's frontend AJAX hydration flow.
+- Frontend AJAX pickup hydration alone is not sufficient for Dintero pickup export.
+- Do not reintroduce a street-address requirement in minimum-destination checks used for pickup-point export; keep support for Norway destination data with postcode + city (without street address) during checkout.
+- Preserve all three carrier meta keys on live checkout rates for compatibility: canonical `carrier_id`, plus aliases `carrier` and `udc_carrier_id`.
+
 ## Cargonizer/Logistra API source-of-truth policy (added 2026-04-08)
 
 - For any API connection/integration behavior related to Cargonizer/Logistra, only use official documentation and precise documented field names from:
