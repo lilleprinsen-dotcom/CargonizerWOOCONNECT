@@ -225,7 +225,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$this->apply_checkout_price_adjustments($quotes, $order_value, $live_settings, $rules_by_method);
 
 			$added_rates = 0;
-			$pickup_required_without_points = 0;
+			$pickup_required_pending_async_points = 0;
 			foreach ($quotes as $quote) {
 				$rate_id = $this->build_checkout_rate_id($quote);
 				$meta_data = array(
@@ -246,16 +246,16 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				}
 
 				if (!empty($quote['pickup_required'])) {
-					$pickup_points = $this->get_pickup_points_for_rate($quote, $destination, $live_settings);
+					$pickup_points = $this->get_cached_pickup_points_for_rate($quote, $destination, $live_settings);
 					if (empty($pickup_points)) {
-						$pickup_required_without_points++;
-						continue;
+						$pickup_required_pending_async_points++;
+					} else {
+						$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
+						$selected_pickup_point = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
+						$meta_data['krokedil_pickup_points'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points);
+						$meta_data['krokedil_selected_pickup_point'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point);
+						$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
 					}
-					$selected_pickup = $this->resolve_selected_pickup_point($rate_id, $pickup_points);
-					$selected_pickup_point = isset($selected_pickup['point']) && is_array($selected_pickup['point']) ? $selected_pickup['point'] : array();
-					$meta_data['krokedil_pickup_points'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points);
-					$meta_data['krokedil_selected_pickup_point'] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point);
-					$meta_data['krokedil_selected_pickup_point_id'] = isset($selected_pickup['id']) ? (string) $selected_pickup['id'] : '';
 				}
 
 				$this->add_rate(array(
@@ -274,22 +274,22 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				'pruned_count' => $pruned_count,
 				'quoted_count' => $quoted_count,
 				'successful_quote_count' => $successful_quote_count,
-				'pickup_required_without_points' => $pickup_required_without_points,
+				'pickup_required_pending_async_points' => $pickup_required_pending_async_points,
 				'returned_count' => $added_rates,
 				'fallback_mode' => $fallback_behavior,
 			));
 
 			if ($added_rates < 1) {
 				$fallback_result = $this->add_fallback_rates_if_needed($settings, $live_settings, $fallback_behavior, $allow_checkout_with_fallback);
-				$reason_code = $pickup_required_without_points > 0 ? 'pickup_point_required_no_points' : 'quote_api_failure';
-				$reason_group = $pickup_required_without_points > 0 ? 'pickup_points' : 'api';
+				$reason_code = 'quote_api_failure';
+				$reason_group = 'api';
 				$this->record_last_no_rates_status($reason_code, $reason_group, 'No checkout rates were added after quote processing.', array(
 					'request_context' => $request_context,
 					'destination' => $destination_context,
 					'candidate_count' => $candidate_count,
 					'quoted_count' => $quoted_count,
 					'successful_quote_count' => $successful_quote_count,
-					'pickup_required_without_points' => $pickup_required_without_points,
+					'pickup_required_pending_async_points' => $pickup_required_pending_async_points,
 					'fallback' => $fallback_result,
 				));
 				return;
@@ -818,6 +818,8 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'address' => $address,
 		));
 
+		$pickup_timeout = $this->resolve_pickup_lookup_timeout($live_settings);
+		$lookup_method['request_timeout_seconds'] = $pickup_timeout;
 		$custom = $this->api_service->detect_servicepartner_custom_params($lookup_method);
 		$cache_ttl = isset($live_settings['pickup_point_cache_ttl_seconds']) ? max(0, (int) $live_settings['pickup_point_cache_ttl_seconds']) : 300;
 		$cache_key = 'lp_carg_pickup_' . md5(wp_json_encode(array(
@@ -828,9 +830,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'postcode' => $postcode,
 			'city' => $city,
 			'address' => $address,
-			'pickup_context' => array(
-				'pickup_timeout_seconds' => isset($live_settings['pickup_point_timeout_seconds']) ? (float) $live_settings['pickup_point_timeout_seconds'] : 30,
-			),
+			'request_timeout_seconds' => $pickup_timeout,
 			'custom' => isset($custom['params']) ? $custom['params'] : array(),
 		)));
 		if ($cache_ttl > 0) {
@@ -882,6 +882,47 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		return $points;
+	}
+
+	private function get_cached_pickup_points_for_rate($quote, $destination, $live_settings) {
+		if (!$this->has_minimum_destination_for_pickup_points($destination)) {
+			return array();
+		}
+
+		$method = isset($quote['method_payload']) && is_array($quote['method_payload']) ? $quote['method_payload'] : array();
+		$country = $this->api_service->sanitize_country_code(isset($destination['country']) ? $destination['country'] : '');
+		$postcode = $this->api_service->sanitize_postcode(isset($destination['postcode']) ? $destination['postcode'] : '');
+		$city = sanitize_text_field(isset($destination['city']) ? (string) $destination['city'] : '');
+		$address = sanitize_text_field((string) (isset($destination['address']) ? $destination['address'] : (isset($destination['address_1']) ? $destination['address_1'] : '')));
+		$pickup_timeout = $this->resolve_pickup_lookup_timeout($live_settings);
+		$lookup_method = array_merge($method, array(
+			'agreement_id' => isset($quote['agreement_id']) ? $quote['agreement_id'] : '',
+			'carrier_id' => isset($quote['carrier_id']) ? $quote['carrier_id'] : '',
+			'product_id' => isset($quote['product_id']) ? $quote['product_id'] : '',
+			'country' => $country,
+			'postcode' => $postcode,
+			'city' => $city,
+			'address' => $address,
+			'request_timeout_seconds' => $pickup_timeout,
+		));
+		$custom = $this->api_service->detect_servicepartner_custom_params($lookup_method);
+		$cache_key = 'lp_carg_pickup_' . md5(wp_json_encode(array(
+			'transport_agreement_id' => isset($lookup_method['agreement_id']) ? (string) $lookup_method['agreement_id'] : '',
+			'carrier' => isset($lookup_method['carrier_id']) ? (string) $lookup_method['carrier_id'] : '',
+			'product' => isset($lookup_method['product_id']) ? (string) $lookup_method['product_id'] : '',
+			'country' => $country,
+			'postcode' => $postcode,
+			'city' => $city,
+			'address' => $address,
+			'request_timeout_seconds' => $pickup_timeout,
+			'custom' => isset($custom['params']) ? $custom['params'] : array(),
+		)));
+		$cached = get_transient($cache_key);
+		if (!is_array($cached) || empty($cached)) {
+			return array();
+		}
+
+		return array_values($cached);
 	}
 
 	private function resolve_selected_pickup_point($rate_id, $pickup_points) {
@@ -1241,5 +1282,13 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			$timeout = 3.0;
 		}
 		return max(1.0, min(15.0, $timeout));
+	}
+
+	private function resolve_pickup_lookup_timeout($live_settings) {
+		$pickup_timeout = isset($live_settings['pickup_point_timeout_seconds']) ? (float) $live_settings['pickup_point_timeout_seconds'] : 8.0;
+		if ($pickup_timeout <= 0) {
+			$pickup_timeout = 8.0;
+		}
+		return max(1.0, min(30.0, $pickup_timeout));
 	}
 }
