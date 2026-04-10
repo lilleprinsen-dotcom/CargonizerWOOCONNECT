@@ -79,12 +79,14 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		}
 
 		$pickup_points_meta = $this->rate_meta($rate, 'krokedil_pickup_points');
-		if (is_array($pickup_points_meta)) {
+		$decoded_pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_points_meta($pickup_points_meta);
+		if (!empty($decoded_pickup_points)) {
 			$rate->add_meta_data('krokedil_pickup_points', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_points_for_meta($pickup_points_meta), true);
 		}
 
 		$selected_pickup_point_meta = $this->rate_meta($rate, 'krokedil_selected_pickup_point');
-		if (is_array($selected_pickup_point_meta)) {
+		$decoded_selected_pickup_point = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::decode_pickup_point_meta($selected_pickup_point_meta);
+		if (!empty($decoded_selected_pickup_point)) {
 			$rate->add_meta_data('krokedil_selected_pickup_point', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point_meta), true);
 		}
 	}
@@ -345,7 +347,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			if ($point_id === '') {
 				continue;
 			}
-			$points[] = array(
+			$points[] = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point(array(
 				'id' => $point_id,
 				'name' => isset($raw['name']) ? (string) $raw['name'] : '',
 				'address1' => isset($raw['address1']) ? (string) $raw['address1'] : '',
@@ -356,7 +358,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 				'customer_number' => isset($option['customer_number']) ? (string) $option['customer_number'] : '',
 				'distance_meters' => isset($option['distance_meters']) && is_numeric($option['distance_meters']) ? (float) $option['distance_meters'] : null,
 				'label' => isset($option['label']) ? (string) $option['label'] : $point_id,
-			);
+			));
 		}
 		$points = $this->sort_pickup_points_deterministically($points);
 		if ($cache_ttl > 0) {
@@ -439,13 +441,13 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 			if ($rate_id === '' || !is_array($row)) {
 				continue;
 			}
-			$pickup_points = isset($row['pickup_points']) && is_array($row['pickup_points']) ? array_values($row['pickup_points']) : array();
+			$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_points(isset($row['pickup_points']) ? $row['pickup_points'] : array());
 			if (count($pickup_points) > 20) {
 				$pickup_points = array_slice($pickup_points, 0, 20);
 			}
 			$normalized[$rate_id] = array(
 				'id' => isset($row['id']) ? sanitize_text_field((string) $row['id']) : '',
-				'point' => isset($row['point']) && is_array($row['point']) ? $row['point'] : array(),
+				'point' => LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point(isset($row['point']) ? $row['point'] : array()),
 				'pickup_points' => $pickup_points,
 				'source' => isset($row['source']) ? sanitize_key((string) $row['source']) : 'auto_nearest',
 				'rate_context' => isset($row['rate_context']) && is_array($row['rate_context']) ? $row['rate_context'] : array(),
@@ -473,7 +475,7 @@ class LP_Cargonizer_Checkout_Pickup_Compatibility_Layer {
 		if (!$this->has_wc_session()) {
 			return;
 		}
-		$selected_pickup_point = is_array($selected_pickup_point) ? $selected_pickup_point : array();
+		$selected_pickup_point = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point($selected_pickup_point);
 		$selected_pickup_point_id = sanitize_text_field((string) $selected_pickup_point_id);
 		WC()->session->set('krokedil_selected_pickup_point', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point));
 		WC()->session->set('krokedil_selected_pickup_point_id', $selected_pickup_point_id);

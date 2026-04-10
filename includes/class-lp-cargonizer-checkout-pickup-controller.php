@@ -14,6 +14,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		add_action('woocommerce_after_shipping_rate', array($this, 'render_pickup_selector_for_rate'), 20, 2);
 		add_action('wp_ajax_' . self::AJAX_ACTION, array($this, 'ajax_set_pickup_point'));
 		add_action('wp_ajax_nopriv_' . self::AJAX_ACTION, array($this, 'ajax_set_pickup_point'));
+		add_action('wc_ajax_ks_pp_set_selected_pickup_point', array($this, 'ajax_set_pickup_point_krokedil_compatibility'));
 	}
 
 	public function enqueue_checkout_assets() {
@@ -169,11 +170,27 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 	}
 
 	public function ajax_set_pickup_point() {
-		try {
-			check_ajax_referer(self::NONCE_ACTION, 'nonce');
+		$this->handle_pickup_point_update(array(
+			'rate_id' => isset($_POST['rate_id']) ? wp_unslash((string) $_POST['rate_id']) : '',
+			'pickup_point_id' => isset($_POST['pickup_point_id']) ? wp_unslash((string) $_POST['pickup_point_id']) : '',
+		), true);
+	}
 
-			$rate_id = isset($_POST['rate_id']) ? sanitize_text_field(wp_unslash((string) $_POST['rate_id'])) : '';
-			$pickup_point_id = isset($_POST['pickup_point_id']) ? sanitize_text_field(wp_unslash((string) $_POST['pickup_point_id'])) : '';
+	public function ajax_set_pickup_point_krokedil_compatibility() {
+		$this->handle_pickup_point_update(array(
+			'rate_id' => isset($_REQUEST['rateId']) ? wp_unslash((string) $_REQUEST['rateId']) : (isset($_REQUEST['rate_id']) ? wp_unslash((string) $_REQUEST['rate_id']) : ''),
+			'pickup_point_id' => isset($_REQUEST['pickupPointId']) ? wp_unslash((string) $_REQUEST['pickupPointId']) : (isset($_REQUEST['pickup_point_id']) ? wp_unslash((string) $_REQUEST['pickup_point_id']) : ''),
+		), false);
+	}
+
+	private function handle_pickup_point_update($payload, $require_nonce) {
+		try {
+			if ($require_nonce) {
+				check_ajax_referer(self::NONCE_ACTION, 'nonce');
+			}
+
+			$rate_id = isset($payload['rate_id']) ? sanitize_text_field((string) $payload['rate_id']) : '';
+			$pickup_point_id = isset($payload['pickup_point_id']) ? sanitize_text_field((string) $payload['pickup_point_id']) : '';
 			if ($rate_id === '' || $pickup_point_id === '') {
 				$this->log_live_checkout_event('debug', 'Rejected pickup point update: missing rate or pickup id.');
 				wp_send_json_error(array('message' => 'Missing rate or pickup point.'), 400);
@@ -194,6 +211,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 				$pickup_point_id = sanitize_text_field((string) $available['id']);
 				$fallback_applied = true;
 			}
+			$available = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point($available);
 
 			$map = $this->get_session_map();
 			$map[$rate_id] = array(
@@ -277,7 +295,7 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 		if (!$this->has_wc_session()) {
 			return;
 		}
-		$selected_pickup_point = is_array($selected_pickup_point) ? $selected_pickup_point : array();
+		$selected_pickup_point = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point($selected_pickup_point);
 		$selected_pickup_point_id = sanitize_text_field((string) $selected_pickup_point_id);
 		WC()->session->set('krokedil_selected_pickup_point', LP_Cargonizer_Krokedil_Pickup_Meta_Helper::encode_pickup_point_for_meta($selected_pickup_point));
 		WC()->session->set('krokedil_selected_pickup_point_id', $selected_pickup_point_id);
@@ -341,8 +359,8 @@ class LP_Cargonizer_Checkout_Pickup_Controller {
 				continue;
 			}
 			$id = isset($row['id']) ? sanitize_text_field((string) $row['id']) : '';
-			$point = isset($row['point']) && is_array($row['point']) ? $row['point'] : array();
-			$pickup_points = isset($row['pickup_points']) && is_array($row['pickup_points']) ? array_values($row['pickup_points']) : array();
+			$point = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_point(isset($row['point']) ? $row['point'] : array());
+			$pickup_points = LP_Cargonizer_Krokedil_Pickup_Meta_Helper::normalize_pickup_points(isset($row['pickup_points']) ? $row['pickup_points'] : array());
 			if (count($pickup_points) > 20) {
 				$pickup_points = array_slice($pickup_points, 0, 20);
 			}
