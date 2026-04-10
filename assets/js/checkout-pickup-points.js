@@ -10,6 +10,14 @@
 	var queuedRefreshAfterCurrent = false;
 	var lastRefreshStartedAt = 0;
 	var selectorIdCounter = 0;
+	var lastSuccessfulPayloadSignature = '';
+
+	function debugLog() {
+		if (!config || !config.debug || !window.console || typeof window.console.debug !== 'function') {
+			return;
+		}
+		window.console.debug.apply(window.console, arguments);
+	}
 
 	function hasPickupSelectors() {
 		return $('.lp-cargonizer-pickup-point-select').length > 0;
@@ -130,9 +138,18 @@
 				applyErrorStateToLoadingSelectors('Could not resolve pickup point state.');
 				return;
 			}
-			window.lpCargonizerPickupPointsState = response.data;
-			applyPickupPointsStateToSelectors(response.data);
-			$(document.body).trigger('lp_cargonizer_pickup_points_state_ready', [response.data]);
+			var nextState = response.data;
+			var nextSignature = buildPayloadSignature(nextState);
+			var unchanged = nextSignature !== '' && nextSignature === lastSuccessfulPayloadSignature;
+			var shouldReapply = !unchanged || doesStateNeedReapply(nextState);
+			window.lpCargonizerPickupPointsState = nextState;
+			if (shouldReapply) {
+				applyPickupPointsStateToSelectors(nextState);
+				lastSuccessfulPayloadSignature = nextSignature;
+				$(document.body).trigger('lp_cargonizer_pickup_points_state_ready', [nextState]);
+				return;
+			}
+			debugLog('[lp-cargonizer] Skipped pickup selector re-apply (unchanged payload).');
 		}).fail(function () {
 			applyErrorStateToLoadingSelectors('Could not fetch pickup points.');
 		}).always(function () {
@@ -209,6 +226,45 @@
 		});
 	}
 
+	function buildPayloadSignature(state) {
+		if (!state || !Array.isArray(state.items)) {
+			return '';
+		}
+		var normalizedItems = state.items.map(function (item) {
+			var normalizedItem = item || {};
+			var points = Array.isArray(normalizedItem.pickup_points) ? normalizedItem.pickup_points : [];
+			return {
+				rate_id: String(normalizedItem.rate_id || ''),
+				state: String(normalizedItem.state || ''),
+				message: String(normalizedItem.message || ''),
+				selected_pickup_point_id: String(normalizedItem.selected_pickup_point_id || ''),
+				unavailable: !!normalizedItem.unavailable,
+				error: !!normalizedItem.error,
+				pickup_points: points.map(function (point) {
+					var row = point || {};
+					return {
+						id: String(row.id || ''),
+						label: String(row.label || row.id || '')
+					};
+				})
+			};
+		});
+		return JSON.stringify(normalizedItems);
+	}
+
+	function doesStateNeedReapply(state) {
+		if (!state || !Array.isArray(state.items)) {
+			return false;
+		}
+		return state.items.some(function (item) {
+			if (!item || !item.rate_id) {
+				return false;
+			}
+			var rateId = String(item.rate_id);
+			return $('.lp-cargonizer-pickup-point-select[data-rate-id="' + rateId + '"]').length === 0;
+		});
+	}
+
 	var pendingRequest = null;
 	$(document.body)
 		.off('change.lpCargonizerPickupPoints', '.lp-cargonizer-pickup-point-select')
@@ -223,6 +279,7 @@
 		if (previousPickupPointId === pickupPointId) {
 			return;
 		}
+		var shouldTriggerCompatibilityUpdate = false;
 
 		$select.prop('disabled', true);
 		if (pendingRequest && typeof pendingRequest.abort === 'function') {
@@ -235,17 +292,25 @@
 			pickup_point_id: pickupPointId
 		}).done(function () {
 			$select.data('selected-pickup-point-id', pickupPointId);
+			shouldTriggerCompatibilityUpdate = true;
 			scheduleCompatibilityRefresh();
 		}).fail(function (xhr) {
 			var response = xhr && xhr.responseJSON && xhr.responseJSON.data ? xhr.responseJSON.data : {};
 			if (response && response.pickup_point_id) {
-				$select.data('selected-pickup-point-id', String(response.pickup_point_id));
-				$select.val(String(response.pickup_point_id));
-				scheduleCompatibilityRefresh();
+				var resolvedPickupPointId = String(response.pickup_point_id);
+				var didSelectionChange = resolvedPickupPointId !== previousPickupPointId;
+				$select.data('selected-pickup-point-id', resolvedPickupPointId);
+				$select.val(resolvedPickupPointId);
+				if (didSelectionChange) {
+					shouldTriggerCompatibilityUpdate = true;
+					scheduleCompatibilityRefresh();
+				}
 			}
 		}).always(function () {
 			$select.prop('disabled', false);
-			triggerCompatibilityUpdate();
+			if (shouldTriggerCompatibilityUpdate) {
+				triggerCompatibilityUpdate();
+			}
 		});
 	});
 
