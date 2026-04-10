@@ -7,6 +7,8 @@ if (!defined('ABSPATH')) {
 class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 	const METHOD_ID = LP_Cargonizer_Live_Checkout::METHOD_ID;
 	const LAST_NO_RATES_STATUS_TRANSIENT = 'lp_cargonizer_last_no_rates_status';
+	const QUOTE_REQUEST_LOCK_TTL_SECONDS = 12;
+	const PICKUP_POINT_REQUEST_LOCK_TTL_SECONDS = 12;
 
 	/** @var LP_Cargonizer_Settings_Service */
 	private $settings_service;
@@ -344,8 +346,26 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		$remote_results = array();
-		if (!empty($uncached_contexts)) {
-			$remote_results = $this->execute_uncached_quote_requests($uncached_contexts, $live_settings);
+		$locked_failures = array();
+		$contexts_to_execute = array();
+		foreach ($uncached_contexts as $context) {
+			$index = isset($context['quote_index']) ? (int) $context['quote_index'] : 0;
+			if (!$this->try_acquire_quote_lock($context)) {
+				$locked_quote = $this->resolve_quote_when_request_locked($context);
+				if (!empty($locked_quote['success'])) {
+					$cached_quotes[$index] = $locked_quote;
+					continue;
+				}
+				$locked_failures[$index] = array(
+					'method_key' => isset($context['method_key']) ? (string) $context['method_key'] : '',
+					'reason_code' => 'quote_request_locked',
+				);
+				continue;
+			}
+			$contexts_to_execute[] = $context;
+		}
+		if (!empty($contexts_to_execute)) {
+			$remote_results = $this->execute_uncached_quote_requests($contexts_to_execute, $live_settings);
 		}
 
 		foreach ($contexts as $context) {
@@ -357,11 +377,16 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				$quotes[] = $cached_quotes[$index];
 				continue;
 			}
+			if (isset($locked_failures[$index]) && is_array($locked_failures[$index])) {
+				$diagnostics['failures'][] = $locked_failures[$index];
+				continue;
+			}
 			$remote_result = isset($remote_results[$index]) && is_array($remote_results[$index]) ? $remote_results[$index] : array(
 				'type' => 'wp_remote',
 				'wp_error' => 'Missing remote quote result.',
 			);
 			$quote = $this->build_quote_from_remote_result($context, $remote_result);
+			$this->release_quote_lock($context);
 			if (!empty($quote['success'])) {
 				$quotes[] = $quote;
 				continue;
@@ -433,6 +458,13 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				$cached_quote = $cached;
 			}
 		}
+		$lock_key = $this->build_quote_lock_key($cache_key);
+		if ($cached_quote === null && $this->is_transient_lock_active($lock_key)) {
+			$cached_quote = $this->resolve_quote_when_request_locked(array(
+				'cache_key' => $cache_key,
+				'fallback_behavior' => $fallback_behavior,
+			));
+		}
 
 		$xml = '';
 		if ($cached_quote === null) {
@@ -463,6 +495,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'package_summary' => $package_summary,
 			'cache_ttl' => $cache_ttl,
 			'cache_key' => $cache_key,
+			'lock_key' => $lock_key,
 			'fallback_behavior' => $fallback_behavior,
 			'settings' => $settings,
 			'live_settings' => $live_settings,
@@ -1034,6 +1067,11 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				return $cached;
 			}
 		}
+		$lock_key = $this->build_pickup_lock_key($cache_key);
+		if ($this->is_transient_lock_active($lock_key)) {
+			return array();
+		}
+		set_transient($lock_key, 1, self::PICKUP_POINT_REQUEST_LOCK_TTL_SECONDS);
 
 		$result = $this->api_service->fetch_servicepartner_options($lookup_method);
 		$options = isset($result['options']) && is_array($result['options']) ? $result['options'] : array();
@@ -1075,8 +1113,58 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		if ($cache_ttl > 0) {
 			set_transient($cache_key, $points, $cache_ttl);
 		}
+		delete_transient($lock_key);
 
 		return $points;
+	}
+
+	private function build_quote_lock_key($cache_key) {
+		return 'lp_carg_quote_lock_' . md5((string) $cache_key);
+	}
+
+	private function try_acquire_quote_lock($context) {
+		$lock_key = isset($context['lock_key']) ? (string) $context['lock_key'] : '';
+		if ($lock_key === '') {
+			return true;
+		}
+		if ($this->is_transient_lock_active($lock_key)) {
+			return false;
+		}
+		set_transient($lock_key, 1, self::QUOTE_REQUEST_LOCK_TTL_SECONDS);
+		return true;
+	}
+
+	private function release_quote_lock($context) {
+		$lock_key = isset($context['lock_key']) ? (string) $context['lock_key'] : '';
+		if ($lock_key === '') {
+			return;
+		}
+		delete_transient($lock_key);
+	}
+
+	private function resolve_quote_when_request_locked($context) {
+		$cache_key = isset($context['cache_key']) ? (string) $context['cache_key'] : '';
+		$fallback_behavior = isset($context['fallback_behavior']) ? (string) $context['fallback_behavior'] : 'none';
+		if ($cache_key === '') {
+			return array();
+		}
+		$cached = get_transient($cache_key);
+		if (is_array($cached) && !empty($cached['success'])) {
+			return $cached;
+		}
+		$fallback_quote = $this->maybe_return_last_known_quote($cache_key, $fallback_behavior);
+		if (!empty($fallback_quote['success'])) {
+			return $fallback_quote;
+		}
+		return array();
+	}
+
+	private function is_transient_lock_active($lock_key) {
+		return !empty(get_transient($lock_key));
+	}
+
+	private function build_pickup_lock_key($cache_key) {
+		return 'lp_carg_pickup_lock_' . md5((string) $cache_key);
 	}
 
 	private function get_cached_pickup_points_for_rate($quote, $destination, $live_settings) {
