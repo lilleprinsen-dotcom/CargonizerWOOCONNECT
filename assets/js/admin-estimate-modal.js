@@ -1850,8 +1850,12 @@
 					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.</span>';
 					return;
 				}
-				var printerChoice = bookingPrinterChoice ? (bookingPrinterChoice.value || '') : '';
-				runBookingBtn.disabled = true;
+					var printerChoice = bookingPrinterChoice ? (bookingPrinterChoice.value || '') : '';
+					var printerLabel = '';
+					if (bookingPrinterChoice && bookingPrinterChoice.options && bookingPrinterChoice.selectedIndex >= 0) {
+						printerLabel = bookingPrinterChoice.options[bookingPrinterChoice.selectedIndex].text || '';
+					}
+					runBookingBtn.disabled = true;
 				runBookingBtn.textContent = 'Booker...';
 				bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
 
@@ -1881,8 +1885,9 @@
 					}
 					form.append('methods[0]['+key+']', method[key]);
 				});
-				form.append('printer_choice', printerChoice);
-				form.append('notify_email_to_consignee', notifyEmailToConsignee ? '1' : '0');
+					form.append('printer_choice', printerChoice);
+					form.append('printer_label', printerLabel);
+					form.append('notify_email_to_consignee', notifyEmailToConsignee ? '1' : '0');
 
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })

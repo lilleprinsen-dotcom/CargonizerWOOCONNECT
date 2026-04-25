@@ -21,6 +21,7 @@ class LP_Cargonizer_Settings_Service {
 			'api_key'   => '',
 			'sender_id' => '',
 			'booking_email_notification_default' => 1,
+			'printer_nicknames' => array(),
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
@@ -55,6 +56,10 @@ class LP_Cargonizer_Settings_Service {
 			'booking_email_notification_default' => array_key_exists('booking_email_notification_default', $input)
 				? $this->sanitize_checkbox_value($input['booking_email_notification_default'])
 				: (isset($current['booking_email_notification_default']) ? $this->sanitize_checkbox_value($current['booking_email_notification_default']) : 1),
+			'printer_nicknames' => $this->sanitize_printer_nicknames(
+				isset($input['printer_nicknames']) && is_array($input['printer_nicknames']) ? $input['printer_nicknames'] : array(),
+				isset($current['printer_nicknames']) && is_array($current['printer_nicknames']) ? $current['printer_nicknames'] : array()
+			),
 			'available_methods' => array(),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
@@ -216,6 +221,26 @@ class LP_Cargonizer_Settings_Service {
 
 		$output = $this->validate_live_pricing_method_coverage($output);
 
+		return $output;
+	}
+
+	private function sanitize_printer_nicknames($input, $current) {
+		$source = !empty($input) ? $input : $current;
+		$output = array();
+		if (!is_array($source)) {
+			return $output;
+		}
+		foreach ($source as $printer_id => $nickname) {
+			$clean_printer_id = sanitize_text_field((string) $printer_id);
+			if ($clean_printer_id === '') {
+				continue;
+			}
+			$clean_nickname = sanitize_text_field((string) $nickname);
+			if ($clean_nickname === '') {
+				continue;
+			}
+			$output[$clean_printer_id] = $clean_nickname;
+		}
 		return $output;
 	}
 

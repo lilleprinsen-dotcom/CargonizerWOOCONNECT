@@ -285,6 +285,37 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return is_scalar($default_printer_id) ? sanitize_text_field((string) $default_printer_id) : '';
 	}
 
+	private function get_saved_printer_nicknames_map() {
+		$settings = $this->get_settings();
+		$raw_map = isset($settings['printer_nicknames']) && is_array($settings['printer_nicknames']) ? $settings['printer_nicknames'] : array();
+		$clean_map = array();
+		foreach ($raw_map as $printer_id => $nickname) {
+			$clean_printer_id = sanitize_text_field((string) $printer_id);
+			$clean_nickname = sanitize_text_field((string) $nickname);
+			if ($clean_printer_id === '' || $clean_nickname === '') {
+				continue;
+			}
+			$clean_map[$clean_printer_id] = $clean_nickname;
+		}
+		return $clean_map;
+	}
+
+	private function get_printer_display_label($printer_id, $printer_label, $nicknames_map) {
+		$clean_printer_id = sanitize_text_field((string) $printer_id);
+		$clean_printer_label = sanitize_text_field((string) $printer_label);
+		$clean_nickname = isset($nicknames_map[$clean_printer_id]) ? sanitize_text_field((string) $nicknames_map[$clean_printer_id]) : '';
+		if ($clean_printer_label === '') {
+			$clean_printer_label = $clean_printer_id;
+		}
+		if ($clean_nickname === '') {
+			return $clean_printer_label;
+		}
+		if ($clean_printer_label === '') {
+			return $clean_nickname;
+		}
+		return $clean_nickname . ' - ' . $clean_printer_label;
+	}
+
 	private function resolve_effective_printer_choice($posted_printer_choice) {
 		$choice = sanitize_text_field((string) $posted_printer_choice);
 		if ($choice === '__default__') {
@@ -666,11 +697,12 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['estimated_shipping_price_source'] = isset($estimated_price_selection['estimated_shipping_price_source']) ? (string) $estimated_price_selection['estimated_shipping_price_source'] : 'missing';
 
 		$posted_printer_choice = isset($_POST['printer_choice']) ? wp_unslash($_POST['printer_choice']) : '';
+		$posted_printer_label = isset($_POST['printer_label']) ? sanitize_text_field(wp_unslash($_POST['printer_label'])) : '';
 		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
 		if ($printer_id !== '') {
 			$booking_state['print']['attempted'] = true;
 			$booking_state['print']['printer_id'] = $printer_id;
-			$booking_state['print']['printer_label'] = $printer_id;
+			$booking_state['print']['printer_label'] = $posted_printer_label !== '' ? $posted_printer_label : $printer_id;
 			if ($booking_state['consignment_pdf_url'] === '') {
 				$booking_state['print']['success'] = false;
 				$booking_state['print']['message'] = 'Mangler consignment PDF-URL fra bookingrespons.';
@@ -855,8 +887,19 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error($error, 200);
 		}
 
+		$printer_nicknames = $this->get_saved_printer_nicknames_map();
+		$printers = isset($printer_result['printers']) && is_array($printer_result['printers']) ? $printer_result['printers'] : array();
+		foreach ($printers as $index => $printer) {
+			$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+			if ($printer_id === '') {
+				continue;
+			}
+			$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+			$printers[$index]['label'] = $this->get_printer_display_label($printer_id, $printer_label, $printer_nicknames);
+		}
+
 		wp_send_json_success(array(
-			'printers' => isset($printer_result['printers']) && is_array($printer_result['printers']) ? $printer_result['printers'] : array(),
+			'printers' => $printers,
 			'default_printer_id' => $default_printer_id,
 		));
 	}

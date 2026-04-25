@@ -612,6 +612,36 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		);
 	}
 
+	private function get_saved_printer_nicknames_map($settings) {
+		$raw_map = isset($settings['printer_nicknames']) && is_array($settings['printer_nicknames']) ? $settings['printer_nicknames'] : array();
+		$clean_map = array();
+		foreach ($raw_map as $printer_id => $nickname) {
+			$clean_printer_id = sanitize_text_field((string) $printer_id);
+			$clean_nickname = sanitize_text_field((string) $nickname);
+			if ($clean_printer_id === '' || $clean_nickname === '') {
+				continue;
+			}
+			$clean_map[$clean_printer_id] = $clean_nickname;
+		}
+		return $clean_map;
+	}
+
+	private function get_printer_display_label($printer_id, $printer_label, $nicknames_map) {
+		$clean_printer_id = sanitize_text_field((string) $printer_id);
+		$clean_printer_label = sanitize_text_field((string) $printer_label);
+		$clean_nickname = isset($nicknames_map[$clean_printer_id]) ? sanitize_text_field((string) $nicknames_map[$clean_printer_id]) : '';
+		if ($clean_printer_label === '') {
+			$clean_printer_label = $clean_printer_id;
+		}
+		if ($clean_nickname === '') {
+			return $clean_printer_label;
+		}
+		if ($clean_printer_label === '') {
+			return $clean_nickname;
+		}
+		return $clean_nickname . ' - ' . $clean_printer_label;
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -640,6 +670,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
 				'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
+				'printer_nicknames' => isset($_POST['lp_cargonizer_printer_nicknames']) && is_array($_POST['lp_cargonizer_printer_nicknames']) ? wp_unslash($_POST['lp_cargonizer_printer_nicknames']) : array(),
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => is_array($posted_enabled_methods)
 					? $posted_enabled_methods
@@ -1249,11 +1280,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						'raw' => '',
 						'printers' => array(),
 					);
-					if (!empty($settings['api_key'])) {
-						$printer_fetch_result = $this->fetch_printers();
-					}
-					$available_printers = isset($printer_fetch_result['printers']) && is_array($printer_fetch_result['printers']) ? $printer_fetch_result['printers'] : array();
-					?>
+						if (!empty($settings['api_key'])) {
+							$printer_fetch_result = $this->fetch_printers();
+						}
+						$available_printers = isset($printer_fetch_result['printers']) && is_array($printer_fetch_result['printers']) ? $printer_fetch_result['printers'] : array();
+						$printer_nicknames = $this->get_saved_printer_nicknames_map($settings);
+						?>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>
@@ -1269,22 +1301,66 @@ trait LP_Cargonizer_Admin_Page_Trait {
 											if ($printer_id === '') {
 												continue;
 											}
-											$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
-											?>
-											<option value="<?php echo esc_attr($printer_id); ?>" <?php selected($current_user_default_printer_id, $printer_id); ?>>
-												<?php echo esc_html($printer_label); ?>
-											</option>
-										<?php endforeach; ?>
-									</select>
+												$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+												$printer_display_label = $this->get_printer_display_label($printer_id, $printer_label, $printer_nicknames);
+												?>
+												<option value="<?php echo esc_attr($printer_id); ?>" <?php selected($current_user_default_printer_id, $printer_id); ?>>
+													<?php echo esc_html($printer_display_label); ?>
+												</option>
+											<?php endforeach; ?>
+										</select>
 									<?php if (empty($settings['api_key'])) : ?>
 										<p class="description">Legg inn API key for å hente printerliste fra Cargonizer.</p>
 									<?php elseif (empty($printer_fetch_result['success'])) : ?>
 										<p class="description" style="color:#b32d2e;"><?php echo esc_html($printer_fetch_result['message'] !== '' ? $printer_fetch_result['message'] : 'Kunne ikke hente printerliste.'); ?></p>
 									<?php endif; ?>
 								</td>
-							</tr>
-						</tbody>
-					</table>
+								</tr>
+								<?php if (!empty($available_printers)) : ?>
+									<tr>
+										<th scope="row">Printer-kallenavn</th>
+										<td>
+											<p class="description" style="margin-top:0;">Legg inn et visningsnavn som prefiks foran printerens ekte navn i alle printervalg.</p>
+											<table class="widefat striped" style="max-width:900px;">
+												<thead>
+													<tr>
+														<th>Printer</th>
+														<th style="width:320px;">Kallenavn</th>
+													</tr>
+												</thead>
+												<tbody>
+													<?php foreach ($available_printers as $printer) : ?>
+														<?php
+														$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+														if ($printer_id === '') {
+															continue;
+														}
+														$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+														$saved_nickname = isset($printer_nicknames[$printer_id]) ? sanitize_text_field((string) $printer_nicknames[$printer_id]) : '';
+														?>
+														<tr>
+															<td>
+																<strong><?php echo esc_html($printer_label); ?></strong><br>
+																<code><?php echo esc_html($printer_id); ?></code>
+															</td>
+															<td>
+																<input
+																	type="text"
+																	name="lp_cargonizer_printer_nicknames[<?php echo esc_attr($printer_id); ?>]"
+																	value="<?php echo esc_attr($saved_nickname); ?>"
+																	class="regular-text"
+																	placeholder="<?php echo esc_attr('F.eks. Packing station 1'); ?>"
+																/>
+															</td>
+														</tr>
+													<?php endforeach; ?>
+												</tbody>
+											</table>
+										</td>
+									</tr>
+								<?php endif; ?>
+							</tbody>
+						</table>
 
 
 					<h2>Når metoder skal vises/skjules</h2>
