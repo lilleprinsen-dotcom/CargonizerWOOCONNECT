@@ -184,6 +184,124 @@ class LP_Cargonizer_Api_Service {
 		}
 	}
 
+	public function fetch_sender_addresses() {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'message' => '',
+			'raw' => '',
+			'addresses' => array(),
+		);
+
+		try {
+			$url = self::build_endpoint_url('/customers.xml');
+			$response = wp_remote_get($url, array(
+				'timeout' => 30,
+				'headers' => $this->get_auth_headers(),
+			));
+
+			if (is_wp_error($response)) {
+				$result['message'] = 'WP Error: ' . $response->get_error_message();
+				return $result;
+			}
+
+			$result['http_status'] = wp_remote_retrieve_response_code($response);
+			$result['raw'] = wp_remote_retrieve_body($response);
+
+			if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+				$result['message'] = 'Ugyldig respons fra Cargonizer. HTTP-status: ' . $result['http_status'];
+				return $result;
+			}
+
+			if ($result['raw'] === '') {
+				$result['message'] = 'Tom respons fra Cargonizer.';
+				return $result;
+			}
+
+			$parsed = $this->parse_sender_addresses_response($result['raw'], $result['http_status']);
+			$parsed['raw'] = $result['raw'];
+			return $parsed;
+		} catch (Throwable $exception) {
+			$result['message'] = 'Uventet feil ved henting av sender-adresser: ' . $exception->getMessage();
+			return $result;
+		}
+	}
+
+	public function parse_sender_addresses_response($body, $http_status = 200) {
+		$result = array(
+			'success' => false,
+			'http_status' => (int) $http_status,
+			'message' => '',
+			'raw' => (string) $body,
+			'addresses' => array(),
+		);
+
+		if (empty($body)) {
+			$result['message'] = 'Tom respons fra sender-adresser-endepunktet.';
+			return $result;
+		}
+
+		$xml = $this->safe_simplexml_load_string($body);
+		if ($xml === false) {
+			$error_messages = $this->collect_libxml_error_messages();
+			$error_suffix = !empty($error_messages) ? implode(' | ', $error_messages) : 'XML-utvidelse mangler eller XML kunne ikke leses.';
+			$result['message'] = 'Kunne ikke parse sender-adresser XML: ' . $error_suffix;
+			return $result;
+		}
+
+		$candidate_nodes = array();
+		$paths = array('//customer', '//customers/customer');
+		foreach ($paths as $path) {
+			$found = $xml->xpath($path);
+			if (!empty($found)) {
+				$candidate_nodes = $found;
+				break;
+			}
+		}
+
+		if (empty($candidate_nodes) && isset($xml->customer)) {
+			foreach ($xml->customer as $customer) {
+				$candidate_nodes[] = $customer;
+			}
+		}
+
+		$addresses = array();
+		foreach ($candidate_nodes as $node) {
+			$id = $this->xml_value($node, array('id', 'customer_id', 'number', 'identifier'));
+			$name = $this->xml_value($node, array('name', 'title'));
+			$address1 = $this->xml_value($node, array('address1', 'address_1', 'street', 'street1'));
+			$address2 = $this->xml_value($node, array('address2', 'address_2', 'street2'));
+			$postcode = $this->xml_value($node, array('postcode', 'postal_code', 'zip'));
+			$city = $this->xml_value($node, array('city', 'post_place'));
+			$country = $this->xml_value($node, array('country', 'country_code'));
+
+			if ($id === '' && $name === '' && $address1 === '' && $postcode === '' && $city === '' && $country === '') {
+				continue;
+			}
+
+			$addresses[] = array(
+				'id' => (string) $id,
+				'name' => (string) $name,
+				'address1' => (string) $address1,
+				'address2' => (string) $address2,
+				'postcode' => (string) $postcode,
+				'city' => (string) $city,
+				'country' => (string) $country,
+			);
+		}
+
+		if (empty($addresses)) {
+			$result['message'] = 'Fant ingen sender-adresser i XML-responsen.';
+			return $result;
+		}
+
+		$result['success'] = true;
+		$result['message'] = 'Sender-adresser hentet.';
+		$result['addresses'] = $addresses;
+
+		return $result;
+	}
+
 	public function parse_transport_agreements($xml) {
 		$result = array();
 		$agreements = array();
