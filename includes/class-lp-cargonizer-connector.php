@@ -240,6 +240,10 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->parse_printers_response($body);
 	}
 
+	private function fetch_sender_addresses() {
+		return $this->api_service->fetch_sender_addresses();
+	}
+
 
 	private function flatten_shipping_methods($agreements) {
 		$options = array();

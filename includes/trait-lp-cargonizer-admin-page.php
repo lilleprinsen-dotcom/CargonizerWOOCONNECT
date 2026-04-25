@@ -1222,6 +1222,63 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</tbody>
 					</table>
 
+					<h2>Sender-adresser (read-only)</h2>
+					<p>Hentes fra Cargonizer API for valgt API key + sender-ID. Ingen data lagres eller brukes videre enn visning i admin.</p>
+					<?php
+					$sender_addresses_fetch_result = array(
+						'success' => false,
+						'http_status' => 0,
+						'message' => '',
+						'raw' => '',
+						'addresses' => array(),
+					);
+					if (!empty($settings['api_key']) && !empty($settings['sender_id'])) {
+						$sender_addresses_fetch_result = $this->fetch_sender_addresses();
+					}
+					$sender_addresses = isset($sender_addresses_fetch_result['addresses']) && is_array($sender_addresses_fetch_result['addresses'])
+						? $sender_addresses_fetch_result['addresses']
+						: array();
+					?>
+					<?php if (!empty($sender_addresses_fetch_result['success']) && !empty($sender_addresses)) : ?>
+						<table class="widefat striped" style="max-width:1000px;">
+							<thead>
+								<tr>
+									<th>ID</th>
+									<th>Navn</th>
+									<th>Adresse</th>
+									<th>Postnr/Sted</th>
+									<th>Land</th>
+								</tr>
+							</thead>
+							<tbody>
+								<?php foreach ($sender_addresses as $sender_address) : ?>
+									<?php
+									$sender_id = isset($sender_address['id']) ? sanitize_text_field((string) $sender_address['id']) : '';
+									$sender_name = isset($sender_address['name']) ? sanitize_text_field((string) $sender_address['name']) : '';
+									$sender_address_1 = isset($sender_address['address1']) ? sanitize_text_field((string) $sender_address['address1']) : '';
+									$sender_address_2 = isset($sender_address['address2']) ? sanitize_text_field((string) $sender_address['address2']) : '';
+									$sender_postcode = isset($sender_address['postcode']) ? sanitize_text_field((string) $sender_address['postcode']) : '';
+									$sender_city = isset($sender_address['city']) ? sanitize_text_field((string) $sender_address['city']) : '';
+									$sender_country = isset($sender_address['country']) ? sanitize_text_field((string) $sender_address['country']) : '';
+									$sender_address_line = trim($sender_address_1 . ($sender_address_2 !== '' ? ', ' . $sender_address_2 : ''));
+									$sender_postal_line = trim($sender_postcode . ' ' . $sender_city);
+									?>
+									<tr>
+										<td><?php echo esc_html($sender_id !== '' ? $sender_id : '—'); ?></td>
+										<td><?php echo esc_html($sender_name !== '' ? $sender_name : '—'); ?></td>
+										<td><?php echo esc_html($sender_address_line !== '' ? $sender_address_line : '—'); ?></td>
+										<td><?php echo esc_html($sender_postal_line !== '' ? $sender_postal_line : '—'); ?></td>
+										<td><?php echo esc_html($sender_country !== '' ? $sender_country : '—'); ?></td>
+									</tr>
+								<?php endforeach; ?>
+							</tbody>
+						</table>
+					<?php elseif (empty($settings['api_key']) || empty($settings['sender_id'])) : ?>
+						<p class="description">Legg inn både API key og sender-ID for å hente sender-adresser fra Cargonizer.</p>
+					<?php else : ?>
+						<p class="description" style="color:#b32d2e;"><?php echo esc_html($sender_addresses_fetch_result['message'] !== '' ? $sender_addresses_fetch_result['message'] : 'Kunne ikke hente sender-adresser.'); ?></p>
+					<?php endif; ?>
+
 					<h2>Booking-standardvalg</h2>
 					<table class="form-table" role="presentation">
 						<tbody>
