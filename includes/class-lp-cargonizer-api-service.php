@@ -1259,6 +1259,9 @@ class LP_Cargonizer_Api_Service {
 				$name = trim(preg_replace('/\s+[\x{2013}\x{2014}-]\s+.*/u', '', $label_fallback));
 			}
 		}
+		if ($name === '' && $selection_value !== '') {
+			$name = $selection_value;
+		}
 		$address1 = $resolve_selection_field('address1', array('address_1', 'servicepartner_address1', 'servicepartner_address_1'));
 		$address2 = $resolve_selection_field('address2', array('address_2', 'servicepartner_address2', 'servicepartner_address_2'));
 		$postcode = $resolve_selection_field('postcode', array('zip', 'servicepartner_postcode'));
