@@ -213,8 +213,8 @@ class LP_Cargonizer_Connector {
 		return $this->settings_service->get_settings();
 	}
 
-	private function get_auth_headers() {
-		return $this->api_service->get_auth_headers();
+	private function get_auth_headers($sender_id_override = '') {
+		return $this->api_service->get_auth_headers($sender_id_override);
 	}
 
 	private function mask_value($value, $show_last = 4) {
@@ -228,8 +228,8 @@ class LP_Cargonizer_Connector {
 		return str_repeat('*', max(0, $len - $show_last)) . substr($value, -$show_last);
 	}
 
-	private function fetch_transport_agreements() {
-		return $this->api_service->fetch_transport_agreements();
+	private function fetch_transport_agreements($sender_id_override = '') {
+		return $this->api_service->fetch_transport_agreements($sender_id_override);
 	}
 
 	private function fetch_printers() {
@@ -393,8 +393,8 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->get_last_xml_build_error();
 	}
 
-	private function create_booking_consignment($xml) {
-		return $this->api_service->create_booking_consignment($xml);
+	private function create_booking_consignment($xml, $sender_id_override = '') {
+		return $this->api_service->create_booking_consignment($xml, $sender_id_override);
 	}
 
 	private function fetch_authenticated_binary_url($url) {

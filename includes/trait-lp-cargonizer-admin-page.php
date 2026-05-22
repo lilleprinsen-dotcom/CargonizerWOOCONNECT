@@ -662,6 +662,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'checkout_method_rules' => array(
 					'rules' => $this->parse_checkout_method_rules_editor_input(isset($_POST['lp_cargonizer_checkout_method_rules']) && is_array($_POST['lp_cargonizer_checkout_method_rules']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules']) : array()),
 				),
+				'warehouse_profiles' => isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array(),
 				'checkout_fallback' => array(
 					'on_quote_failure' => isset($_POST['lp_cargonizer_checkout_fallback_on_quote_failure']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_on_quote_failure'])) : '',
 					'allow_checkout_with_fallback' => isset($_POST['lp_cargonizer_checkout_fallback_allow_checkout']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_allow_checkout'])) : '0',
