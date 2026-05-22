@@ -44,7 +44,7 @@ class LP_Cargonizer_Api_Service {
 		return self::get_api_base_url() . $normalized_path;
 	}
 
-	public function get_auth_headers() {
+	public function get_auth_headers($sender_id_override = '') {
 		$settings = call_user_func($this->settings_provider);
 		if (!is_array($settings)) {
 			$settings = array();
@@ -52,6 +52,7 @@ class LP_Cargonizer_Api_Service {
 
 		$api_key = isset($settings['api_key']) ? (string) $settings['api_key'] : '';
 		$sender_id = isset($settings['sender_id']) ? (string) $settings['sender_id'] : '';
+		if ((string)$sender_id_override !== '') { $sender_id = (string) $sender_id_override; }
 
 		return array(
 			'X-Cargonizer-Key'    => $api_key,
@@ -60,13 +61,13 @@ class LP_Cargonizer_Api_Service {
 		);
 	}
 
-	public function fetch_transport_agreements() {
+	public function fetch_transport_agreements($sender_id_override = '') {
 		try {
 			$url = self::build_endpoint_url('/transport_agreements.xml');
 
 			$response = wp_remote_get($url, array(
 				'timeout' => 30,
-				'headers' => $this->get_auth_headers(),
+				'headers' => $this->get_auth_headers($sender_id_override),
 			));
 
 			if (is_wp_error($response)) {
@@ -197,7 +198,7 @@ class LP_Cargonizer_Api_Service {
 			$url = self::build_endpoint_url('/customers.xml');
 			$response = wp_remote_get($url, array(
 				'timeout' => 30,
-				'headers' => $this->get_auth_headers(),
+				'headers' => $this->get_auth_headers($sender_id_override),
 			));
 
 			if (is_wp_error($response)) {
@@ -225,6 +226,30 @@ class LP_Cargonizer_Api_Service {
 			$result['message'] = 'Uventet feil ved henting av sender-adresser: ' . $exception->getMessage();
 			return $result;
 		}
+	}
+
+
+	public function fetch_sender_profiles() {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'message' => 'Cargonizer does not appear to expose a sender-list endpoint through the documented API. Add sender IDs manually from Cargonizer Preferences.',
+			'raw' => '',
+			'profiles' => array(),
+		);
+
+		$profile_url = self::build_endpoint_url('/profile.xml');
+		$response = wp_remote_get($profile_url, array('timeout' => 30, 'headers' => $this->get_auth_headers('')));
+		if (is_wp_error($response)) {
+			$result['message'] = 'WP Error: ' . $response->get_error_message();
+			return $result;
+		}
+		$result['http_status'] = wp_remote_retrieve_response_code($response);
+		$result['raw'] = (string) wp_remote_retrieve_body($response);
+		if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+			return $result;
+		}
+		return $result;
 	}
 
 	public function parse_sender_addresses_response($body, $http_status = 200) {
@@ -682,7 +707,7 @@ class LP_Cargonizer_Api_Service {
 
 		$response = wp_remote_get($request_url, array(
 			'timeout' => max(1.0, min(30.0, (float) $request_timeout_seconds)),
-			'headers' => $this->get_auth_headers(),
+			'headers' => $this->get_auth_headers($sender_id_override),
 		));
 
 		if (is_wp_error($response)) {
@@ -1633,7 +1658,7 @@ class LP_Cargonizer_Api_Service {
 		return $xml->asXML();
 	}
 
-	public function create_booking_consignment($xml) {
+	public function create_booking_consignment($xml, $sender_id_override = '') {
 		$result = array(
 			'success' => false,
 			'http_status' => 0,
@@ -1656,7 +1681,7 @@ class LP_Cargonizer_Api_Service {
 
 		$response = wp_remote_post(self::build_endpoint_url('/consignments.xml'), array(
 			'timeout' => 40,
-			'headers' => array_merge($this->get_auth_headers(), array(
+			'headers' => array_merge($this->get_auth_headers($sender_id_override), array(
 				'Accept' => 'application/xml',
 				'Content-Type' => 'application/xml',
 			)),
@@ -1794,7 +1819,7 @@ class LP_Cargonizer_Api_Service {
 
 		$response = wp_remote_get($url, array(
 			'timeout' => 40,
-			'headers' => array_merge($this->get_auth_headers(), array(
+			'headers' => array_merge($this->get_auth_headers($sender_id_override), array(
 				'Accept' => 'application/pdf',
 			)),
 		));

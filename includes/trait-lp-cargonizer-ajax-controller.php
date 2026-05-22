@@ -556,7 +556,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
 		}
 
-		$servicepartner_selection_debug = array(
+		
+		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
+		$sender_id_override = isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '';
+$servicepartner_selection_debug = array(
 			'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 			'servicepartner_auto_selected' => false,
 			'selected_servicepartner' => $method_payload['servicepartner'],
@@ -597,7 +600,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			), 500);
 		}
 
-		$booking_result = $this->create_booking_consignment($xml);
+		$booking_result = $this->create_booking_consignment($xml, $sender_id_override);
 		if (empty($booking_result['success'])) {
 			$combined_error_text = strtolower(trim(
 				(isset($booking_result['error_code']) ? $booking_result['error_code'] : '') . ' ' .
@@ -700,6 +703,12 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['history'] = $history;
 
 		$this->save_order_booking_state($order, $booking_state);
+		if (!empty($warehouse_profile)) {
+			update_post_meta($order->get_id(), '_lp_cargonizer_warehouse_profile_id', isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '');
+			update_post_meta($order->get_id(), '_lp_cargonizer_sender_id_used', isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '');
+			update_post_meta($order->get_id(), '_lp_cargonizer_sender_profile_name', isset($warehouse_profile['name']) ? (string) $warehouse_profile['name'] : '');
+		}
+
 		$creator_name = $booking_state['created_by_display_name'] !== '' ? $booking_state['created_by_display_name'] : $booking_state['created_by_user_login'];
 		$tracking_link = $booking_state['tracking_url'] !== ''
 			? '<a href="' . esc_url($booking_state['tracking_url']) . '" target="_blank" rel="noopener noreferrer">' . esc_html($booking_state['tracking_url']) . '</a>'
@@ -731,6 +740,29 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		));
 	}
 
+
+
+	private function resolve_selected_warehouse_profile($requested_profile_id = '') {
+		$settings = $this->get_settings();
+		$warehouse_profiles = isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array();
+		$profiles = isset($warehouse_profiles['profiles']) && is_array($warehouse_profiles['profiles']) ? $warehouse_profiles['profiles'] : array();
+		$default_id = isset($warehouse_profiles['default_profile_id']) ? sanitize_key((string) $warehouse_profiles['default_profile_id']) : '';
+		$requested_profile_id = sanitize_key((string) $requested_profile_id);
+		$selected = array();
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) { continue; }
+			$pid = isset($profile['profile_id']) ? sanitize_key((string) $profile['profile_id']) : '';
+			if ($pid === '') { continue; }
+			if ($requested_profile_id !== '' && $pid === $requested_profile_id) { $selected = $profile; break; }
+			if ($requested_profile_id === '' && $default_id !== '' && $pid === $default_id) { $selected = $profile; }
+		}
+		if (empty($selected) && !empty($profiles) && is_array($profiles[0])) { $selected = $profiles[0]; }
+		if (empty($selected)) {
+			$sender_id = isset($settings['sender_id']) ? sanitize_text_field((string) $settings['sender_id']) : '';
+			if ($sender_id !== '') { $selected = array('profile_id'=>'legacy_default_sender','name'=>'Default sender','sender_id'=>$sender_id); }
+		}
+		return $selected;
+	}
 
 	public function ajax_get_shipping_options() {
 		if (!current_user_can('manage_woocommerce')) {

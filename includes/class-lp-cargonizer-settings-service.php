@@ -20,6 +20,7 @@ class LP_Cargonizer_Settings_Service {
 		$defaults = array(
 			'api_key'   => '',
 			'sender_id' => '',
+			'warehouse_profiles' => $this->get_warehouse_profiles_defaults(),
 			'booking_email_notification_default' => 1,
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
@@ -52,6 +53,11 @@ class LP_Cargonizer_Settings_Service {
 		$output = array(
 			'api_key'   => isset($input['api_key']) ? sanitize_text_field($input['api_key']) : '',
 			'sender_id' => isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : '',
+			'warehouse_profiles' => $this->sanitize_warehouse_profiles_settings(
+				isset($input['warehouse_profiles']) && is_array($input['warehouse_profiles']) ? $input['warehouse_profiles'] : array(),
+				isset($current['warehouse_profiles']) && is_array($current['warehouse_profiles']) ? $current['warehouse_profiles'] : array(),
+				isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : ''
+			),
 			'booking_email_notification_default' => array_key_exists('booking_email_notification_default', $input)
 				? $this->sanitize_checkbox_value($input['booking_email_notification_default'])
 				: (isset($current['booking_email_notification_default']) ? $this->sanitize_checkbox_value($current['booking_email_notification_default']) : 1),
@@ -980,4 +986,50 @@ class LP_Cargonizer_Settings_Service {
 
 		return false;
 	}
+	private function get_warehouse_profiles_defaults() {
+		return array(
+			'default_profile_id' => '',
+			'profiles' => array(),
+			'methods_by_profile' => array(),
+		);
+	}
+
+	private function sanitize_warehouse_profiles_settings($input, $current, $fallback_sender_id = '') {
+		$output = $this->get_warehouse_profiles_defaults();
+		$profiles = isset($input['profiles']) && is_array($input['profiles']) ? $input['profiles'] : (isset($current['profiles']) && is_array($current['profiles']) ? $current['profiles'] : array());
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) { continue; }
+			$profile_id = isset($profile['profile_id']) ? sanitize_key((string)$profile['profile_id']) : '';
+			if ($profile_id==='') { $profile_id='wh_'.wp_generate_password(8,false,false); }
+			$sender_id = isset($profile['sender_id']) ? sanitize_text_field((string)$profile['sender_id']) : '';
+			if ($sender_id==='') { continue; }
+			$output['profiles'][] = array(
+				'profile_id'=>$profile_id,'name'=>isset($profile['name'])?sanitize_text_field((string)$profile['name']):$sender_id,'sender_id'=>$sender_id,
+				'company'=>isset($profile['company'])?sanitize_text_field((string)$profile['company']):'', 'address1'=>isset($profile['address1'])?sanitize_text_field((string)$profile['address1']):'',
+				'address2'=>isset($profile['address2'])?sanitize_text_field((string)$profile['address2']):'', 'postcode'=>isset($profile['postcode'])?sanitize_text_field((string)$profile['postcode']):'',
+				'city'=>isset($profile['city'])?sanitize_text_field((string)$profile['city']):'', 'country'=>isset($profile['country'])?sanitize_text_field((string)$profile['country']):'',
+				'email'=>isset($profile['email'])?sanitize_email((string)$profile['email']):'', 'phone'=>isset($profile['phone'])?sanitize_text_field((string)$profile['phone']):'',
+				'default_printer_id'=>isset($profile['default_printer_id'])?sanitize_text_field((string)$profile['default_printer_id']):'',
+				'active'=>!empty($profile['active'])?1:0,'use_as_pickup_address'=>!empty($profile['use_as_pickup_address'])?1:0,'use_as_return_address'=>!empty($profile['use_as_return_address'])?1:0,
+			);
+		}
+		$default_profile_id = isset($input['default_profile_id']) ? sanitize_key((string)$input['default_profile_id']) : (isset($current['default_profile_id']) ? sanitize_key((string)$current['default_profile_id']) : '');
+		if ($default_profile_id!=='') { $output['default_profile_id']=$default_profile_id; }
+		if (empty($output['profiles'])) {
+			$legacy_sender = $fallback_sender_id !== '' ? $fallback_sender_id : (isset($current['sender_id']) ? sanitize_text_field((string)$current['sender_id']) : '');
+			if ($legacy_sender!=='') {
+				$output['profiles'][] = array('profile_id'=>'default_sender','name'=>'Default sender','sender_id'=>$legacy_sender,'company'=>'','address1'=>'','address2'=>'','postcode'=>'','city'=>'','country'=>'','email'=>'','phone'=>'','default_printer_id'=>'','active'=>1,'use_as_pickup_address'=>0,'use_as_return_address'=>0);
+				$output['default_profile_id'] = 'default_sender';
+			}
+		}
+		if ($output['default_profile_id']==='' && !empty($output['profiles'])) { $output['default_profile_id'] = $output['profiles'][0]['profile_id']; }
+		if (isset($input['methods_by_profile']) && is_array($input['methods_by_profile'])) {
+			foreach ($input['methods_by_profile'] as $pid => $keys) {
+				$pid=sanitize_key((string)$pid); if($pid===''){continue;}
+				$output['methods_by_profile'][$pid]=array_values(array_unique(array_filter(array_map('sanitize_text_field', is_array($keys)?$keys:array()))));
+			}
+		}
+		return $output;
+	}
+
 }
