@@ -835,7 +835,7 @@ class LP_Cargonizer_Api_Service {
 				continue;
 			}
 
-			$name = $this->xml_value_or_attribute($node, array('name', 'title', 'display_name', 'description'));
+			$name = $this->xml_value_or_attribute($node, array('name', 'company', 'title', 'display_name', 'description'));
 			$address1 = $this->xml_value_or_attribute($node, array('address1', 'address_1', 'street', 'address'));
 			$address2 = $this->xml_value_or_attribute($node, array('address2', 'address_2'));
 			$postcode = $this->xml_value_or_attribute($node, array('postcode', 'postalcode', 'zip'));
@@ -1253,6 +1253,12 @@ class LP_Cargonizer_Api_Service {
 		};
 
 		$name = $resolve_selection_field('name', array('servicepartner_name'));
+		if ($name === '') {
+			$label_fallback = $resolve_selection_field('label', array());
+			if ($label_fallback !== '') {
+				$name = trim(preg_replace('/\s+[\x{2013}\x{2014}-]\s+.*/u', '', $label_fallback));
+			}
+		}
 		$address1 = $resolve_selection_field('address1', array('address_1', 'servicepartner_address1', 'servicepartner_address_1'));
 		$address2 = $resolve_selection_field('address2', array('address_2', 'servicepartner_address2', 'servicepartner_address_2'));
 		$postcode = $resolve_selection_field('postcode', array('zip', 'servicepartner_postcode'));
