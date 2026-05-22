@@ -15,6 +15,201 @@ class LP_Cargonizer_Package_Builder {
 		$this->settings_provider = is_callable($settings_provider) ? $settings_provider : null;
 	}
 
+	public function build_admin_prefill_packages_from_order($order) {
+		if (!$order || !is_object($order) || !method_exists($order, 'get_items')) {
+			return array();
+		}
+
+		$packages = array();
+		foreach ($order->get_items() as $item) {
+			if (!is_a($item, 'WC_Order_Item_Product')) {
+				continue;
+			}
+
+			$quantity = max(1, (int) $item->get_quantity());
+			$item_name = (string) $item->get_name();
+			$product = $item->get_product();
+			if (!$product || !is_object($product)) {
+				continue;
+			}
+
+			$resolved_product = $this->resolve_admin_prefill_product_for_item($product);
+			$base_metrics = $this->extract_admin_prefill_metrics($resolved_product);
+			$default_name = $item_name !== '' ? $item_name : (method_exists($resolved_product, 'get_name') ? (string) $resolved_product->get_name() : '');
+
+			$separate = (string) get_post_meta((int) $resolved_product->get_id(), '_wildrobot_separate_package_for_product', true) === 'yes';
+			$separate_name = trim((string) get_post_meta((int) $resolved_product->get_id(), '_wildrobot_separate_package_for_product_name', true));
+			$preferred_name = $separate_name !== '' ? $separate_name : $default_name;
+
+			$definition_rows = $this->build_admin_prefill_definition_rows($resolved_product, $quantity, $default_name, $preferred_name, $base_metrics);
+			if (!empty($definition_rows)) {
+				$packages = array_merge($packages, $definition_rows);
+				continue;
+			}
+
+			if ($separate) {
+				for ($i = 0; $i < $quantity; $i++) {
+					$packages[] = $this->build_admin_prefill_package_row($preferred_name, $preferred_name, $base_metrics, 1);
+				}
+				continue;
+			}
+
+			$packages[] = $this->build_admin_prefill_package_row($default_name, $default_name, $base_metrics, $quantity);
+		}
+
+		return array_values(array_filter($packages, function ($pkg) {
+			return is_array($pkg)
+				&& ($pkg['name'] !== ''
+					|| $pkg['description'] !== ''
+					|| (float) $pkg['weight'] > 0
+					|| (float) $pkg['length'] > 0
+					|| (float) $pkg['width'] > 0
+					|| (float) $pkg['height'] > 0);
+		}));
+	}
+
+	private function resolve_admin_prefill_product_for_item($product) {
+		if (is_a($product, 'WC_Product_Variation')) {
+			$parent_id = method_exists($product, 'get_parent_id') ? (int) $product->get_parent_id() : 0;
+			if ($parent_id > 0) {
+				$parent = wc_get_product($parent_id);
+				if ($parent && is_object($parent)) {
+					$variation = clone $product;
+					$variation->set_weight($this->pick_admin_prefill_numeric($variation->get_weight(), $parent->get_weight()));
+					$variation->set_length($this->pick_admin_prefill_numeric($variation->get_length(), $parent->get_length()));
+					$variation->set_width($this->pick_admin_prefill_numeric($variation->get_width(), $parent->get_width()));
+					$variation->set_height($this->pick_admin_prefill_numeric($variation->get_height(), $parent->get_height()));
+					return $variation;
+				}
+			}
+		}
+		return $product;
+	}
+
+	private function extract_admin_prefill_metrics($product) {
+		return array(
+			'weight' => $this->normalize_admin_prefill_number(method_exists($product, 'get_weight') ? $product->get_weight() : 0),
+			'length' => $this->normalize_admin_prefill_number(method_exists($product, 'get_length') ? $product->get_length() : 0),
+			'width' => $this->normalize_admin_prefill_number(method_exists($product, 'get_width') ? $product->get_width() : 0),
+			'height' => $this->normalize_admin_prefill_number(method_exists($product, 'get_height') ? $product->get_height() : 0),
+		);
+	}
+
+	private function build_admin_prefill_definition_rows($product, $quantity, $fallback_name, $separate_name, $base_metrics) {
+		$amount = absint(get_post_meta((int) $product->get_id(), '_wildrobot_package_amount', true));
+		if ($amount <= 0) {
+			return array();
+		}
+
+		$rows = array();
+		for ($i = 0; $i < $amount; $i++) {
+			$definition = $this->normalize_admin_prefill_package_definition(get_post_meta((int) $product->get_id(), '_wildrobot_package_' . $i, true));
+			if (empty($definition)) {
+				continue;
+			}
+
+			$max_amount = isset($definition['max_amount']) ? max(1, (int) $definition['max_amount']) : 0;
+			$metrics = array(
+				'weight' => isset($definition['weight']) ? $definition['weight'] : $base_metrics['weight'],
+				'length' => isset($definition['length']) ? $definition['length'] : $base_metrics['length'],
+				'width' => isset($definition['width']) ? $definition['width'] : $base_metrics['width'],
+				'height' => isset($definition['height']) ? $definition['height'] : $base_metrics['height'],
+			);
+			$name = isset($definition['name']) && $definition['name'] !== '' ? $definition['name'] : ($separate_name !== '' ? $separate_name : $fallback_name);
+			$description = isset($definition['description']) && $definition['description'] !== '' ? $definition['description'] : $name;
+
+			if ($max_amount > 0) {
+				$units_left = $quantity;
+				while ($units_left > 0) {
+					$row_quantity = min($max_amount, $units_left);
+					$rows[] = $this->build_admin_prefill_package_row($name, $description, $metrics, $row_quantity);
+					$units_left -= $row_quantity;
+				}
+				continue;
+			}
+
+			$rows[] = $this->build_admin_prefill_package_row($name, $description, $metrics, $quantity);
+		}
+
+		return $rows;
+	}
+
+	private function normalize_admin_prefill_package_definition($raw) {
+		$definition = maybe_unserialize($raw);
+		if (!is_array($definition)) {
+			return array();
+		}
+
+		$normalized = array();
+		foreach (array('name', 'description') as $text_key) {
+			if (isset($definition[$text_key])) {
+				$normalized[$text_key] = trim((string) $definition[$text_key]);
+			}
+		}
+		foreach (array('weight', 'length', 'width', 'height') as $numeric_key) {
+			if (isset($definition[$numeric_key])) {
+				$normalized[$numeric_key] = $this->normalize_admin_prefill_number($definition[$numeric_key]);
+			}
+		}
+		if (isset($definition['max_amount'])) {
+			$normalized['max_amount'] = max(0, (int) $definition['max_amount']);
+		}
+
+		foreach (array('name', 'description', 'weight', 'length', 'width', 'height', 'max_amount') as $key) {
+			if (!empty($normalized[$key])) {
+				return $normalized;
+			}
+		}
+		return array();
+	}
+
+	private function build_admin_prefill_package_row($name, $description, $metrics, $quantity) {
+		$quantity = max(1, (int) $quantity);
+		$stacked_dimensions = $this->stack_admin_prefill_dimensions($metrics, $quantity);
+		return array(
+			'name' => (string) $name,
+			'description' => (string) $description,
+			'weight' => round(((float) $metrics['weight']) * $quantity, 3),
+			'length' => round((float) $stacked_dimensions['length'], 3),
+			'width' => round((float) $stacked_dimensions['width'], 3),
+			'height' => round((float) $stacked_dimensions['height'], 3),
+		);
+	}
+
+	private function stack_admin_prefill_dimensions($metrics, $quantity) {
+		$values = array(
+			'length' => isset($metrics['length']) ? (float) $metrics['length'] : 0,
+			'width' => isset($metrics['width']) ? (float) $metrics['width'] : 0,
+			'height' => isset($metrics['height']) ? (float) $metrics['height'] : 0,
+		);
+		$positive = array_filter($values, function ($value) {
+			return (float) $value > 0;
+		});
+		if (count($positive) === 3 && (int) $quantity > 1) {
+			asort($positive, SORT_NUMERIC);
+			$smallest_dimension = key($positive);
+			$values[$smallest_dimension] = $values[$smallest_dimension] * (int) $quantity;
+		}
+		return $values;
+	}
+
+	private function normalize_admin_prefill_number($value) {
+		if (is_string($value)) {
+			$value = str_replace(',', '.', $value);
+		}
+		$value = is_numeric($value) ? (float) $value : 0;
+		return $value > 0 ? $value : 0;
+	}
+
+	private function pick_admin_prefill_numeric($preferred, $fallback) {
+		$preferred_value = $this->normalize_admin_prefill_number($preferred);
+		if ($preferred_value > 0) {
+			return (string) $preferred_value;
+		}
+		$fallback_value = $this->normalize_admin_prefill_number($fallback);
+		return $fallback_value > 0 ? (string) $fallback_value : '';
+	}
+
 	public function build_from_order($order) {
 		if (!$order || !is_object($order) || !method_exists($order, 'get_items')) {
 			return $this->empty_result();

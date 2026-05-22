@@ -38,32 +38,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'sku' => $product ? $product->get_sku() : '',
 			);
 
-			if (!$product) {
-				continue;
-			}
+		}
 
-			$separate = get_post_meta($product->get_id(), '_wildrobot_separate_package_for_product', true);
-			if ($separate !== 'yes') {
-				continue;
-			}
-
-			$package_name = get_post_meta($product->get_id(), '_wildrobot_separate_package_for_product_name', true);
-			if ($package_name === '') {
-				$package_name = $item->get_name();
-			}
-
-			$base_package = array(
-				'name' => $package_name,
-				'description' => $item->get_name(),
-				'weight' => get_post_meta($product->get_id(), '_weight', true),
-				'length' => get_post_meta($product->get_id(), '_length', true),
-				'width' => get_post_meta($product->get_id(), '_width', true),
-				'height' => get_post_meta($product->get_id(), '_height', true),
-			);
-
-			for ($i = 0; $i < max(1, $quantity); $i++) {
-				$packages[] = $base_package;
-			}
+		if (isset($this->package_builder_service) && is_object($this->package_builder_service) && method_exists($this->package_builder_service, 'build_admin_prefill_packages_from_order')) {
+			$packages = $this->package_builder_service->build_admin_prefill_packages_from_order($order);
 		}
 
 		$settings = $this->get_settings();
