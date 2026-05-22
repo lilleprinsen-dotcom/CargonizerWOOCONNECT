@@ -195,10 +195,10 @@ class LP_Cargonizer_Api_Service {
 		);
 
 		try {
-			$url = self::build_endpoint_url('/customers.xml');
+			$url = self::build_endpoint_url('/profile.xml');
 			$response = wp_remote_get($url, array(
 				'timeout' => 30,
-				'headers' => $this->get_auth_headers($sender_id_override),
+				'headers' => $this->get_auth_headers(''),
 			));
 
 			if (is_wp_error($response)) {
@@ -275,7 +275,7 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		$candidate_nodes = array();
-		$paths = array('//customer', '//customers/customer');
+		$paths = array('//sender', '//senders/sender', '//profile/senders/sender', '//user_sender', '//user_senders/user_sender');
 		foreach ($paths as $path) {
 			$found = $xml->xpath($path);
 			if (!empty($found)) {
@@ -284,16 +284,22 @@ class LP_Cargonizer_Api_Service {
 			}
 		}
 
-		if (empty($candidate_nodes) && isset($xml->customer)) {
-			foreach ($xml->customer as $customer) {
-				$candidate_nodes[] = $customer;
+		if (empty($candidate_nodes)) {
+			if (isset($xml->sender)) {
+				foreach ($xml->sender as $sender) {
+					$candidate_nodes[] = $sender;
+				}
+			} elseif (isset($xml->senders) && isset($xml->senders->sender)) {
+				foreach ($xml->senders->sender as $sender) {
+					$candidate_nodes[] = $sender;
+				}
 			}
 		}
 
 		$addresses = array();
 		foreach ($candidate_nodes as $node) {
-			$id = $this->xml_value($node, array('id', 'customer_id', 'number', 'identifier'));
-			$name = $this->xml_value($node, array('name', 'title'));
+			$id = $this->xml_value($node, array('id', 'sender_id', 'number', 'identifier', 'user_sender_id'));
+			$name = $this->xml_value($node, array('name', 'title', 'sender_name', 'company'));
 			$address1 = $this->xml_value($node, array('address1', 'address_1', 'street', 'street1'));
 			$address2 = $this->xml_value($node, array('address2', 'address_2', 'street2'));
 			$postcode = $this->xml_value($node, array('postcode', 'postal_code', 'zip'));
