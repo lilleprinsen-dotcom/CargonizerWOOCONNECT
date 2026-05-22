@@ -1223,8 +1223,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</tbody>
 					</table>
 
-					<h2>Sender-adresser (read-only)</h2>
-					<p>Hentes fra Cargonizer API for valgt API key + sender-ID. Ingen data lagres eller brukes videre enn visning i admin.</p>
+					<h2>Kunde-adresser fra Cargonizer (read-only)</h2>
+					<p>Hentes fra Cargonizer /customers-endepunktet for valgt API key + sender-ID. Viser kundeadresser (ikke warehouse-/sender-profiler). Ingen data lagres eller brukes videre enn visning i admin.</p>
 					<?php
 					$sender_addresses_fetch_result = array(
 						'success' => false,
@@ -1275,9 +1275,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							</tbody>
 						</table>
 					<?php elseif (empty($settings['api_key']) || empty($settings['sender_id'])) : ?>
-						<p class="description">Legg inn både API key og sender-ID for å hente sender-adresser fra Cargonizer.</p>
+						<p class="description">Legg inn både API key og sender-ID for å hente kundeadresser fra Cargonizer.</p>
 					<?php else : ?>
-						<p class="description" style="color:#b32d2e;"><?php echo esc_html($sender_addresses_fetch_result['message'] !== '' ? $sender_addresses_fetch_result['message'] : 'Kunne ikke hente sender-adresser.'); ?></p>
+						<p class="description" style="color:#b32d2e;"><?php echo esc_html($sender_addresses_fetch_result['message'] !== '' ? $sender_addresses_fetch_result['message'] : 'Kunne ikke hente kundeadresser.'); ?></p>
 					<?php endif; ?>
 
 					<h2>Booking-standardvalg</h2>
