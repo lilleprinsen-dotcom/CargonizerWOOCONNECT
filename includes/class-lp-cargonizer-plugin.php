@@ -27,11 +27,17 @@ class LP_Cargonizer_Plugin {
 	public function bootstrap() {
 		$this->log_live_checkout_event('debug', 'Bootstrapping Cargonizer plugin services.');
 		$this->connector->register_hooks();
-		$this->checkout_pickup_controller->register_hooks();
-		$this->checkout_pickup_compatibility_layer->register_hooks();
-		$this->checkout_selection_persistence_service->register_hooks();
-		add_action('woocommerce_shipping_init', array($this, 'register_live_shipping_method_class'));
-		add_filter('woocommerce_shipping_methods', array($this, 'register_live_shipping_method_id'));
+		if ($this->is_live_checkout_enabled()) {
+			$this->checkout_pickup_controller->register_hooks();
+			$this->checkout_pickup_compatibility_layer->register_hooks();
+			$this->checkout_selection_persistence_service->register_hooks();
+			add_action('woocommerce_shipping_init', array($this, 'register_live_shipping_method_class'));
+			add_filter('woocommerce_shipping_methods', array($this, 'register_live_shipping_method_id'));
+			$this->log_live_checkout_event('debug', 'Live checkout hooks enabled.');
+			return;
+		}
+
+		$this->log_live_checkout_event('debug', 'Live checkout hooks skipped because live checkout is disabled.');
 	}
 
 	public function register_live_shipping_method_class() {
@@ -81,5 +87,11 @@ class LP_Cargonizer_Plugin {
 		$settings = $this->settings_service->get_settings();
 		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
 		return !empty($live_settings['debug_logging']);
+	}
+
+	private function is_live_checkout_enabled() {
+		$settings = $this->settings_service->get_settings();
+		$live_settings = isset($settings['live_checkout']) && is_array($settings['live_checkout']) ? $settings['live_checkout'] : array();
+		return !empty($live_settings['enabled']);
 	}
 }
