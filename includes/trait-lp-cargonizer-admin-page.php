@@ -1615,16 +1615,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<hr style="margin:24px 0;">
 					<h2>Grunnoppsett / Enkel oppsett</h2>
 					<p class="description" style="max-width:900px;">Anbefalt for vanlig butikkdrift. Sett Norge-only, fri frakt-terskel, 69 kr under terskel, hentested og fallback uten å åpne avanserte JSON-felt.</p>
-					<h3 style="margin-bottom:4px;">Fraktpriser i checkout</h3>
-					<p class="description" style="margin-top:0;">Kjernevalg for prisvisning og terskelregler.</p>
+					<h3 style="margin-bottom:4px;">Fraktpriser i checkout (valgfritt)</h3>
+					<p class="description" style="margin-top:0;">Standardmodus er admin booking only. Aktiver live checkout under for å vise Cargonizer/Logistra i kundekassen.</p>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>
-								<th scope="row">Aktiver live checkout</th>
+								<th scope="row">Enable live checkout rates and pickup points</th>
 								<td>
 									<input type="hidden" name="lp_cargonizer_live_checkout[enabled]" value="0">
-									<label><input type="checkbox" name="lp_cargonizer_live_checkout[enabled]" value="1" <?php checked(!empty($live_checkout['enabled'])); ?>> Vis Cargonizer-metoder i checkout</label>
-									<p class="description">Når denne er av, påvirkes ikke checkout av live-rater.</p>
+									<label><input type="checkbox" name="lp_cargonizer_live_checkout[enabled]" value="1" <?php checked(!empty($live_checkout['enabled'])); ?>> Vis live Cargonizer/Logistra-rater og hentepunkt i checkout</label>
+									<p class="description">Av (standard): Admin booking only. Kunder ser ikke Cargonizer/Logistra-rater, pickup-point selector eller checkout-script.</p>
 								</td>
 							</tr>
 							<tr>
