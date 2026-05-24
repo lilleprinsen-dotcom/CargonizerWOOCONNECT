@@ -22,6 +22,7 @@ class LP_Cargonizer_Settings_Service {
 			'sender_id' => '',
 			'warehouse_profiles' => $this->get_warehouse_profiles_defaults(),
 			'booking_email_notification_default' => 1,
+			'printer_aliases' => array(),
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
@@ -61,6 +62,7 @@ class LP_Cargonizer_Settings_Service {
 			'booking_email_notification_default' => array_key_exists('booking_email_notification_default', $input)
 				? $this->sanitize_checkbox_value($input['booking_email_notification_default'])
 				: (isset($current['booking_email_notification_default']) ? $this->sanitize_checkbox_value($current['booking_email_notification_default']) : 1),
+			'printer_aliases' => array(),
 			'available_methods' => array(),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
@@ -95,6 +97,18 @@ class LP_Cargonizer_Settings_Service {
 		}
 		if ($output['sender_id'] === '' && !empty($current['sender_id'])) {
 			$output['sender_id'] = $current['sender_id'];
+		}
+
+		$printer_aliases_input = isset($input['printer_aliases']) && is_array($input['printer_aliases'])
+			? $input['printer_aliases']
+			: (isset($current['printer_aliases']) && is_array($current['printer_aliases']) ? $current['printer_aliases'] : array());
+		foreach ($printer_aliases_input as $printer_id => $alias_label) {
+			$clean_printer_id = sanitize_text_field((string) $printer_id);
+			$clean_alias_label = sanitize_text_field((string) $alias_label);
+			if ($clean_printer_id === '' || $clean_alias_label === '') {
+				continue;
+			}
+			$output['printer_aliases'][$clean_printer_id] = $clean_alias_label;
 		}
 
 		$available_map = array();

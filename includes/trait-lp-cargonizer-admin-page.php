@@ -640,6 +640,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
 				'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
+				'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => is_array($posted_enabled_methods)
 					? $posted_enabled_methods
@@ -1311,6 +1312,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						$printer_fetch_result = $this->fetch_printers();
 					}
 					$available_printers = isset($printer_fetch_result['printers']) && is_array($printer_fetch_result['printers']) ? $printer_fetch_result['printers'] : array();
+					$available_printers = $this->apply_printer_aliases($available_printers);
+					$saved_printer_aliases = isset($settings['printer_aliases']) && is_array($settings['printer_aliases']) ? $settings['printer_aliases'] : array();
 					?>
 					<table class="form-table" role="presentation">
 						<tbody>
@@ -1341,6 +1344,44 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<?php endif; ?>
 								</td>
 							</tr>
+						</tbody>
+					</table>
+
+					<h2>Egendefinerte printernavn</h2>
+					<p>Legg inn et visningsnavn per printer. Vises som «Ditt navn (faktisk printer-navn)» i valg og booking.</p>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<?php if (!empty($available_printers)) : ?>
+								<?php foreach ($available_printers as $printer) : ?>
+									<?php
+									$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+									if ($printer_id === '') {
+										continue;
+									}
+									$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+									$saved_alias = isset($saved_printer_aliases[$printer_id]) ? sanitize_text_field((string) $saved_printer_aliases[$printer_id]) : '';
+									?>
+									<tr>
+										<th scope="row">
+											<label for="<?php echo esc_attr('lp_cargonizer_printer_alias_' . $printer_id); ?>"><?php echo esc_html($printer_label); ?></label>
+										</th>
+										<td>
+											<input
+												type="text"
+												name="lp_cargonizer_printer_aliases[<?php echo esc_attr($printer_id); ?>]"
+												id="<?php echo esc_attr('lp_cargonizer_printer_alias_' . $printer_id); ?>"
+												value="<?php echo esc_attr($saved_alias); ?>"
+												class="regular-text"
+												placeholder="<?php echo esc_attr('f.eks. Printing desk 1'); ?>"
+											/>
+										</td>
+									</tr>
+								<?php endforeach; ?>
+							<?php elseif (empty($settings['api_key'])) : ?>
+								<tr><td colspan="2"><p class="description">Legg inn API key for å hente printerliste fra Cargonizer.</p></td></tr>
+							<?php else : ?>
+								<tr><td colspan="2"><p class="description" style="color:#b32d2e;"><?php echo esc_html($printer_fetch_result['message'] !== '' ? $printer_fetch_result['message'] : 'Kunne ikke hente printerliste.'); ?></p></td></tr>
+							<?php endif; ?>
 						</tbody>
 					</table>
 
