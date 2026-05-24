@@ -268,6 +268,9 @@ class LP_Cargonizer_Connector {
 			foreach ($agreement['products'] as $product) {
 				$product_id = isset($product['product_id']) ? (string) $product['product_id'] : '';
 				$product_name = isset($product['product_name']) ? (string) $product['product_name'] : '';
+				if ($agreement_id === '' || $product_id === '') {
+					continue;
+				}
 				$key = implode('|', array($agreement_id, $product_id));
 
 				if ($key === '|') {

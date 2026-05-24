@@ -349,7 +349,7 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		foreach ($agreements as $agreement) {
-			$agreement_id   = $this->xml_value($agreement, array('id', 'transport_agreement_id'));
+			$agreement_id   = $this->xml_value($agreement, array('id', 'identifier', 'agreement_id', 'agreement-id', 'transport_agreement_id', 'transport-agreement-id'));
 			$agreement_description = $this->xml_value($agreement, array('description'));
 			$agreement_number = $this->xml_value($agreement, array('number'));
 			$agreement_name = $agreement_description !== '' ? $agreement_description : $this->xml_value($agreement, array('name', 'title'));
@@ -452,9 +452,29 @@ class LP_Cargonizer_Api_Service {
 	}
 
 	public function xml_value($node, $possible_keys = array()) {
+		if (!is_object($node)) {
+			return '';
+		}
 		foreach ($possible_keys as $key) {
-			if (isset($node->{$key}) && trim((string) $node->{$key}) !== '') {
-				return trim((string) $node->{$key});
+			$key = (string) $key;
+			$key_variants = array_values(array_unique(array(
+				$key,
+				str_replace('_', '-', $key),
+				str_replace('-', '_', $key),
+			)));
+			foreach ($key_variants as $candidate_key) {
+				if ($candidate_key === '') {
+					continue;
+				}
+				if (isset($node->{$candidate_key}) && trim((string) $node->{$candidate_key}) !== '') {
+					return trim((string) $node->{$candidate_key});
+				}
+				if (method_exists($node, 'attributes')) {
+					$attributes = $node->attributes();
+					if ($attributes && isset($attributes[$candidate_key]) && trim((string) $attributes[$candidate_key]) !== '') {
+						return trim((string) $attributes[$candidate_key]);
+					}
+				}
 			}
 		}
 		return '';
@@ -1141,7 +1161,7 @@ class LP_Cargonizer_Api_Service {
 			'parcel_pickup_point',
 		);
 		$has_strict_pickup_id = in_array($product_id, $strict_pickup_product_ids, true);
-		$has_pickup_phrase = strpos($product_name, 'service point') !== false || strpos($product_name, 'pickup point') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_name, 'hentested') !== false;
+		$has_pickup_phrase = strpos($product_name, 'service point') !== false || strpos($product_name, 'pickup point') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_name, 'locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_name, 'pakkeautomat') !== false || strpos($product_name, 'hentested') !== false || strpos($product_name, 'utleveringssted') !== false;
 		if ($delivery_to_pickup_point && $delivery_to_home) {
 			return $has_strict_pickup_id;
 		}
@@ -1474,11 +1494,27 @@ class LP_Cargonizer_Api_Service {
 			);
 			return '';
 		}
+		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
+		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+		if ($agreement_id === '' || $product_id === '') {
+			$this->set_last_xml_build_error(
+				'Mangler transport agreement eller produkt på Cargonizer-metoden under estimering av fraktpris.',
+				array(
+					'method_key' => isset($method['key']) ? sanitize_text_field((string) $method['key']) : '',
+					'agreement_id' => $agreement_id,
+					'product_id' => $product_id,
+					'carrier_id' => isset($method['carrier_id']) ? sanitize_text_field((string) $method['carrier_id']) : '',
+					'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field((string) $method['carrier_name']) : '',
+					'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
+				)
+			);
+			return '';
+		}
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
-		$consignment->addAttribute('transport_agreement', $this->resolve_transport_agreement_id($method));
-		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
+		$consignment->addAttribute('transport_agreement', $agreement_id);
+		$consignment->addChild('product', $product_id);
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
 		$consignee->addChild('name', (string) (isset($recipient['name']) ? $recipient['name'] : ''));
