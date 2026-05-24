@@ -319,6 +319,14 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 	}
 
 	private function sanitize_posted_method_payload($method) {
+		$agreement_id = '';
+		if (isset($method['agreement_id'])) {
+			$agreement_id = sanitize_text_field((string) $method['agreement_id']);
+		}
+		if ($agreement_id === '' && isset($method['transport_agreement_id'])) {
+			$agreement_id = sanitize_text_field((string) $method['transport_agreement_id']);
+		}
+
 		$selected_service_ids = array();
 		if (isset($method['selected_service_ids']) && is_array($method['selected_service_ids'])) {
 			foreach ($method['selected_service_ids'] as $selected_service_id) {
@@ -347,7 +355,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$payload = array(
 			'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
-			'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
+			'agreement_id' => $agreement_id,
 			'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 			'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
 			'agreement_number' => isset($method['agreement_number']) ? sanitize_text_field($method['agreement_number']) : '',
