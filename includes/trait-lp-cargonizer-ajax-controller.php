@@ -271,6 +271,38 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return $choice;
 	}
 
+	private function get_printer_alias_map_from_settings() {
+		$settings = $this->get_settings();
+		$aliases = isset($settings['printer_aliases']) && is_array($settings['printer_aliases']) ? $settings['printer_aliases'] : array();
+		$clean = array();
+		foreach ($aliases as $printer_id => $alias) {
+			$clean_id = sanitize_text_field((string) $printer_id);
+			$clean_alias = sanitize_text_field((string) $alias);
+			if ($clean_id === '' || $clean_alias === '') {
+				continue;
+			}
+			$clean[$clean_id] = $clean_alias;
+		}
+		return $clean;
+	}
+
+	private function apply_printer_aliases($printers) {
+		$printer_list = is_array($printers) ? $printers : array();
+		$aliases = $this->get_printer_alias_map_from_settings();
+		foreach ($printer_list as &$printer) {
+			if (!is_array($printer)) {
+				continue;
+			}
+			$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+			$base_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+			if ($printer_id !== '' && isset($aliases[$printer_id])) {
+				$printer['label'] = $aliases[$printer_id] . ' (' . $base_label . ')';
+			}
+		}
+		unset($printer);
+		return $printer_list;
+	}
+
 	private function sanitize_posted_packages($packages) {
 		$clean_packages = array();
 		foreach ($packages as $package) {
@@ -652,6 +684,20 @@ $servicepartner_selection_debug = array(
 			$booking_state['print']['attempted'] = true;
 			$booking_state['print']['printer_id'] = $printer_id;
 			$booking_state['print']['printer_label'] = $printer_id;
+			$printer_result = $this->fetch_printers();
+			if (!empty($printer_result['success'])) {
+				$aliased_printers = $this->apply_printer_aliases(isset($printer_result['printers']) ? $printer_result['printers'] : array());
+				foreach ($aliased_printers as $printer) {
+					if (!is_array($printer)) {
+						continue;
+					}
+					$candidate_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+					if ($candidate_id === $printer_id) {
+						$booking_state['print']['printer_label'] = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+						break;
+					}
+				}
+			}
 			if ($booking_state['consignment_pdf_url'] === '') {
 				$booking_state['print']['success'] = false;
 				$booking_state['print']['message'] = 'Mangler consignment PDF-URL fra bookingrespons.';
@@ -866,7 +912,7 @@ $servicepartner_selection_debug = array(
 		}
 
 		wp_send_json_success(array(
-			'printers' => isset($printer_result['printers']) && is_array($printer_result['printers']) ? $printer_result['printers'] : array(),
+			'printers' => $this->apply_printer_aliases(isset($printer_result['printers']) && is_array($printer_result['printers']) ? $printer_result['printers'] : array()),
 			'default_printer_id' => $default_printer_id,
 		));
 	}
