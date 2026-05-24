@@ -595,6 +595,22 @@
 				return selectEl.options[index].getAttribute('data-customer-number') || '';
 			}
 
+			function resolveServicepartnerSelectedOption(methodKey, servicepartnerValue){
+				var value = servicepartnerValue ? String(servicepartnerValue) : '';
+				if (!methodKey || !value) { return null; }
+				var row = getResultRowByMethodKey(methodKey) || getMethodDataByKey(methodKey);
+				var options = row && Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
+				for (var i = 0; i < options.length; i++) {
+					var opt = options[i];
+					if (!opt) { continue; }
+					var optValue = opt.value ? String(opt.value) : '';
+					if (optValue === value) {
+						return opt;
+					}
+				}
+				return null;
+			}
+
 			function pickDefaultServicepartnerOption(options){
 				if (!Array.isArray(options)) { return null; }
 				for (var i = 0; i < options.length; i++) {
@@ -1819,6 +1835,7 @@
 				}
 				method.servicepartner = selectedServicepartner || '';
 				method.servicepartner_customer_number = '';
+				method.servicepartner_selected_option = null;
 				method.servicepartner_selection_source = method.servicepartner ? 'manual' : 'none';
 				method.servicepartner_user_selected = !!method.servicepartner;
 				if (bookingResultsContent) {
@@ -1844,6 +1861,9 @@
 				}
 				if (proactiveVisibleForMethod && methodLikelyNeedsServicepartner(method) && proactiveOptionsCount <= 1 && !method.servicepartner) {
 					setProactiveServicepartnerHelp('Ingen servicepartnere tilgjengelige fra oppslaget. Booking kan fortsatt feile.', '#8a4b00');
+				}
+				if (method.servicepartner) {
+					method.servicepartner_selected_option = resolveServicepartnerSelectedOption(methodKey, method.servicepartner);
 				}
 				var notifyEmailToConsignee = bookingNotifyCheckbox ? !!bookingNotifyCheckbox.checked : false;
 				if (notifyEmailToConsignee && (!currentRecipient || !currentRecipient.email)) {
