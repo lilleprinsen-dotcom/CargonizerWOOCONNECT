@@ -838,8 +838,8 @@ class LP_Cargonizer_Api_Service {
 			$name = $this->xml_value_or_attribute($node, array('name', 'company', 'title', 'display_name', 'description'));
 			$address1 = $this->xml_value_or_attribute($node, array('address1', 'address_1', 'street', 'address'));
 			$address2 = $this->xml_value_or_attribute($node, array('address2', 'address_2'));
-			$postcode = $this->xml_value_or_attribute($node, array('postcode', 'postalcode', 'zip'));
-			$city = $this->xml_value_or_attribute($node, array('city', 'post_area', 'municipality'));
+			$postcode = $this->xml_value_or_attribute($node, array('postcode', 'postalcode', 'postal_code', 'post_code', 'zip', 'postnummer'));
+			$city = $this->xml_value_or_attribute($node, array('city', 'post_area', 'postal_city', 'post_place', 'municipality', 'poststed'));
 			$country = $this->xml_value_or_attribute($node, array('country', 'country_code'));
 			$customer_number = $this->xml_value_or_attribute($node, array('customer-number', 'customer_number', 'customernumber'));
 			$distance_raw = $this->xml_value_or_attribute($node, array('distance_in_meters', 'meters', 'meter', 'distance_meters', 'distance_km', 'distance'));
