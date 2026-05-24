@@ -1258,7 +1258,7 @@ class LP_Cargonizer_Api_Service {
 		}
 		$address1 = $resolve_selection_field('address1', array('address_1', 'servicepartner_address1', 'servicepartner_address_1'));
 		$address2 = $resolve_selection_field('address2', array('address_2', 'servicepartner_address2', 'servicepartner_address_2'));
-		$postcode = $resolve_selection_field('postcode', array('zip', 'servicepartner_postcode'));
+		$postcode = $resolve_selection_field('postcode', array('postal_code', 'postalCode', 'zip', 'postnummer', 'servicepartner_postcode'));
 		$city = $resolve_selection_field('city', array('servicepartner_city'));
 		$country = $resolve_selection_field('country', array('country_code', 'servicepartner_country'));
 		$country = $this->sanitize_country_code($country);
@@ -1279,6 +1279,46 @@ class LP_Cargonizer_Api_Service {
 			'city' => $city,
 			'country' => $country,
 		);
+	}
+
+	private function build_servicepartner_validation_context($servicepartner_selection, $method = array(), $payload = array()) {
+		return array(
+			'order_id' => isset($payload['order_id']) ? sanitize_text_field((string) $payload['order_id']) : '',
+			'carrier' => isset($method['carrier']) ? sanitize_text_field((string) $method['carrier']) : '',
+			'product' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
+			'service_partner' => array(
+				'number' => isset($servicepartner_selection['number']) ? (string) $servicepartner_selection['number'] : '',
+				'name' => isset($servicepartner_selection['name']) ? (string) $servicepartner_selection['name'] : '',
+				'address1' => isset($servicepartner_selection['address1']) ? (string) $servicepartner_selection['address1'] : '',
+				'postcode' => isset($servicepartner_selection['postcode']) ? (string) $servicepartner_selection['postcode'] : '',
+				'city' => isset($servicepartner_selection['city']) ? (string) $servicepartner_selection['city'] : '',
+				'country' => isset($servicepartner_selection['country']) ? (string) $servicepartner_selection['country'] : '',
+			),
+		);
+	}
+
+	private function validate_required_servicepartner_fields($servicepartner_selection, $method = array(), $payload = array()) {
+		if (!is_array($servicepartner_selection) || !isset($servicepartner_selection['number']) || trim((string) $servicepartner_selection['number']) === '') {
+			return true;
+		}
+
+		$required_fields = array('name', 'address1', 'postcode', 'city', 'country');
+		foreach ($required_fields as $required_field) {
+			$value = isset($servicepartner_selection[$required_field]) ? trim((string) $servicepartner_selection[$required_field]) : '';
+			if ($value !== '') {
+				continue;
+			}
+
+			$context = $this->build_servicepartner_validation_context($servicepartner_selection, $method, $payload);
+			$this->set_last_xml_build_error(
+				'Ugyldig service_partner for Cargonizer: mangler felt "' . $required_field . '".',
+				$context
+			);
+			error_log('LP Cargonizer: invalid service_partner payload - missing "' . $required_field . '" | context=' . wp_json_encode($context));
+			return false;
+		}
+
+		return true;
 	}
 
 	public function sanitize_country_code($value) {
@@ -1360,6 +1400,21 @@ class LP_Cargonizer_Api_Service {
 		return preg_replace('/[^A-Za-z0-9\- ]/', '', sanitize_text_field((string) $value));
 	}
 
+	private function resolve_transport_agreement_id($method) {
+		$method = is_array($method) ? $method : array();
+		$candidate_keys = array('agreement_id', 'transport_agreement_id', 'transport_agreement');
+		foreach ($candidate_keys as $candidate_key) {
+			if (!isset($method[$candidate_key])) {
+				continue;
+			}
+			$value = sanitize_text_field((string) $method[$candidate_key]);
+			if ($value !== '') {
+				return $value;
+			}
+		}
+		return '';
+	}
+
 	private function resolve_recipient_country_code($recipient, $method = array()) {
 		$recipient = is_array($recipient) ? $recipient : array();
 		$method = is_array($method) ? $method : array();
@@ -1398,6 +1453,9 @@ class LP_Cargonizer_Api_Service {
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$servicepartner_selection = $this->extract_servicepartner_selection($payload, $method);
+		if (!$this->validate_required_servicepartner_fields($servicepartner_selection, $method, $payload)) {
+			return '';
+		}
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
@@ -1419,7 +1477,7 @@ class LP_Cargonizer_Api_Service {
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
-		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
+		$consignment->addAttribute('transport_agreement', $this->resolve_transport_agreement_id($method));
 		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
@@ -1429,6 +1487,19 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
 		$consignee->addChild('country', (string) $country_resolution['normalized']);
+		error_log('LP Cargonizer: estimate payload summary ' . wp_json_encode(array(
+			'carrier' => isset($method['carrier']) ? sanitize_text_field((string) $method['carrier']) : '',
+			'product' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
+			'consignee' => array(
+				'postcode' => isset($recipient['postcode']) ? (string) $recipient['postcode'] : '',
+			),
+			'service_partner' => array(
+				'number' => isset($servicepartner_selection['number']) ? (string) $servicepartner_selection['number'] : '',
+				'postcode' => isset($servicepartner_selection['postcode']) ? (string) $servicepartner_selection['postcode'] : '',
+				'city' => isset($servicepartner_selection['city']) ? (string) $servicepartner_selection['city'] : '',
+				'country' => isset($servicepartner_selection['country']) ? (string) $servicepartner_selection['country'] : '',
+			),
+		)));
 		if ($servicepartner_selection['number'] !== '') {
 			$service_partner = $parts->addChild('service_partner');
 			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
@@ -1526,6 +1597,9 @@ class LP_Cargonizer_Api_Service {
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$order_number = isset($payload['order_number']) ? sanitize_text_field((string) $payload['order_number']) : '';
 		$servicepartner_selection = $this->extract_servicepartner_selection($payload, $method);
+		if (!$this->validate_required_servicepartner_fields($servicepartner_selection, $method, $payload)) {
+			return '';
+		}
 		$use_sms_service = !empty($payload['use_sms_service']);
 		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$selected_service_ids = isset($payload['selected_service_ids']) && is_array($payload['selected_service_ids']) ? $payload['selected_service_ids'] : array();
@@ -1551,7 +1625,7 @@ class LP_Cargonizer_Api_Service {
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
-		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
+		$consignment->addAttribute('transport_agreement', $this->resolve_transport_agreement_id($method));
 		$consignment->addAttribute('print', 'false');
 		$consignment->addAttribute('estimate', 'false');
 		$consignment->addChild('transfer', $transfer ? 'true' : 'false');
@@ -1567,6 +1641,20 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
 		$consignee->addChild('country', (string) $country_resolution['normalized']);
+		error_log('LP Cargonizer: booking payload summary ' . wp_json_encode(array(
+			'order_id' => isset($payload['order_id']) ? sanitize_text_field((string) $payload['order_id']) : '',
+			'carrier' => isset($method['carrier']) ? sanitize_text_field((string) $method['carrier']) : '',
+			'product' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
+			'consignee' => array(
+				'postcode' => isset($recipient['postcode']) ? (string) $recipient['postcode'] : '',
+			),
+			'service_partner' => array(
+				'number' => isset($servicepartner_selection['number']) ? (string) $servicepartner_selection['number'] : '',
+				'postcode' => isset($servicepartner_selection['postcode']) ? (string) $servicepartner_selection['postcode'] : '',
+				'city' => isset($servicepartner_selection['city']) ? (string) $servicepartner_selection['city'] : '',
+				'country' => isset($servicepartner_selection['country']) ? (string) $servicepartner_selection['country'] : '',
+			),
+		)));
 
 		$email = isset($recipient['email']) ? trim((string) $recipient['email']) : '';
 		if ($email !== '') {
