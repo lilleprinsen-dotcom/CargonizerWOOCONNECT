@@ -850,8 +850,13 @@ $servicepartner_selection_debug = array(
 		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
 		$order = $order_id ? wc_get_order($order_id) : false;
 
+		$posted_agreement_id = isset($_POST['agreement_id']) ? sanitize_text_field(wp_unslash($_POST['agreement_id'])) : '';
+		if ($posted_agreement_id === '' && isset($_POST['transport_agreement_id'])) {
+			$posted_agreement_id = sanitize_text_field(wp_unslash($_POST['transport_agreement_id']));
+		}
+
 		$method = array(
-			'agreement_id' => isset($_POST['agreement_id']) ? sanitize_text_field(wp_unslash($_POST['agreement_id'])) : '',
+			'agreement_id' => $posted_agreement_id,
 			'product_id' => isset($_POST['product_id']) ? sanitize_text_field(wp_unslash($_POST['product_id'])) : '',
 			'carrier_id' => isset($_POST['carrier_id']) ? sanitize_text_field(wp_unslash($_POST['carrier_id'])) : '',
 			'carrier_name' => isset($_POST['carrier_name']) ? sanitize_text_field(wp_unslash($_POST['carrier_name'])) : '',

@@ -1400,6 +1400,21 @@ class LP_Cargonizer_Api_Service {
 		return preg_replace('/[^A-Za-z0-9\- ]/', '', sanitize_text_field((string) $value));
 	}
 
+	private function resolve_transport_agreement_id($method) {
+		$method = is_array($method) ? $method : array();
+		$candidate_keys = array('agreement_id', 'transport_agreement_id', 'transport_agreement');
+		foreach ($candidate_keys as $candidate_key) {
+			if (!isset($method[$candidate_key])) {
+				continue;
+			}
+			$value = sanitize_text_field((string) $method[$candidate_key]);
+			if ($value !== '') {
+				return $value;
+			}
+		}
+		return '';
+	}
+
 	private function resolve_recipient_country_code($recipient, $method = array()) {
 		$recipient = is_array($recipient) ? $recipient : array();
 		$method = is_array($method) ? $method : array();
@@ -1462,7 +1477,7 @@ class LP_Cargonizer_Api_Service {
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
-		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
+		$consignment->addAttribute('transport_agreement', $this->resolve_transport_agreement_id($method));
 		$consignment->addChild('product', (string) (isset($method['product_id']) ? $method['product_id'] : ''));
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
@@ -1610,7 +1625,7 @@ class LP_Cargonizer_Api_Service {
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
-		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
+		$consignment->addAttribute('transport_agreement', $this->resolve_transport_agreement_id($method));
 		$consignment->addAttribute('print', 'false');
 		$consignment->addAttribute('estimate', 'false');
 		$consignment->addChild('transfer', $transfer ? 'true' : 'false');
