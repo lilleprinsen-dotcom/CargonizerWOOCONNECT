@@ -1038,6 +1038,16 @@ $servicepartner_selection_debug = array(
 				$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			}
 			$method_payload['is_manual_norgespakke'] = $this->is_manual_norgespakke_method($method_payload);
+			error_log('LP Cargonizer estimate freight: method context=' . wp_json_encode(array(
+				'method_key' => isset($method_payload['key']) ? $method_payload['key'] : '',
+				'agreement_id' => isset($method_payload['agreement_id']) ? $method_payload['agreement_id'] : '',
+				'product_id' => isset($method_payload['product_id']) ? $method_payload['product_id'] : '',
+				'carrier_id' => isset($method_payload['carrier_id']) ? $method_payload['carrier_id'] : '',
+				'carrier_name' => isset($method_payload['carrier_name']) ? $method_payload['carrier_name'] : '',
+				'product_name' => isset($method_payload['product_name']) ? $method_payload['product_name'] : '',
+				'endpoint' => '/consignment_costs.xml',
+				'blocked_before_api' => false,
+			)));
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			if (!isset($enabled_map[$method_key])) {
 				continue;
@@ -1303,6 +1313,26 @@ $servicepartner_selection_debug = array(
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
 			), $method_payload);
+			if ($xml === '') {
+				$xml_build_error = $this->api_service->get_last_xml_build_error();
+				error_log('LP Cargonizer estimate freight: method context=' . wp_json_encode(array(
+					'method_key' => isset($method_payload['key']) ? $method_payload['key'] : '',
+					'agreement_id' => isset($method_payload['agreement_id']) ? $method_payload['agreement_id'] : '',
+					'product_id' => isset($method_payload['product_id']) ? $method_payload['product_id'] : '',
+					'carrier_id' => isset($method_payload['carrier_id']) ? $method_payload['carrier_id'] : '',
+					'carrier_name' => isset($method_payload['carrier_name']) ? $method_payload['carrier_name'] : '',
+					'product_name' => isset($method_payload['product_name']) ? $method_payload['product_name'] : '',
+					'endpoint' => '/consignment_costs.xml',
+					'blocked_before_api' => true,
+				)));
+				$item['status'] = 'failed';
+				$item['reason_code'] = 'estimate_config_invalid';
+				$item['error'] = 'Mangler transport agreement. Hent fraktmetoder på nytt og lagre metoden på nytt.';
+				$item['parsed_error_message'] = 'estimate_config_invalid: Mangler transport agreement. Hent fraktmetoder på nytt og lagre metoden på nytt.';
+				$item['context'] = isset($xml_build_error['context']) && is_array($xml_build_error['context']) ? $xml_build_error['context'] : array();
+				$results[] = $item;
+				continue;
+			}
 
 			$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 				'timeout' => 40,
