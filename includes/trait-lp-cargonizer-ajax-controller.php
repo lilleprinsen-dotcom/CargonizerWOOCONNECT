@@ -297,6 +297,22 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			}
 		}
 
+		$servicepartner_selected_option = array();
+		if (isset($method['servicepartner_selected_option']) && is_array($method['servicepartner_selected_option'])) {
+			$servicepartner_selected_option = array(
+				'value' => isset($method['servicepartner_selected_option']['value']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['value']) : '',
+				'label' => isset($method['servicepartner_selected_option']['label']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['label']) : '',
+				'customer_number' => isset($method['servicepartner_selected_option']['customer_number']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['customer_number']) : '',
+				'postcode' => isset($method['servicepartner_selected_option']['postcode']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['postcode']) : '',
+				'city' => isset($method['servicepartner_selected_option']['city']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['city']) : '',
+				'country' => isset($method['servicepartner_selected_option']['country']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['country']) : '',
+				'address1' => isset($method['servicepartner_selected_option']['address1']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['address1']) : '',
+				'address2' => isset($method['servicepartner_selected_option']['address2']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['address2']) : '',
+				'name' => isset($method['servicepartner_selected_option']['name']) ? sanitize_text_field((string) $method['servicepartner_selected_option']['name']) : '',
+				'raw' => isset($method['servicepartner_selected_option']['raw']) && is_array($method['servicepartner_selected_option']['raw']) ? $method['servicepartner_selected_option']['raw'] : array(),
+			);
+		}
+
 		$payload = array(
 			'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
 			'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
@@ -311,6 +327,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
 			'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? sanitize_text_field($method['servicepartner_selection_source']) : '',
 			'servicepartner_user_selected' => !empty($method['servicepartner_user_selected']),
+			'servicepartner_selected_option' => $servicepartner_selected_option,
 			'use_sms_service' => !empty($method['use_sms_service']),
 			'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 			'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
@@ -561,6 +578,7 @@ $servicepartner_selection_debug = array(
 			'packages' => $clean_packages,
 			'order_number' => $order->get_order_number(),
 			'servicepartner' => $method_payload['servicepartner'],
+			'servicepartner_selected_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
 			'use_sms_service' => $method_payload['use_sms_service'],
 			'sms_service_id' => $method_payload['sms_service_id'],
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
