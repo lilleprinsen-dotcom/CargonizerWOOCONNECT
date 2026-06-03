@@ -1316,11 +1316,45 @@ class LP_Cargonizer_Api_Service {
 		/*
 		 * Cargonizer documents only service_partner/number as required for domestic
 		 * pickup-point consignments. Name/address fields from service_partners are
-		 * useful metadata and are included below when available, but must not block
-		 * estimation when an embedded checkout or carrier response only provides the
-		 * exact required pickup-point number.
+		 * useful metadata for non-domestic service point flows, but must not block
+		 * domestic estimation when only the exact pickup-point number is needed.
 		 */
 		return true;
+	}
+
+	private function add_servicepartner_xml_node($parts, $servicepartner_selection, $include_optional_address_fields = true) {
+		if (!is_object($parts) || !is_array($servicepartner_selection) || !isset($servicepartner_selection['number']) || trim((string) $servicepartner_selection['number']) === '') {
+			return;
+		}
+
+		$service_partner = $parts->addChild('service_partner');
+		$service_partner->addChild('number', (string) $servicepartner_selection['number']);
+		if (isset($servicepartner_selection['customer_number']) && $servicepartner_selection['customer_number'] !== '') {
+			$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
+		}
+
+		if (!$include_optional_address_fields) {
+			return;
+		}
+
+		if (isset($servicepartner_selection['name']) && $servicepartner_selection['name'] !== '') {
+			$service_partner->addChild('name', (string) $servicepartner_selection['name']);
+		}
+		if (isset($servicepartner_selection['address1']) && $servicepartner_selection['address1'] !== '') {
+			$service_partner->addChild('address1', (string) $servicepartner_selection['address1']);
+		}
+		if (isset($servicepartner_selection['address2']) && $servicepartner_selection['address2'] !== '') {
+			$service_partner->addChild('address2', (string) $servicepartner_selection['address2']);
+		}
+		if (isset($servicepartner_selection['postcode']) && $servicepartner_selection['postcode'] !== '') {
+			$service_partner->addChild('postcode', (string) $servicepartner_selection['postcode']);
+		}
+		if (isset($servicepartner_selection['city']) && $servicepartner_selection['city'] !== '') {
+			$service_partner->addChild('city', (string) $servicepartner_selection['city']);
+		}
+		if (isset($servicepartner_selection['country']) && $servicepartner_selection['country'] !== '') {
+			$service_partner->addChild('country', (string) $servicepartner_selection['country']);
+		}
 	}
 
 	public function sanitize_country_code($value) {
@@ -1518,31 +1552,7 @@ class LP_Cargonizer_Api_Service {
 				'country' => isset($servicepartner_selection['country']) ? (string) $servicepartner_selection['country'] : '',
 			),
 		)));
-		if ($servicepartner_selection['number'] !== '') {
-			$service_partner = $parts->addChild('service_partner');
-			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
-			if ($servicepartner_selection['customer_number'] !== '') {
-				$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
-			}
-			if ($servicepartner_selection['name'] !== '') {
-				$service_partner->addChild('name', (string) $servicepartner_selection['name']);
-			}
-			if ($servicepartner_selection['address1'] !== '') {
-				$service_partner->addChild('address1', (string) $servicepartner_selection['address1']);
-			}
-			if ($servicepartner_selection['address2'] !== '') {
-				$service_partner->addChild('address2', (string) $servicepartner_selection['address2']);
-			}
-			if ($servicepartner_selection['postcode'] !== '') {
-				$service_partner->addChild('postcode', (string) $servicepartner_selection['postcode']);
-			}
-			if ($servicepartner_selection['city'] !== '') {
-				$service_partner->addChild('city', (string) $servicepartner_selection['city']);
-			}
-			if ($servicepartner_selection['country'] !== '') {
-				$service_partner->addChild('country', (string) $servicepartner_selection['country']);
-			}
-		}
+		$this->add_servicepartner_xml_node($parts, $servicepartner_selection, $country_resolution['normalized'] !== 'NO');
 
 		$all_service_ids = array();
 		foreach ($selected_service_ids as $selected_service_id) {
@@ -1687,31 +1697,7 @@ class LP_Cargonizer_Api_Service {
 			$consignee->addChild('mobile', $mobile);
 		}
 
-		if ($servicepartner_selection['number'] !== '') {
-			$service_partner = $parts->addChild('service_partner');
-			$service_partner->addChild('number', (string) $servicepartner_selection['number']);
-			if ($servicepartner_selection['customer_number'] !== '') {
-				$service_partner->addChild('customer-number', (string) $servicepartner_selection['customer_number']);
-			}
-			if ($servicepartner_selection['name'] !== '') {
-				$service_partner->addChild('name', (string) $servicepartner_selection['name']);
-			}
-			if ($servicepartner_selection['address1'] !== '') {
-				$service_partner->addChild('address1', (string) $servicepartner_selection['address1']);
-			}
-			if ($servicepartner_selection['address2'] !== '') {
-				$service_partner->addChild('address2', (string) $servicepartner_selection['address2']);
-			}
-			if ($servicepartner_selection['postcode'] !== '') {
-				$service_partner->addChild('postcode', (string) $servicepartner_selection['postcode']);
-			}
-			if ($servicepartner_selection['city'] !== '') {
-				$service_partner->addChild('city', (string) $servicepartner_selection['city']);
-			}
-			if ($servicepartner_selection['country'] !== '') {
-				$service_partner->addChild('country', (string) $servicepartner_selection['country']);
-			}
-		}
+		$this->add_servicepartner_xml_node($parts, $servicepartner_selection, $country_resolution['normalized'] !== 'NO');
 
 		$items = $consignment->addChild('items');
 		if (empty($packages)) {
