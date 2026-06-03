@@ -68,6 +68,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'checkout_selection' => $this->load_order_checkout_selection($order),
 			'booking_defaults' => array(
 				'notify_email_to_consignee' => isset($settings['booking_email_notification_default']) ? (int) $this->sanitize_checkbox_value($settings['booking_email_notification_default']) : 1,
+				'estimator_top_count' => isset($settings['booking_estimator_top_count']) ? max(3, min(5, absint($settings['booking_estimator_top_count']))) : 3,
+				'pickup_autoselect_mode' => isset($settings['booking_pickup_autoselect_mode']) && in_array((string) $settings['booking_pickup_autoselect_mode'], array('nearest', 'none'), true) ? (string) $settings['booking_pickup_autoselect_mode'] : 'nearest',
 			),
 		);
 
@@ -171,6 +173,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'printer_label' => '',
 				'message' => '',
 				'raw_response' => '',
+				'groups' => array(),
+				'pieces' => array(),
 			),
 		);
 	}
@@ -187,9 +191,13 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				$print = isset($state['print']) && is_array($state['print']) ? $state['print'] : array();
 				foreach ($default['print'] as $print_key => $print_default) {
 					if (array_key_exists($print_key, $print)) {
-						$normalized['print'][$print_key] = is_bool($print_default)
-							? (bool) $print[$print_key]
-							: sanitize_text_field((string) $print[$print_key]);
+						if (is_bool($print_default)) {
+							$normalized['print'][$print_key] = (bool) $print[$print_key];
+						} elseif (is_array($print_default)) {
+							$normalized['print'][$print_key] = $this->sanitize_booking_print_array(isset($print[$print_key]) && is_array($print[$print_key]) ? $print[$print_key] : array());
+						} else {
+							$normalized['print'][$print_key] = sanitize_text_field((string) $print[$print_key]);
+						}
 					}
 				}
 				continue;
@@ -223,6 +231,23 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		return $normalized;
+	}
+
+	private function sanitize_booking_print_array($value) {
+		$clean = array();
+		foreach ((array) $value as $key => $item) {
+			$clean_key = is_int($key) ? $key : sanitize_key((string) $key);
+			if (is_array($item)) {
+				$clean[$clean_key] = $this->sanitize_booking_print_array($item);
+			} elseif (is_bool($item)) {
+				$clean[$clean_key] = $item;
+			} elseif (is_numeric($item)) {
+				$clean[$clean_key] = $item + 0;
+			} else {
+				$clean[$clean_key] = sanitize_text_field((string) $item);
+			}
+		}
+		return $clean;
 	}
 
 	private function load_order_booking_state($order) {
@@ -271,6 +296,25 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return $choice;
 	}
 
+	private function sanitize_package_printer_assignments($assignments) {
+		$clean = array();
+		foreach ((array) $assignments as $package_index => $printer_id) {
+			$index = absint($package_index);
+			$clean_printer_id = sanitize_text_field((string) $printer_id);
+			if ($clean_printer_id === '' || $clean_printer_id === '__default__') {
+				continue;
+			}
+			$clean[$index] = $clean_printer_id;
+		}
+		return $clean;
+	}
+
+	private function get_booking_pickup_autoselect_mode() {
+		$settings = $this->get_settings();
+		$mode = isset($settings['booking_pickup_autoselect_mode']) ? sanitize_key((string) $settings['booking_pickup_autoselect_mode']) : 'nearest';
+		return in_array($mode, array('nearest', 'none'), true) ? $mode : 'nearest';
+	}
+
 	private function get_printer_alias_map_from_settings() {
 		$settings = $this->get_settings();
 		$aliases = isset($settings['printer_aliases']) && is_array($settings['printer_aliases']) ? $settings['printer_aliases'] : array();
@@ -301,6 +345,138 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 		unset($printer);
 		return $printer_list;
+	}
+
+	private function get_printer_label_map() {
+		$printer_result = $this->fetch_printers();
+		if (empty($printer_result['success'])) {
+			return array();
+		}
+		$labels = array();
+		$aliased_printers = $this->apply_printer_aliases(isset($printer_result['printers']) && is_array($printer_result['printers']) ? $printer_result['printers'] : array());
+		foreach ($aliased_printers as $printer) {
+			if (!is_array($printer)) {
+				continue;
+			}
+			$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+			if ($printer_id === '') {
+				continue;
+			}
+			$labels[$printer_id] = isset($printer['label']) && $printer['label'] !== '' ? sanitize_text_field((string) $printer['label']) : $printer_id;
+		}
+		return $labels;
+	}
+
+	private function run_booking_label_prints($booking_state, $packages, $default_printer_id, $package_printer_assignments, $sender_id_override = '') {
+		$default_booking_state = $this->get_default_booking_state();
+		$print_state = isset($booking_state['print']) && is_array($booking_state['print']) ? $booking_state['print'] : $default_booking_state['print'];
+		$piece_ids = isset($booking_state['piece_ids']) && is_array($booking_state['piece_ids']) ? array_values($booking_state['piece_ids']) : array();
+		$piece_numbers = isset($booking_state['piece_numbers']) && is_array($booking_state['piece_numbers']) ? array_values($booking_state['piece_numbers']) : array();
+		$package_count = count((array) $packages);
+		$assignments = is_array($package_printer_assignments) ? $package_printer_assignments : array();
+		$default_printer_id = sanitize_text_field((string) $default_printer_id);
+		$attempted = $default_printer_id !== '' || !empty($assignments);
+
+		if (!$attempted) {
+			return $print_state;
+		}
+
+		$printer_labels = $this->get_printer_label_map();
+		$groups = array();
+		$pieces = array();
+		$missing_piece_count = 0;
+
+		for ($index = 0; $index < $package_count; $index++) {
+			$override_printer_id = isset($assignments[$index]) ? sanitize_text_field((string) $assignments[$index]) : '';
+			$printer_id = $override_printer_id !== '' ? $override_printer_id : $default_printer_id;
+			if ($printer_id === '') {
+				continue;
+			}
+
+			$piece_id = isset($piece_ids[$index]) ? sanitize_text_field((string) $piece_ids[$index]) : '';
+			$piece_number = isset($piece_numbers[$index]) ? sanitize_text_field((string) $piece_numbers[$index]) : '';
+			$piece_row = array(
+				'package_index' => $index,
+				'colli' => $index + 1,
+				'piece_id' => $piece_id,
+				'piece_number' => $piece_number,
+				'printer_id' => $printer_id,
+				'printer_label' => isset($printer_labels[$printer_id]) ? $printer_labels[$printer_id] : $printer_id,
+				'override' => $override_printer_id !== '',
+				'success' => false,
+				'message' => '',
+			);
+
+			if ($piece_id === '') {
+				$piece_row['message'] = 'Mangler piece-id fra bookingrespons.';
+				$missing_piece_count++;
+				$pieces[] = $piece_row;
+				continue;
+			}
+
+			if (!isset($groups[$printer_id])) {
+				$groups[$printer_id] = array(
+					'printer_id' => $printer_id,
+					'printer_label' => isset($printer_labels[$printer_id]) ? $printer_labels[$printer_id] : $printer_id,
+					'piece_ids' => array(),
+					'package_indexes' => array(),
+					'success' => false,
+					'message' => '',
+					'http_status' => 0,
+					'raw_response' => '',
+				);
+			}
+			$groups[$printer_id]['piece_ids'][] = $piece_id;
+			$groups[$printer_id]['package_indexes'][] = $index;
+			$pieces[] = $piece_row;
+		}
+
+		$all_groups_success = true;
+		$raw_responses = array();
+		foreach ($groups as $printer_id => &$group) {
+			$print_result = $this->print_labels_direct($printer_id, array(), $group['piece_ids'], $sender_id_override);
+			$group['success'] = !empty($print_result['success']);
+			$group['message'] = !empty($print_result['success']) ? 'Label print queued.' : (isset($print_result['error']) ? (string) $print_result['error'] : 'Label print feilet.');
+			$group['http_status'] = isset($print_result['http_status']) ? (int) $print_result['http_status'] : 0;
+			$group['raw_response'] = isset($print_result['raw_response']) ? (string) $print_result['raw_response'] : '';
+			if ($group['raw_response'] !== '') {
+				$raw_responses[] = $group['raw_response'];
+			}
+			if (empty($group['success'])) {
+				$all_groups_success = false;
+			}
+			foreach ($pieces as &$piece_row) {
+				if ((string) $piece_row['printer_id'] === (string) $printer_id && $piece_row['piece_id'] !== '') {
+					$piece_row['success'] = $group['success'];
+					$piece_row['message'] = $group['message'];
+				}
+			}
+			unset($piece_row);
+		}
+		unset($group);
+
+		$group_count = count($groups);
+		$group_printer_ids = array_keys($groups);
+		$first_group_printer_id = isset($group_printer_ids[0]) ? (string) $group_printer_ids[0] : '';
+		$print_state['attempted'] = true;
+		$print_state['printer_id'] = $group_count === 1 ? $first_group_printer_id : ($group_count > 1 ? 'multiple' : $default_printer_id);
+		$print_state['printer_label'] = $group_count === 1
+			? (isset($printer_labels[$print_state['printer_id']]) ? $printer_labels[$print_state['printer_id']] : $print_state['printer_id'])
+			: ($group_count > 1 ? 'Flere printere' : (isset($printer_labels[$default_printer_id]) ? $printer_labels[$default_printer_id] : $default_printer_id));
+		$print_state['groups'] = array_values($groups);
+		$print_state['pieces'] = array_values($pieces);
+		$print_state['success'] = $group_count > 0 && $all_groups_success && $missing_piece_count === 0;
+		$print_state['message'] = $print_state['success']
+			? ($group_count > 1 ? 'Labeler sendt til ' . $group_count . ' printere.' : 'Labeler sendt til printer.')
+			: ($group_count === 0 ? 'Ingen labeler kunne sendes til printer.' : 'Én eller flere label-utskrifter feilet.');
+		if ($missing_piece_count > 0) {
+			$print_state['message'] .= ' Mangler piece-id for ' . $missing_piece_count . ' kolli.';
+		}
+		$print_state['raw_response'] = implode("\n---\n", array_map(function ($raw_response) {
+			return substr((string) $raw_response, 0, 500);
+		}, $raw_responses));
+
+		return $print_state;
 	}
 
 	private function sanitize_posted_packages($packages) {
@@ -389,6 +565,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 	private function should_attempt_servicepartner_autoselection($method_payload) {
 		if (!is_array($method_payload)) {
+			return false;
+		}
+		if ($this->get_booking_pickup_autoselect_mode() === 'none') {
 			return false;
 		}
 		$is_pickup_like = $this->is_method_explicitly_pickup_point($method_payload);
@@ -549,6 +728,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
 		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
+		$package_printer_assignments = isset($_POST['package_printer_assignments']) && is_array($_POST['package_printer_assignments'])
+			? $this->sanitize_package_printer_assignments(wp_unslash($_POST['package_printer_assignments']))
+			: array();
 		$enabled_map = $this->get_enabled_method_map();
 
 		if (empty($enabled_map)) {
@@ -711,41 +893,7 @@ $servicepartner_selection_debug = array(
 
 		$posted_printer_choice = isset($_POST['printer_choice']) ? wp_unslash($_POST['printer_choice']) : '';
 		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
-		if ($printer_id !== '') {
-			$booking_state['print']['attempted'] = true;
-			$booking_state['print']['printer_id'] = $printer_id;
-			$booking_state['print']['printer_label'] = $printer_id;
-			$printer_result = $this->fetch_printers();
-			if (!empty($printer_result['success'])) {
-				$aliased_printers = $this->apply_printer_aliases(isset($printer_result['printers']) ? $printer_result['printers'] : array());
-				foreach ($aliased_printers as $printer) {
-					if (!is_array($printer)) {
-						continue;
-					}
-					$candidate_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
-					if ($candidate_id === $printer_id) {
-						$booking_state['print']['printer_label'] = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
-						break;
-					}
-				}
-			}
-			if ($booking_state['consignment_pdf_url'] === '') {
-				$booking_state['print']['success'] = false;
-				$booking_state['print']['message'] = 'Mangler consignment PDF-URL fra bookingrespons.';
-			} else {
-				$pdf_fetch_result = $this->fetch_authenticated_binary_url($booking_state['consignment_pdf_url']);
-				if (empty($pdf_fetch_result['success'])) {
-					$booking_state['print']['success'] = false;
-					$booking_state['print']['message'] = isset($pdf_fetch_result['error']) ? (string) $pdf_fetch_result['error'] : 'Henting av PDF feilet.';
-					$booking_state['print']['raw_response'] = isset($pdf_fetch_result['raw_response']) ? (string) $pdf_fetch_result['raw_response'] : '';
-				} else {
-					$print_result = $this->print_pdf_to_printer($printer_id, isset($pdf_fetch_result['binary']) ? $pdf_fetch_result['binary'] : '');
-					$booking_state['print']['success'] = !empty($print_result['success']);
-					$booking_state['print']['message'] = !empty($print_result['success']) ? 'PDF sendt til printer.' : (isset($print_result['error']) ? (string) $print_result['error'] : 'Print feilet.');
-					$booking_state['print']['raw_response'] = isset($print_result['raw_response']) ? (string) $print_result['raw_response'] : '';
-				}
-			}
-		}
+		$booking_state['print'] = $this->run_booking_label_prints($booking_state, $clean_packages, $printer_id, $package_printer_assignments, $sender_id_override);
 
 		$history = isset($existing_booking_state['history']) && is_array($existing_booking_state['history']) ? $existing_booking_state['history'] : array();
 		if (!empty($existing_booking_state['booked'])) {

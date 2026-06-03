@@ -2087,6 +2087,81 @@ class LP_Cargonizer_Api_Service {
 		return $result;
 	}
 
+	public function print_labels_direct($printer_id, $consignment_ids, $piece_ids, $sender_id_override = '') {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error' => '',
+			'raw_response' => '',
+			'request_url' => '',
+		);
+
+		$printer_id = sanitize_text_field((string) $printer_id);
+		if ($printer_id === '') {
+			$result['error'] = 'Mangler printer-id.';
+			return $result;
+		}
+
+		$clean_consignment_ids = array();
+		foreach ((array) $consignment_ids as $consignment_id) {
+			$clean_consignment_id = sanitize_text_field((string) $consignment_id);
+			if ($clean_consignment_id !== '') {
+				$clean_consignment_ids[] = $clean_consignment_id;
+			}
+		}
+
+		$clean_piece_ids = array();
+		foreach ((array) $piece_ids as $piece_id) {
+			$clean_piece_id = sanitize_text_field((string) $piece_id);
+			if ($clean_piece_id !== '') {
+				$clean_piece_ids[] = $clean_piece_id;
+			}
+		}
+
+		if (empty($clean_consignment_ids) && empty($clean_piece_ids)) {
+			$result['error'] = 'Mangler consignment-id eller piece-id for label-utskrift.';
+			return $result;
+		}
+
+		$query_parts = array('printer_id=' . rawurlencode($printer_id));
+		foreach (array_values(array_unique($clean_consignment_ids)) as $consignment_id) {
+			$query_parts[] = rawurlencode('consignment_ids[]') . '=' . rawurlencode($consignment_id);
+		}
+		foreach (array_values(array_unique($clean_piece_ids)) as $piece_id) {
+			$query_parts[] = rawurlencode('piece_ids[]') . '=' . rawurlencode($piece_id);
+		}
+
+		$headers = $this->get_auth_headers($sender_id_override);
+		$headers['Accept'] = 'application/json';
+
+		$url = self::build_endpoint_url('/consignments/label_direct') . '?' . implode('&', $query_parts);
+		$result['request_url'] = $url;
+
+		$response = wp_remote_post($url, array(
+			'timeout' => 40,
+			'headers' => $headers,
+		));
+
+		if (is_wp_error($response)) {
+			$result['error'] = $response->get_error_message();
+			return $result;
+		}
+
+		$result['http_status'] = wp_remote_retrieve_response_code($response);
+		$result['raw_response'] = wp_remote_retrieve_body($response);
+
+		if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+			$result['error'] = 'HTTP ' . $result['http_status'];
+			if ($result['raw_response'] !== '') {
+				$result['error'] .= ': ' . $result['raw_response'];
+			}
+			return $result;
+		}
+
+		$result['success'] = true;
+		return $result;
+	}
+
 	public function normalize_positive_decimal_for_xml($value) {
 		if (is_string($value)) {
 			$value = str_replace(',', '.', $value);
