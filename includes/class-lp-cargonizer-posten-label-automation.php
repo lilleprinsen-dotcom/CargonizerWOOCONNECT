@@ -673,6 +673,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$tracking_url = isset($payload['tracking_url']) ? (string) $payload['tracking_url'] : '';
 		$tracking_number = isset($payload['tracking_number']) ? (string) $payload['tracking_number'] : '';
 		$label_url = isset($payload['label_url']) ? (string) $payload['label_url'] : '';
+		$edited_label_url = $label_url !== '' ? $this->get_admin_label_url($job, null, 'stamped') : '';
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$package_results = isset($payload['package_results']) && is_array($payload['package_results']) ? $payload['package_results'] : array();
 		$package_map = $this->build_package_index_map($packages);
@@ -735,7 +736,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 					echo '<a href="' . esc_url($result_label_url) . '" target="_blank" rel="noopener noreferrer">Original label</a>';
 				}
 				if ($result_stamped_label_url !== '') {
-					echo ($result_label_url !== '' ? ' | ' : '') . '<a href="' . esc_url($result_stamped_label_url) . '" target="_blank" rel="noopener noreferrer">Printet label</a>';
+					echo ($result_label_url !== '' ? ' | ' : '') . '<a href="' . esc_url($result_stamped_label_url) . '" target="_blank" rel="noopener noreferrer">Redigert PDF</a>';
 				}
 				echo '</div>';
 				if ($result_printed) {
@@ -758,7 +759,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 			echo '<div>Sporing: <a href="' . esc_url($tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($tracking_url) . '</a></div>';
 		}
 		if (empty($package_results) && $label_url !== '') {
-			echo '<div>Etikett: <a href="' . esc_url($label_url) . '" target="_blank" rel="noopener noreferrer">Last ned PDF</a></div>';
+			echo '<div>Etikett: <a href="' . esc_url($label_url) . '" target="_blank" rel="noopener noreferrer">Original label</a>';
+			if ($edited_label_url !== '') {
+				echo ' | <a href="' . esc_url($edited_label_url) . '" target="_blank" rel="noopener noreferrer">Redigert PDF</a>';
+			}
+			echo '</div>';
 		}
 		$this->render_reprint_controls($job, $order);
 		echo '<div style="margin-top:6px;color:#646970;">Køjobber behandles når lokal pakkemaskin/robot kjører.</div>';
@@ -1226,20 +1231,28 @@ class LP_Cargonizer_Posten_Label_Automation {
 		if ($type === '') {
 			$type = 'original';
 		}
+		if ($type !== 'stamped') {
+			$type = 'original';
+		}
+		$effective_package_index = $package_index;
 		if ($package_index > 0) {
-			$file = $type === 'stamped' ? $this->get_stamped_label_file_for_package($job, $package_index) : $this->get_label_file_for_package($job, $package_index);
+			$file = $type === 'stamped' ? $this->ensure_stamped_label_file_for_package($job, $package_index) : $this->get_label_file_for_package($job, $package_index);
 		} else {
 			$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
 			$label_files = $this->json_decode(isset($job->label_files_json) ? $job->label_files_json : '');
 			if (count($packages) > 1 && count($label_files) > 0) {
 				return new WP_Error('posten_label_package_index_required', 'Denne jobben har flere etiketter. Angi package_index.', array('status' => 400));
 			}
-			$file = $type === 'stamped' ? $this->get_stamped_label_file_for_package($job, 1) : (!empty($job->label_file_path) ? (string) $job->label_file_path : '');
+			$effective_package_index = 1;
+			$file = $type === 'stamped' ? $this->ensure_stamped_label_file_for_package($job, 1) : (!empty($job->label_file_path) ? (string) $job->label_file_path : '');
 			if ($type !== 'stamped' && $file === '' && count($label_files) === 1 && !empty($label_files[0]['label_file_path'])) {
 				$file = (string) $label_files[0]['label_file_path'];
 			}
 		}
 
+		if (is_wp_error($file)) {
+			return $file;
+		}
 		if ($file === '') {
 			return new WP_Error('posten_label_not_found', 'Label PDF ikke funnet.', array('status' => 404));
 		}
@@ -1249,7 +1262,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		nocache_headers();
 		header('Content-Type: application/pdf');
-		$filename = 'posten-label-' . $job->job_id . ($package_index > 0 ? '-kolli-' . $package_index : '') . ($type === 'stamped' ? '-stamped' : '') . '.pdf';
+		$filename_package_index = $type === 'stamped' ? $effective_package_index : $package_index;
+		$filename = 'posten-label-' . $job->job_id . ($filename_package_index > 0 ? '-kolli-' . $filename_package_index : '') . ($type === 'stamped' ? '-edited' : '') . '.pdf';
 		header('Content-Disposition: inline; filename="' . sanitize_file_name($filename) . '"');
 		header('Content-Length: ' . filesize($file));
 		readfile($file);
@@ -2211,6 +2225,72 @@ class LP_Cargonizer_Posten_Label_Automation {
 		);
 	}
 
+	private function ensure_stamped_label_file_for_package($job, $package_index) {
+		$package_index = absint($package_index);
+		if ($package_index < 1) {
+			return new WP_Error('posten_edited_label_package_missing', 'Mangler kollinummer for redigert PDF.', array('status' => 400));
+		}
+
+		$existing_path = $this->get_stamped_label_file_for_package($job, $package_index);
+		if ($existing_path !== '' && $this->is_file_inside_label_dir($existing_path) && is_readable($existing_path)) {
+			return $existing_path;
+		}
+
+		$original_path = $this->get_label_file_for_package($job, $package_index);
+		if ($original_path === '' || !$this->is_file_inside_label_dir($original_path) || !is_readable($original_path)) {
+			return new WP_Error('posten_edited_label_original_missing', 'Original PDF mangler eller kan ikke leses.', array('status' => 404));
+		}
+
+		$settings = $this->get_posten_robot_print_settings();
+		$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
+		$package_map = $this->build_package_index_map($packages);
+		$stamp_text = $this->build_package_stamp_text($package_index, isset($package_map[$package_index]) ? $package_map[$package_index] : array(), $settings);
+		if ($stamp_text === '') {
+			return new WP_Error('posten_edited_label_stamp_empty', 'Redigert PDF mangler tekst for stempling.', array('status' => 400));
+		}
+
+		$stamped_path = $this->build_stamped_label_path($original_path, $package_index);
+		$stamp_result = $this->stamp_pdf_file($original_path, $stamped_path, $stamp_text, $settings);
+		if (is_wp_error($stamp_result)) {
+			return $stamp_result;
+		}
+		if (!$this->is_file_inside_label_dir($stamped_path) || !is_readable($stamped_path)) {
+			return new WP_Error('posten_edited_label_missing_after_stamp', 'Redigert PDF ble ikke opprettet.', array('status' => 500));
+		}
+
+		$this->record_stamped_label_file($job, $package_index, $stamped_path);
+		return $stamped_path;
+	}
+
+	private function record_stamped_label_file($job, $package_index, $stamped_path) {
+		$package_index = absint($package_index);
+		$stamped_path = (string) $stamped_path;
+		if (!$job || $package_index < 1 || $stamped_path === '') {
+			return;
+		}
+
+		$stamped_label_files = $this->json_decode(isset($job->stamped_label_files_json) ? $job->stamped_label_files_json : '');
+		$stamped_label_files = $this->upsert_indexed_row($stamped_label_files, $package_index, array(
+			'package_index' => $package_index,
+			'stamped_label_file_path' => $stamped_path,
+			'stamped_label_filename' => basename($stamped_path),
+		));
+
+		global $wpdb;
+		$table = $this->get_table_name();
+		$now = gmdate('Y-m-d H:i:s');
+		$wpdb->update($table, array(
+			'stamped_label_files_json' => $this->json_encode($stamped_label_files),
+			'updated_at_gmt' => $now,
+		), array('job_id' => (string) $job->job_id), array('%s', '%s'), array('%s'));
+
+		$order = isset($job->order_id) ? wc_get_order((int) $job->order_id) : null;
+		if ($order) {
+			$order->update_meta_data(self::META_STAMPED_LABEL_FILES, $stamped_label_files);
+			$order->save();
+		}
+	}
+
 	private function get_package_result_for_index($package_results, $package_index) {
 		$package_index = absint($package_index);
 		foreach ((array) $package_results as $result) {
@@ -3098,7 +3178,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 		$package_index = $package_index === null ? null : absint($package_index);
 		if ($package_index !== null && $package_index > 0) {
-			$file = $type === 'stamped' ? $this->get_stamped_label_file_for_package($row, $package_index) : $this->get_label_file_for_package($row, $package_index);
+			$file = $this->get_label_file_for_package($row, $package_index);
 			if ($file === '') {
 				return '';
 			}
@@ -3114,13 +3194,25 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$packages = $this->json_decode(isset($row->packages_json) ? $row->packages_json : '');
-		if (count($packages) > 1 || empty($row->label_file_path)) {
+		if (count($packages) > 1) {
+			return '';
+		}
+		$file = $type === 'stamped' ? $this->get_label_file_for_package($row, 1) : (!empty($row->label_file_path) ? (string) $row->label_file_path : '');
+		if ($type !== 'stamped' && $file === '') {
+			$label_files = $this->json_decode(isset($row->label_files_json) ? $row->label_files_json : '');
+			if (count($label_files) === 1 && !empty($label_files[0]['label_file_path'])) {
+				$file = (string) $label_files[0]['label_file_path'];
+			}
+		}
+		if ($file === '') {
 			return '';
 		}
 
 		return add_query_arg(
-			'_wpnonce',
-			wp_create_nonce('wp_rest'),
+			array(
+				'_wpnonce' => wp_create_nonce('wp_rest'),
+				'type' => $type,
+			),
 			rest_url(self::REST_NAMESPACE . self::REST_ROUTE_PRIMARY . '/' . rawurlencode((string) $row->job_id) . '/label')
 		);
 	}
