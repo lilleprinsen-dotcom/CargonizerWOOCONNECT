@@ -528,7 +528,7 @@
 
 			function methodPayloadFromOption(option){
 				option = option || {};
-				var optionKey = (option.agreement_id || '') + '|' + (option.product_id || '');
+				var optionKey = methodKeyForMethod(option);
 				var smsServiceId = '';
 				var smsServiceName = '';
 				if (Array.isArray(option.services)) {
@@ -1491,11 +1491,12 @@
 			}
 
 			function getMethodDataByKey(methodKey){
-				var parts = String(methodKey || '').split('|');
-				if (parts.length < 2) { return null; }
+				methodKey = String(methodKey || '');
+				if (!methodKey) { return null; }
+				var parts = methodKey.split('|');
 				var selected = getSelectedMethods();
 				for (var i = 0; i < selected.length; i++) {
-					if ((selected[i].agreement_id || '') === parts[0] && (selected[i].product_id || '') === parts[1]) {
+					if (methodKeyForMethod(selected[i]) === methodKey || (parts.length >= 2 && (selected[i].agreement_id || '') === parts[0] && (selected[i].product_id || '') === parts[1])) {
 						return selected[i];
 					}
 				}
@@ -2375,7 +2376,7 @@
 
 			function renderBookingError(errorData, method){
 				var data = errorData || {};
-				var methodKey = ((method && method.agreement_id) ? method.agreement_id : '') + '|' + ((method && method.product_id) ? method.product_id : '');
+				var methodKey = methodKeyForMethod(method);
 				var htmlParts = ['<div style="color:#b32d2e;font-weight:600;">' + esc(data.message || 'Booking feilet.') + '</div>'];
 				var debugLineParts = [];
 				if (data.error_code) {
