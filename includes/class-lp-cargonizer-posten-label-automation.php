@@ -7,6 +7,8 @@ if (!defined('ABSPATH')) {
 class LP_Cargonizer_Posten_Label_Automation {
 	const AJAX_ACTION_QUEUE = 'lp_cargonizer_queue_posten_label_job';
 	const NONCE_ACTION_QUEUE = 'lp_cargonizer_queue_posten_label_job';
+	const ADMIN_ACTION_CANCEL_JOB = 'lp_cargonizer_cancel_posten_label_job';
+	const NONCE_ACTION_CANCEL_JOB = 'lp_cargonizer_cancel_posten_label_job';
 	const REST_NAMESPACE = 'lilleprinsen/v1';
 	const REST_ROUTE_PRIMARY = '/posten-jobs';
 	const REST_ROUTE_LEGACY = '/posten-label-jobs';
@@ -90,6 +92,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		add_filter('wc_order_statuses', array($this, 'add_order_statuses'));
 		add_action('rest_api_init', array($this, 'register_rest_routes'));
 		add_action('wp_ajax_' . self::AJAX_ACTION_QUEUE, array($this, 'ajax_queue_posten_label_job'));
+		add_action('admin_post_' . self::ADMIN_ACTION_CANCEL_JOB, array($this, 'admin_cancel_job_action'));
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_label_status_panel'), 20);
 		add_action('woocommerce_payment_complete', array($this, 'maybe_auto_queue_for_order'), 20, 1);
 		add_action('woocommerce_order_status_processing', array($this, 'maybe_auto_queue_for_order'), 20, 1);
@@ -269,6 +272,30 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		wp_send_json_success($result);
+	}
+
+	public function admin_cancel_job_action() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_die(esc_html__('Ingen tilgang.', 'lp-cargonizer'), '', array('response' => 403));
+		}
+
+		$job_id = isset($_POST['job_id']) && !is_array($_POST['job_id']) ? $this->sanitize_job_id((string) wp_unslash($_POST['job_id'])) : '';
+		$nonce = isset($_POST['_wpnonce']) && !is_array($_POST['_wpnonce']) ? sanitize_text_field((string) wp_unslash($_POST['_wpnonce'])) : '';
+		if ($job_id === '' || !wp_verify_nonce($nonce, self::NONCE_ACTION_CANCEL_JOB . '_' . $job_id)) {
+			wp_die(esc_html__('Ugyldig forespørsel.', 'lp-cargonizer'), '', array('response' => 403));
+		}
+
+		$job = $this->get_job_by_id($job_id);
+		$order_id = $job && isset($job->order_id) ? absint($job->order_id) : (isset($_POST['order_id']) ? absint($_POST['order_id']) : 0);
+		$result = $job ? $this->cancel_job_by_id($job_id, 'Kansellert manuelt av admin fra ordrevisningen.') : new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.');
+		$redirect_url = $this->get_order_edit_url($order_id);
+		$redirect_url = add_query_arg(array(
+			'lp_posten_cancel_job' => is_wp_error($result) ? 'failed' : 'cancelled',
+			'lp_posten_job_id' => $job_id,
+		), $redirect_url);
+
+		wp_safe_redirect($redirect_url);
+		exit;
 	}
 
 	public function queue_from_admin_request($order, $method_payload, $packages, $args = array()) {
@@ -542,6 +569,56 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return (int) $updated;
 	}
 
+	private function cancel_job_by_id($job_id, $message = '') {
+		$job_id = $this->sanitize_job_id($job_id);
+		if ($job_id === '') {
+			return new WP_Error('posten_job_missing_id', 'Mangler Posten jobb-ID.');
+		}
+
+		$job = $this->get_job_by_id($job_id);
+		if (!$job) {
+			return new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.');
+		}
+		$status = isset($job->status) ? (string) $job->status : '';
+		if (!in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true)) {
+			return new WP_Error('posten_job_not_cancellable', 'Posten labeljobb kan bare kanselleres når den venter eller behandles.');
+		}
+
+		$message = trim((string) $message);
+		if ($message === '') {
+			$message = 'Kansellert manuelt av admin.';
+		}
+
+		$this->maybe_install_table();
+		global $wpdb;
+		$table = $this->get_table_name();
+		$now = gmdate('Y-m-d H:i:s');
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET status = %s, last_error = %s, failure_message = %s, updated_at_gmt = %s WHERE job_id = %s AND status IN (%s, %s)",
+				self::JOB_STATUS_CANCELLED,
+				$message,
+				$message,
+				$now,
+				$job_id,
+				self::JOB_STATUS_QUEUED,
+				self::JOB_STATUS_PROCESSING
+			)
+		);
+		if (!$updated) {
+			return new WP_Error('posten_job_cancel_failed', 'Posten labeljobb kunne ikke kanselleres fordi status er endret.');
+		}
+
+		$order = wc_get_order((int) $job->order_id);
+		if ($order) {
+			$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_CANCELLED);
+			$order->save();
+			$this->add_private_order_note($order, 'Posten Norgespakke etikettjobb kansellert. Jobb: ' . $job_id . '. ' . $message);
+		}
+
+		return $this->get_job_by_id($job_id);
+	}
+
 	public function render_order_label_status_panel($order) {
 		if (!current_user_can('manage_woocommerce') || !$order || !is_object($order) || !method_exists($order, 'get_id')) {
 			return;
@@ -577,6 +654,15 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 		if ($this->is_retryable_terminal_job_status($status)) {
 			echo '<div style="margin-top:6px;color:#125228;">Denne jobben kan bookes på nytt fra Book shipment.</div>';
+		}
+		if (in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true)) {
+			echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:10px;">';
+			echo '<input type="hidden" name="action" value="' . esc_attr(self::ADMIN_ACTION_CANCEL_JOB) . '">';
+			echo '<input type="hidden" name="job_id" value="' . esc_attr((string) $job->job_id) . '">';
+			echo '<input type="hidden" name="order_id" value="' . esc_attr((string) $order->get_id()) . '">';
+			wp_nonce_field(self::NONCE_ACTION_CANCEL_JOB . '_' . (string) $job->job_id);
+			echo '<button type="submit" class="button" onclick="return confirm(\'Kansellere Posten etikettjobb? Roboten vil ikke kunne fullføre denne jobben.\');">Kanseller etikettjobb</button>';
+			echo '</form>';
 		}
 		if (!empty($package_results)) {
 			echo '<div style="margin-top:6px;"><strong>Kolli/etiketter:</strong></div>';
@@ -1422,6 +1508,21 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return sanitize_key((string) $order->get_status());
+	}
+
+	private function get_order_edit_url($order_id) {
+		$order_id = absint($order_id);
+		if ($order_id > 0 && function_exists('wc_get_order')) {
+			$order = wc_get_order($order_id);
+			if ($order && method_exists($order, 'get_edit_order_url')) {
+				return (string) $order->get_edit_order_url();
+			}
+		}
+		if ($order_id > 0) {
+			return admin_url('post.php?post=' . $order_id . '&action=edit');
+		}
+
+		return admin_url('edit.php?post_type=shop_order');
 	}
 
 	private function get_active_job_for_order($order_id, $method_key) {
