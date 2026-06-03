@@ -8,9 +8,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 	const AJAX_ACTION_QUEUE = 'lp_cargonizer_queue_posten_label_job';
 	const NONCE_ACTION_QUEUE = 'lp_cargonizer_queue_posten_label_job';
 	const REST_NAMESPACE = 'lilleprinsen/v1';
+	const REST_ROUTE_PRIMARY = '/posten-jobs';
+	const REST_ROUTE_LEGACY = '/posten-label-jobs';
 	const TOKEN_HEADER = 'X-LP-Posten-Robot-Token';
 	const SCHEMA_VERSION_OPTION = 'lp_cargonizer_posten_jobs_schema_version';
-	const SCHEMA_VERSION = '1';
+	const SCHEMA_VERSION = '2';
 	const ORDER_STATUS_WAITING = 'lp-waiting-label';
 	const ORDER_STATUS_CREATED = 'lp-label-created';
 	const JOB_STATUS_QUEUED = 'queued';
@@ -22,6 +24,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 	const META_TRACKING_NUMBER = '_lp_posten_tracking_number';
 	const META_TRACKING_URL = '_lp_posten_tracking_url';
 	const META_LABEL_FILE_PATH = '_lp_posten_label_file_path';
+	const META_LABEL_ATTACHMENT_ID = '_lp_posten_label_attachment_id';
+	const META_LABEL_PRINTED = '_lp_posten_label_printed';
 	const META_REQUESTED_AT_GMT = '_lp_posten_label_requested_at_gmt';
 	const META_COMPLETED_AT_GMT = '_lp_posten_label_completed_at_gmt';
 
@@ -77,21 +81,21 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 	public function register_order_statuses() {
 		register_post_status('wc-' . self::ORDER_STATUS_WAITING, array(
-			'label' => 'Venter Posten label',
+			'label' => 'Venter på etikett',
 			'public' => false,
 			'exclude_from_search' => false,
 			'show_in_admin_all_list' => true,
 			'show_in_admin_status_list' => true,
-			'label_count' => _n_noop('Venter Posten label <span class="count">(%s)</span>', 'Venter Posten label <span class="count">(%s)</span>', 'lp-cargonizer'),
+			'label_count' => _n_noop('Venter på etikett <span class="count">(%s)</span>', 'Venter på etikett <span class="count">(%s)</span>', 'lp-cargonizer'),
 		));
 
 		register_post_status('wc-' . self::ORDER_STATUS_CREATED, array(
-			'label' => 'Posten label opprettet',
+			'label' => 'Etikett opprettet',
 			'public' => false,
 			'exclude_from_search' => false,
 			'show_in_admin_all_list' => true,
 			'show_in_admin_status_list' => true,
-			'label_count' => _n_noop('Posten label opprettet <span class="count">(%s)</span>', 'Posten label opprettet <span class="count">(%s)</span>', 'lp-cargonizer'),
+			'label_count' => _n_noop('Etikett opprettet <span class="count">(%s)</span>', 'Etikett opprettet <span class="count">(%s)</span>', 'lp-cargonizer'),
 		));
 	}
 
@@ -100,8 +104,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$statuses = array();
 		}
 
-		$statuses['wc-' . self::ORDER_STATUS_WAITING] = 'Venter Posten label';
-		$statuses['wc-' . self::ORDER_STATUS_CREATED] = 'Posten label opprettet';
+		$statuses['wc-' . self::ORDER_STATUS_WAITING] = 'Venter på etikett';
+		$statuses['wc-' . self::ORDER_STATUS_CREATED] = 'Etikett opprettet';
 		return $statuses;
 	}
 
@@ -120,77 +124,89 @@ class LP_Cargonizer_Posten_Label_Automation {
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			job_id varchar(64) NOT NULL,
 			order_id bigint(20) unsigned NOT NULL,
-			method_key varchar(191) NOT NULL,
+			order_number varchar(64) NOT NULL DEFAULT '',
 			status varchar(32) NOT NULL DEFAULT 'queued',
-			worker_id varchar(191) NOT NULL DEFAULT '',
+			source varchar(64) NOT NULL DEFAULT '',
+			service varchar(64) NOT NULL DEFAULT 'norgespakke',
+			method_key varchar(191) NOT NULL DEFAULT 'manual|norgespakke',
 			recipient_json longtext NOT NULL,
-			sender_json longtext NOT NULL,
 			packages_json longtext NOT NULL,
 			shipping_json longtext NOT NULL,
+			sender_json longtext NOT NULL,
 			items_json longtext NOT NULL,
 			tracking_number varchar(191) NOT NULL DEFAULT '',
 			tracking_url text NULL,
 			label_file_path text NULL,
 			label_attachment_id bigint(20) unsigned NOT NULL DEFAULT 0,
-			failure_message text NULL,
+			printed tinyint(1) NOT NULL DEFAULT 0,
+			worker_id varchar(191) NOT NULL DEFAULT '',
+			attempts int unsigned NOT NULL DEFAULT 0,
+			last_error text NULL,
 			requested_by_user_id bigint(20) unsigned NOT NULL DEFAULT 0,
-			requested_at_gmt datetime NOT NULL,
+			created_at_gmt datetime NOT NULL,
+			updated_at_gmt datetime NOT NULL,
 			claimed_at_gmt datetime NULL,
 			completed_at_gmt datetime NULL,
 			failed_at_gmt datetime NULL,
-			updated_at_gmt datetime NOT NULL,
+			requested_at_gmt datetime NOT NULL,
+			failure_message text NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY job_id (job_id),
 			KEY order_id (order_id),
 			KEY status (status),
 			KEY method_key (method_key),
+			KEY created_at_gmt (created_at_gmt),
+			KEY worker_id (worker_id),
 			KEY requested_at_gmt (requested_at_gmt)
 		) {$charset_collate};";
 
 		dbDelta($sql);
+		$this->migrate_table_defaults();
 		update_option(self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION, false);
 	}
 
 	public function register_rest_routes() {
-		register_rest_route(self::REST_NAMESPACE, '/posten-label-jobs', array(
-			'methods' => WP_REST_Server::READABLE,
-			'callback' => array($this, 'rest_list_jobs'),
-			'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
-			'args' => array(
-				'status' => array('required' => false),
-				'limit' => array('required' => false),
-			),
-		));
+		foreach (array(self::REST_ROUTE_PRIMARY, self::REST_ROUTE_LEGACY) as $route_base) {
+			register_rest_route(self::REST_NAMESPACE, $route_base, array(
+				'methods' => WP_REST_Server::READABLE,
+				'callback' => array($this, 'rest_list_jobs'),
+				'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
+				'args' => array(
+					'status' => array('required' => false),
+					'limit' => array('required' => false),
+				),
+			));
 
-		register_rest_route(self::REST_NAMESPACE, '/posten-label-jobs/(?P<job_id>[A-Za-z0-9_-]+)', array(
-			'methods' => WP_REST_Server::READABLE,
-			'callback' => array($this, 'rest_get_job'),
-			'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
-		));
+			register_rest_route(self::REST_NAMESPACE, $route_base . '/(?P<job_id>[A-Za-z0-9_-]+)', array(
+				'methods' => WP_REST_Server::READABLE,
+				'callback' => array($this, 'rest_get_job'),
+				'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
+			));
 
-		register_rest_route(self::REST_NAMESPACE, '/posten-label-jobs/(?P<job_id>[A-Za-z0-9_-]+)/claim', array(
-			'methods' => WP_REST_Server::CREATABLE,
-			'callback' => array($this, 'rest_claim_job'),
-			'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
-		));
+			register_rest_route(self::REST_NAMESPACE, $route_base . '/(?P<job_id>[A-Za-z0-9_-]+)/claim', array(
+				'methods' => WP_REST_Server::CREATABLE,
+				'callback' => array($this, 'rest_claim_job'),
+				'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
+			));
 
-		register_rest_route(self::REST_NAMESPACE, '/posten-label-jobs/(?P<job_id>[A-Za-z0-9_-]+)/complete', array(
-			'methods' => WP_REST_Server::CREATABLE,
-			'callback' => array($this, 'rest_complete_job'),
-			'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
-		));
+			register_rest_route(self::REST_NAMESPACE, $route_base . '/(?P<job_id>[A-Za-z0-9_-]+)/complete', array(
+				'methods' => WP_REST_Server::CREATABLE,
+				'callback' => array($this, 'rest_complete_job'),
+				'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
+			));
 
-		register_rest_route(self::REST_NAMESPACE, '/posten-label-jobs/(?P<job_id>[A-Za-z0-9_-]+)/fail', array(
-			'methods' => WP_REST_Server::CREATABLE,
-			'callback' => array($this, 'rest_fail_job'),
-			'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
-		));
+			register_rest_route(self::REST_NAMESPACE, $route_base . '/(?P<job_id>[A-Za-z0-9_-]+)/fail', array(
+				'methods' => WP_REST_Server::CREATABLE,
+				'callback' => array($this, 'rest_fail_job'),
+				'permission_callback' => array($this, 'rest_robot_or_admin_permission'),
+			));
 
-		register_rest_route(self::REST_NAMESPACE, '/posten-label-jobs/(?P<job_id>[A-Za-z0-9_-]+)/label', array(
-			'methods' => WP_REST_Server::READABLE,
-			'callback' => array($this, 'rest_download_label'),
-			'permission_callback' => array($this, 'rest_admin_permission'),
-		));
+			register_rest_route(self::REST_NAMESPACE, $route_base . '/(?P<job_id>[A-Za-z0-9_-]+)/label', array(
+				'methods' => WP_REST_Server::READABLE,
+				'callback' => array($this, 'rest_download_label'),
+				'permission_callback' => array($this, 'rest_admin_permission'),
+			));
+		}
 	}
 
 	public function ajax_queue_posten_label_job() {
@@ -222,7 +238,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$result = $this->queue_from_admin_request($order, $method_payload, $packages, array(
 			'warehouse_profile_id' => isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '',
 			'notify_email_to_consignee' => isset($_POST['notify_email_to_consignee']) ? (bool) $this->settings_service->sanitize_checkbox_value(wp_unslash($_POST['notify_email_to_consignee'])) : false,
-			'source' => 'admin_modal',
+			'source' => 'admin_manual_norgespakke',
 		));
 
 		if (is_wp_error($result)) {
@@ -254,6 +270,10 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$method_payload['carrier_name'] = isset($method_payload['carrier_name']) && $method_payload['carrier_name'] !== '' ? $method_payload['carrier_name'] : 'Posten';
 		$method_payload['product_name'] = isset($method_payload['product_name']) && $method_payload['product_name'] !== '' ? $method_payload['product_name'] : 'Norgespakke';
 		$method_payload['is_manual_norgespakke'] = true;
+		$args['source'] = isset($args['source']) && $args['source'] !== '' ? sanitize_key((string) $args['source']) : 'admin_manual_norgespakke';
+		if ($args['source'] === 'admin_modal' || $args['source'] === 'legacy_booking_ajax') {
+			$args['source'] = 'admin_manual_norgespakke';
+		}
 
 		$queued = $this->queue_job_for_order($order, $method_payload, $packages, $args);
 		if (is_wp_error($queued)) {
@@ -273,15 +293,6 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		$order_id = (int) $order->get_id();
 		$method_key = LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY;
-		$existing = $this->get_active_job_for_order($order_id, $method_key);
-		if ($existing) {
-			return array(
-				'job' => $existing,
-				'payload' => $this->format_job_response($existing, true),
-				'created' => false,
-			);
-		}
-
 		$clean_packages = $this->sanitize_packages($packages);
 		if (is_wp_error($clean_packages)) {
 			return $clean_packages;
@@ -289,52 +300,77 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		$sender = $this->resolve_sender_profile(isset($args['warehouse_profile_id']) ? $args['warehouse_profile_id'] : '');
 		$recipient = $this->build_recipient_snapshot($order);
+		$recipient_validation = $this->validate_recipient_for_norgespakke($recipient);
+		if (is_wp_error($recipient_validation)) {
+			return $recipient_validation;
+		}
 		$shipping = $this->build_shipping_snapshot($order, $method_payload, $args);
 		$items = $this->build_items_snapshot($order);
+		$source = isset($args['source']) && $args['source'] !== '' ? sanitize_key((string) $args['source']) : 'admin_manual_norgespakke';
+		$order_number = method_exists($order, 'get_order_number') ? sanitize_text_field((string) $order->get_order_number()) : (string) $order_id;
 
-		if ($recipient['name'] === '' || $recipient['postcode'] === '') {
-			return new WP_Error('invalid_recipient', 'Mottaker mangler navn eller postnummer.');
+		$lock_name = $this->get_order_method_lock_name($order_id, $method_key);
+		$lock_acquired = $this->acquire_job_lock($lock_name);
+		if (is_wp_error($lock_acquired)) {
+			return $lock_acquired;
 		}
 
-		$now = gmdate('Y-m-d H:i:s');
-		$job_id = $this->generate_job_id($order_id);
 		global $wpdb;
 		$table = $this->get_table_name();
-		$inserted = $wpdb->insert($table, array(
-			'job_id' => $job_id,
-			'order_id' => $order_id,
-			'method_key' => $method_key,
-			'status' => self::JOB_STATUS_QUEUED,
-			'worker_id' => '',
-			'recipient_json' => $this->json_encode($recipient),
-			'sender_json' => $this->json_encode($sender),
-			'packages_json' => $this->json_encode($clean_packages),
-			'shipping_json' => $this->json_encode($shipping),
-			'items_json' => $this->json_encode($items),
-			'tracking_number' => '',
-			'tracking_url' => '',
-			'label_file_path' => '',
-			'label_attachment_id' => 0,
-			'failure_message' => '',
-			'requested_by_user_id' => get_current_user_id(),
-			'requested_at_gmt' => $now,
-			'claimed_at_gmt' => null,
-			'completed_at_gmt' => null,
-			'failed_at_gmt' => null,
-			'updated_at_gmt' => $now,
-		), array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s', '%s'));
+		try {
+			$existing = $this->get_active_job_for_order($order_id, $method_key);
+			if ($existing) {
+				return array(
+					'job' => $existing,
+					'payload' => $this->format_job_response($existing, true),
+					'created' => false,
+				);
+			}
 
-		if (!$inserted) {
-			return new WP_Error('posten_job_insert_failed', 'Kunne ikke opprette Posten labeljobb i databasen.');
-		}
+			$now = gmdate('Y-m-d H:i:s');
+			$job_id = $this->generate_job_id($order_id);
+			$inserted = $wpdb->insert($table, array(
+				'job_id' => $job_id,
+				'order_id' => $order_id,
+				'order_number' => $order_number,
+				'status' => self::JOB_STATUS_QUEUED,
+				'source' => $source,
+				'service' => 'norgespakke',
+				'method_key' => $method_key,
+				'recipient_json' => $this->json_encode($recipient),
+				'packages_json' => $this->json_encode($clean_packages),
+				'shipping_json' => $this->json_encode($shipping),
+				'sender_json' => $this->json_encode($sender),
+				'items_json' => $this->json_encode($items),
+				'tracking_number' => '',
+				'tracking_url' => '',
+				'label_file_path' => '',
+				'label_attachment_id' => 0,
+				'printed' => 0,
+				'worker_id' => '',
+				'attempts' => 0,
+				'last_error' => '',
+				'requested_by_user_id' => get_current_user_id(),
+				'created_at_gmt' => $now,
+				'updated_at_gmt' => $now,
+				'requested_at_gmt' => $now,
+				'failure_message' => '',
+			), array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s'));
 
-		$job = $this->get_job_by_id($job_id);
-		if (!$job) {
-			return new WP_Error('posten_job_missing_after_insert', 'Posten labeljobb ble opprettet, men kunne ikke leses tilbake.');
+			if (!$inserted) {
+				return new WP_Error('posten_job_insert_failed', 'Kunne ikke opprette Posten etikettjobb i databasen.');
+			}
+
+			$job = $this->get_job_by_id($job_id);
+			if (!$job) {
+				return new WP_Error('posten_job_missing_after_insert', 'Posten etikettjobb ble opprettet, men kunne ikke leses tilbake.');
+			}
+		} finally {
+			$this->release_job_lock($lock_name);
 		}
 
 		$this->write_order_queue_metadata($order, $job, $recipient, $sender, $clean_packages, $shipping);
-		$this->set_order_status_verified($order, self::ORDER_STATUS_WAITING, 'Posten labeljobb opprettet og venter paa robot.');
+		$this->set_order_status_verified($order, self::ORDER_STATUS_WAITING, 'Posten Norgespakke etikettjobb opprettet.');
 		$this->add_private_order_note($order, $this->build_queue_order_note($job, $recipient, $sender, $clean_packages, $shipping));
 
 		return array(
@@ -415,24 +451,35 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		$payload = $this->format_job_response($job, true);
 		$status = isset($payload['status']) ? (string) $payload['status'] : '';
+		$status_label = $this->get_job_status_label($status);
 		$tracking_url = isset($payload['tracking_url']) ? (string) $payload['tracking_url'] : '';
+		$tracking_number = isset($payload['tracking_number']) ? (string) $payload['tracking_number'] : '';
 		$label_url = isset($payload['label_url']) ? (string) $payload['label_url'] : '';
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
+		$worker_id = isset($payload['worker_id']) ? (string) $payload['worker_id'] : '';
+		$last_error = isset($payload['last_error']) ? (string) $payload['last_error'] : '';
 
 		echo '<div class="lp-posten-label-status" style="clear:both;margin-top:12px;padding:10px 12px;border:1px solid #dcdcde;background:#f6f7f7;">';
-		echo '<strong>Posten Norgespakke labeljobb</strong>';
-		echo '<div style="margin-top:6px;">Status: ' . esc_html($status !== '' ? $status : '-') . '</div>';
+		echo '<strong>Posten/Norgespakke automasjon</strong>';
+		echo '<div style="margin-top:6px;">Status: ' . esc_html($status_label !== '' ? $status_label : '-') . '</div>';
 		echo '<div>Jobb-ID: <code>' . esc_html((string) $job->job_id) . '</code></div>';
-		echo '<div>Kolli: ' . esc_html((string) count($packages)) . '</div>';
+		echo '<div>Antall kolli: ' . esc_html((string) count($packages)) . '</div>';
+		if ($worker_id !== '' && $status === self::JOB_STATUS_PROCESSING) {
+			echo '<div>Worker ID: ' . esc_html($worker_id) . '</div>';
+		}
+		if ($last_error !== '' && $status === self::JOB_STATUS_FAILED) {
+			echo '<div style="color:#b32d2e;">Siste feil: ' . esc_html($last_error) . '</div>';
+		}
+		if ($tracking_number !== '') {
+			echo '<div>Sporingsnummer: ' . esc_html($tracking_number) . '</div>';
+		}
 		if ($tracking_url !== '') {
-			echo '<div>Tracking: <a href="' . esc_url($tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($tracking_url) . '</a></div>';
+			echo '<div>Sporing: <a href="' . esc_url($tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($tracking_url) . '</a></div>';
 		}
 		if ($label_url !== '') {
-			echo '<div>Label: <a href="' . esc_url($label_url) . '" target="_blank" rel="noopener noreferrer">Last ned PDF</a></div>';
+			echo '<div>Etikett: <a href="' . esc_url($label_url) . '" target="_blank" rel="noopener noreferrer">Last ned PDF</a></div>';
 		}
-		if (!empty($job->failure_message)) {
-			echo '<div style="color:#b32d2e;">Feil: ' . esc_html((string) $job->failure_message) . '</div>';
-		}
+		echo '<div style="margin-top:6px;color:#646970;">Køjobber behandles når lokal pakkemaskin/robot kjører.</div>';
 		echo '</div>';
 	}
 
@@ -479,9 +526,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 		global $wpdb;
 		$table = $this->get_table_name();
 		if ($status === 'all') {
-			$rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} ORDER BY requested_at_gmt ASC LIMIT %d", $limit));
+			$rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} ORDER BY created_at_gmt ASC LIMIT %d", $limit));
 		} else {
-			$rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE status = %s ORDER BY requested_at_gmt ASC LIMIT %d", $status, $limit));
+			$rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$table} WHERE status = %s ORDER BY created_at_gmt ASC LIMIT %d", $status, $limit));
 		}
 
 		$jobs = array();
@@ -508,26 +555,22 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$job_id = $this->sanitize_job_id($request['job_id']);
 		$worker_id = sanitize_text_field((string) $request->get_param('worker_id'));
 		if ($worker_id === '') {
-			$worker_id = 'posten_robot';
+			return new WP_Error('posten_job_worker_required', 'worker_id er påkrevd.', array('status' => 400));
 		}
 
 		global $wpdb;
 		$table = $this->get_table_name();
 		$now = gmdate('Y-m-d H:i:s');
-		$updated = $wpdb->update(
-			$table,
-			array(
-				'status' => self::JOB_STATUS_PROCESSING,
-				'worker_id' => $worker_id,
-				'claimed_at_gmt' => $now,
-				'updated_at_gmt' => $now,
-			),
-			array(
-				'job_id' => $job_id,
-				'status' => self::JOB_STATUS_QUEUED,
-			),
-			array('%s', '%s', '%s', '%s'),
-			array('%s', '%s')
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET status = %s, worker_id = %s, attempts = attempts + 1, claimed_at_gmt = %s, updated_at_gmt = %s WHERE job_id = %s AND status = %s",
+				self::JOB_STATUS_PROCESSING,
+				$worker_id,
+				$now,
+				$now,
+				$job_id,
+				self::JOB_STATUS_QUEUED
+			)
 		);
 
 		if (!$updated) {
@@ -557,21 +600,28 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$worker_id = sanitize_text_field((string) $request->get_param('worker_id'));
-		if ($worker_id !== '' && (string) $job->worker_id !== '' && $worker_id !== (string) $job->worker_id) {
+		if ($worker_id === '') {
+			return new WP_Error('posten_job_worker_required', 'worker_id er påkrevd.', array('status' => 400));
+		}
+		if (!$this->is_admin_override_request() && (string) $job->worker_id !== '' && $worker_id !== (string) $job->worker_id) {
 			return new WP_Error('posten_job_worker_mismatch', 'Worker-ID matcher ikke claime-jobben.', array('status' => 409));
 		}
 
 		$tracking_number = sanitize_text_field((string) $request->get_param('tracking_number'));
 		$tracking_url = esc_url_raw((string) $request->get_param('tracking_url'));
+		if ($tracking_url === '' && $tracking_number !== '') {
+			$tracking_url = $this->build_default_tracking_url($tracking_number);
+		}
 		$label_base64 = (string) $request->get_param('label_pdf_base64');
 		if ($label_base64 === '') {
 			$label_base64 = (string) $request->get_param('label_pdf');
 		}
-		if ($tracking_number === '' || $tracking_url === '' || $label_base64 === '') {
-			return new WP_Error('posten_job_complete_missing_fields', 'tracking_number, tracking_url og label_pdf_base64 er paakrevd.', array('status' => 400));
+		if ($tracking_number === '' || $label_base64 === '') {
+			return new WP_Error('posten_job_complete_missing_fields', 'tracking_number og label_pdf_base64 er påkrevd.', array('status' => 400));
 		}
+		$printed = $this->parse_bool_param($request->get_param('printed')) ? 1 : 0;
 
-		$stored_label = $this->store_label_pdf($job_id, $label_base64);
+		$stored_label = $this->store_label_pdf($job_id, $label_base64, sanitize_file_name((string) $request->get_param('label_filename')));
 		if (is_wp_error($stored_label)) {
 			return $stored_label;
 		}
@@ -585,25 +635,38 @@ class LP_Cargonizer_Posten_Label_Automation {
 			'tracking_url' => $tracking_url,
 			'label_file_path' => $stored_label['path'],
 			'label_attachment_id' => 0,
+			'printed' => $printed,
 			'completed_at_gmt' => $now,
 			'updated_at_gmt' => $now,
+			'last_error' => '',
 			'failure_message' => '',
-		), array('job_id' => $job_id), array('%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s'), array('%s'));
+		), array('job_id' => $job_id), array('%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s'), array('%s'));
 
 		$updated_job = $this->get_job_by_id($job_id);
 		$order = wc_get_order((int) $job->order_id);
 		if ($order) {
+			$order->update_meta_data(self::META_JOB_ID, $job_id);
 			$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_COMPLETED);
 			$order->update_meta_data(self::META_TRACKING_NUMBER, $tracking_number);
 			$order->update_meta_data(self::META_TRACKING_URL, $tracking_url);
 			$order->update_meta_data(self::META_LABEL_FILE_PATH, $stored_label['path']);
+			$order->update_meta_data(self::META_LABEL_ATTACHMENT_ID, 0);
 			$order->update_meta_data(self::META_COMPLETED_AT_GMT, $now);
+			$order->update_meta_data(self::META_LABEL_PRINTED, $printed);
 			$order->save();
 			$this->add_private_order_note($order, $this->build_completed_order_note($updated_job));
-			$this->set_order_status_verified($order, self::ORDER_STATUS_CREATED, 'Posten label opprettet og tracking lagret.');
+			$this->set_order_status_if_current($order, self::ORDER_STATUS_WAITING, self::ORDER_STATUS_CREATED, 'Posten Norgespakke etikett opprettet.');
 		}
 
-		return rest_ensure_response($this->format_job_response($updated_job, true));
+		$response = $this->format_job_response($updated_job, false);
+		return rest_ensure_response(array(
+			'job_id' => isset($response['job_id']) ? $response['job_id'] : $job_id,
+			'order_id' => isset($response['order_id']) ? $response['order_id'] : (int) $job->order_id,
+			'status' => isset($response['status']) ? $response['status'] : self::JOB_STATUS_COMPLETED,
+			'tracking_number' => $tracking_number,
+			'tracking_url' => $tracking_url,
+			'label_url' => isset($response['label_url']) ? $response['label_url'] : '',
+		));
 	}
 
 	public function rest_fail_job($request) {
@@ -613,9 +676,24 @@ class LP_Cargonizer_Posten_Label_Automation {
 			return new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.', array('status' => 404));
 		}
 
-		$message = sanitize_textarea_field((string) $request->get_param('message'));
+		$worker_id = sanitize_text_field((string) $request->get_param('worker_id'));
+		if ($worker_id === '') {
+			return new WP_Error('posten_job_worker_required', 'worker_id er påkrevd.', array('status' => 400));
+		}
+		if ((string) $job->status === self::JOB_STATUS_PROCESSING && !$this->is_admin_override_request() && (string) $job->worker_id !== '' && $worker_id !== (string) $job->worker_id) {
+			return new WP_Error('posten_job_worker_mismatch', 'Worker-ID matcher ikke claime-jobben.', array('status' => 409));
+		}
+
+		$message = sanitize_textarea_field((string) $request->get_param('error'));
+		if ($message === '') {
+			$message = sanitize_textarea_field((string) $request->get_param('message'));
+		}
 		if ($message === '') {
 			$message = 'Posten robot meldte feil uten detalj.';
+		}
+		$screenshot_note = sanitize_textarea_field((string) $request->get_param('screenshot_note'));
+		if ($screenshot_note !== '') {
+			$message .= ' Screenshot note: ' . $screenshot_note;
 		}
 
 		global $wpdb;
@@ -623,17 +701,18 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$now = gmdate('Y-m-d H:i:s');
 		$wpdb->update($table, array(
 			'status' => self::JOB_STATUS_FAILED,
+			'last_error' => $message,
 			'failure_message' => $message,
 			'failed_at_gmt' => $now,
 			'updated_at_gmt' => $now,
-		), array('job_id' => $job_id), array('%s', '%s', '%s', '%s'), array('%s'));
+		), array('job_id' => $job_id), array('%s', '%s', '%s', '%s', '%s'), array('%s'));
 
 		$updated_job = $this->get_job_by_id($job_id);
 		$order = wc_get_order((int) $job->order_id);
 		if ($order) {
 			$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_FAILED);
 			$order->save();
-			$this->add_private_order_note($order, 'Posten labeljobb feilet. Jobb-ID: ' . $job_id . '. Feil: ' . $message);
+			$this->add_private_order_note($order, 'Posten Norgespakke etikettjobb feilet. Jobb: ' . $job_id . '. Feil: ' . $message);
 		}
 
 		return rest_ensure_response($this->format_job_response($updated_job, true));
@@ -686,7 +765,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			'sender_address' => isset($sender['address_line']) ? $sender['address_line'] : '',
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
 			'notify_email_to_consignee' => !empty($args['notify_email_to_consignee']),
-			'created_at_gmt' => isset($job->requested_at_gmt) ? (string) $job->requested_at_gmt : '',
+			'created_at_gmt' => $this->get_job_datetime($job, 'created_at_gmt', $this->get_job_datetime($job, 'requested_at_gmt')),
 			'created_by_user_id' => get_current_user_id(),
 			'created_by_user_login' => isset($user->user_login) ? (string) $user->user_login : '',
 			'created_by_display_name' => isset($user->display_name) ? (string) $user->display_name : '',
@@ -709,8 +788,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 				'success' => true,
 				'verified' => true,
 				'target_status' => self::ORDER_STATUS_WAITING,
-				'target_status_label' => 'Venter Posten label',
-				'message' => 'Ordren er satt til venter Posten label.',
+				'target_status_label' => 'Venter på etikett',
+				'message' => 'Ordren er satt til Venter på etikett.',
 			),
 		);
 	}
@@ -765,9 +844,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 			}
 
 			$weight = $this->to_float(isset($package['weight']) ? $package['weight'] : (isset($package['weight_kg']) ? $package['weight_kg'] : 0));
-			$length = $this->to_float(isset($package['length']) ? $package['length'] : (isset($package['length_cm']) ? $package['length_cm'] : 0));
-			$width = $this->to_float(isset($package['width']) ? $package['width'] : (isset($package['width_cm']) ? $package['width_cm'] : 0));
-			$height = $this->to_float(isset($package['height']) ? $package['height'] : (isset($package['height_cm']) ? $package['height_cm'] : 0));
+			$length = $this->sanitize_optional_dimension($package, array('length', 'length_cm'), 'lengde', $index, $errors);
+			$width = $this->sanitize_optional_dimension($package, array('width', 'width_cm'), 'bredde', $index, $errors);
+			$height = $this->sanitize_optional_dimension($package, array('height', 'height_cm'), 'høyde', $index, $errors);
 
 			if ($weight <= 0) {
 				$errors[] = 'Kolli ' . $index . ' mangler vekt.';
@@ -779,18 +858,14 @@ class LP_Cargonizer_Posten_Label_Automation {
 			}
 
 			$clean[] = array(
-				'colli' => count($clean) + 1,
+				'index' => count($clean) + 1,
 				'name' => isset($package['name']) ? sanitize_text_field((string) $package['name']) : '',
 				'description' => isset($package['description']) ? sanitize_text_field((string) $package['description']) : '',
 				'weight_kg' => $weight,
-				'weight' => $weight,
 				'weight_grams' => (int) round($weight * 1000),
 				'length_cm' => max(0, $length),
-				'length' => max(0, $length),
 				'width_cm' => max(0, $width),
-				'width' => max(0, $width),
 				'height_cm' => max(0, $height),
-				'height' => max(0, $height),
 			);
 		}
 
@@ -807,6 +882,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 	private function build_recipient_snapshot($order) {
 		$name = trim((string) $order->get_shipping_first_name() . ' ' . (string) $order->get_shipping_last_name());
+		$company = (string) $order->get_shipping_company();
 		$address_1 = (string) $order->get_shipping_address_1();
 		$address_2 = (string) $order->get_shipping_address_2();
 		$postcode = (string) $order->get_shipping_postcode();
@@ -817,6 +893,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$name = trim((string) $order->get_billing_first_name() . ' ' . (string) $order->get_billing_last_name());
 		}
 		if ($address_1 === '') {
+			$company = (string) $order->get_billing_company();
 			$address_1 = (string) $order->get_billing_address_1();
 			$address_2 = (string) $order->get_billing_address_2();
 			$postcode = (string) $order->get_billing_postcode();
@@ -829,13 +906,14 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		return array(
 			'name' => sanitize_text_field($name),
+			'company' => sanitize_text_field($company),
 			'address_1' => sanitize_text_field($address_1),
 			'address_2' => sanitize_text_field($address_2),
 			'postcode' => sanitize_text_field($postcode),
 			'city' => sanitize_text_field($city),
 			'country' => strtoupper(sanitize_text_field($country)),
 			'email' => sanitize_email((string) $order->get_billing_email()),
-			'phone' => sanitize_text_field((string) $order->get_billing_phone()),
+			'phone' => $this->get_order_recipient_phone($order),
 		);
 	}
 
@@ -847,7 +925,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		return array(
 			'method_key' => LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY,
-			'method_label' => isset($method_payload['label']) && $method_payload['label'] !== '' ? $method_payload['label'] : 'Posten - Norgespakke (manuell)',
+			'label' => isset($method_payload['label']) && $method_payload['label'] !== '' ? $method_payload['label'] : 'Posten - Norgespakke (manuell)',
 			'agreement_id' => 'manual',
 			'carrier_id' => isset($method_payload['carrier_id']) ? $method_payload['carrier_id'] : 'posten',
 			'carrier_name' => isset($method_payload['carrier_name']) ? $method_payload['carrier_name'] : 'Posten',
@@ -1049,28 +1127,41 @@ class LP_Cargonizer_Posten_Label_Automation {
 			return array();
 		}
 
+		$shipping = $this->json_decode(isset($row->shipping_json) ? $row->shipping_json : '');
+		$method_key = isset($row->method_key) && (string) $row->method_key !== '' ? (string) $row->method_key : LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY;
 		$response = array(
 			'job_id' => (string) $row->job_id,
 			'order_id' => (int) $row->order_id,
-			'method_key' => (string) $row->method_key,
+			'order_number' => isset($row->order_number) ? (string) $row->order_number : '',
 			'status' => (string) $row->status,
+			'source' => isset($row->source) ? (string) $row->source : '',
+			'attempts' => isset($row->attempts) ? (int) $row->attempts : 0,
 			'worker_id' => (string) $row->worker_id,
+			'service' => array(
+				'carrier' => 'Posten',
+				'product' => 'Norgespakke',
+				'method_key' => $method_key,
+			),
 			'tracking_number' => (string) $row->tracking_number,
 			'tracking_url' => (string) $row->tracking_url,
-			'label_url' => !empty($row->label_file_path) ? rest_url(self::REST_NAMESPACE . '/posten-label-jobs/' . rawurlencode((string) $row->job_id) . '/label') : '',
-			'failure_message' => (string) $row->failure_message,
-			'requested_at_gmt' => (string) $row->requested_at_gmt,
-			'claimed_at_gmt' => (string) $row->claimed_at_gmt,
-			'completed_at_gmt' => (string) $row->completed_at_gmt,
-			'failed_at_gmt' => (string) $row->failed_at_gmt,
-			'updated_at_gmt' => (string) $row->updated_at_gmt,
+			'label_url' => $this->get_admin_label_url($row),
+			'last_error' => isset($row->last_error) ? (string) $row->last_error : (isset($row->failure_message) ? (string) $row->failure_message : ''),
+			'created_at_gmt' => $this->get_job_datetime($row, 'created_at_gmt', $this->get_job_datetime($row, 'requested_at_gmt')),
+			'claimed_at_gmt' => $this->nullable_datetime($this->get_job_datetime($row, 'claimed_at_gmt')),
+			'completed_at_gmt' => $this->nullable_datetime($this->get_job_datetime($row, 'completed_at_gmt')),
+			'failed_at_gmt' => $this->nullable_datetime($this->get_job_datetime($row, 'failed_at_gmt')),
+			'updated_at_gmt' => $this->get_job_datetime($row, 'updated_at_gmt'),
 		);
 
 		if ($include_payload) {
 			$response['recipient'] = $this->json_decode($row->recipient_json);
 			$response['sender'] = $this->json_decode($row->sender_json);
 			$response['packages'] = $this->json_decode($row->packages_json);
-			$response['shipping'] = $this->json_decode($row->shipping_json);
+			$response['shipping'] = array(
+				'method_key' => LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY,
+				'label' => isset($shipping['label']) ? (string) $shipping['label'] : 'Posten - Norgespakke (manuell)',
+				'pickup_point' => isset($shipping['pickup_point']) && is_array($shipping['pickup_point']) ? $shipping['pickup_point'] : array(),
+			);
 			$response['items'] = $this->json_decode($row->items_json);
 		}
 
@@ -1078,9 +1169,10 @@ class LP_Cargonizer_Posten_Label_Automation {
 	}
 
 	private function write_order_queue_metadata($order, $job, $recipient, $sender, $packages, $shipping) {
+		$created_at_gmt = $this->get_job_datetime($job, 'created_at_gmt', $this->get_job_datetime($job, 'requested_at_gmt'));
 		$order->update_meta_data(self::META_JOB_ID, (string) $job->job_id);
 		$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_QUEUED);
-		$order->update_meta_data(self::META_REQUESTED_AT_GMT, (string) $job->requested_at_gmt);
+		$order->update_meta_data(self::META_REQUESTED_AT_GMT, $created_at_gmt);
 		$order->update_meta_data('_lp_posten_label_method_key', LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY);
 		$order->update_meta_data('_lp_posten_label_recipient_snapshot', $recipient);
 		$order->update_meta_data('_lp_posten_label_sender_snapshot', $sender);
@@ -1090,36 +1182,19 @@ class LP_Cargonizer_Posten_Label_Automation {
 	}
 
 	private function build_queue_order_note($job, $recipient, $sender, $packages, $shipping) {
-		$lines = array(
-			'Posten Norgespakke labeljobb opprettet.',
-			'Jobb-ID: ' . (string) $job->job_id,
-			'Mottaker: ' . (isset($recipient['name']) ? $recipient['name'] : '') . ', ' . (isset($recipient['postcode']) ? $recipient['postcode'] : ''),
-			'Kolli: ' . count($packages),
-			'Metode: ' . (isset($shipping['method_label']) ? $shipping['method_label'] : 'Posten Norgespakke'),
-			'Estimert pris: ' . (isset($shipping['estimated_price']) && $shipping['estimated_price'] !== '' ? $shipping['estimated_price'] : 'ikke tilgjengelig'),
-		);
-		if (!empty($sender['name']) || !empty($sender['sender_id'])) {
-			$lines[] = 'Sender: ' . trim((isset($sender['name']) ? $sender['name'] : '') . (!empty($sender['sender_id']) ? ' (' . $sender['sender_id'] . ')' : ''));
-		}
-
-		return implode("\n", $lines);
+		return 'Posten Norgespakke etikettjobb opprettet. Jobb: ' . (string) $job->job_id . '. Antall kolli: ' . count($packages) . '.';
 	}
 
 	private function build_completed_order_note($job) {
-		$payload = $this->format_job_response($job, true);
-		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
-		$lines = array(
-			'Posten Norgespakke label opprettet.',
-			'Jobb-ID: ' . (string) $job->job_id,
-			'Trackingnummer: ' . (string) $job->tracking_number,
-			'Tracking URL: <a href="' . esc_url((string) $job->tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html((string) $job->tracking_url) . '</a>',
-			'Kolli: ' . count($packages),
-		);
-		if (!empty($job->label_file_path)) {
-			$lines[] = 'Label lagret privat: ' . (string) $job->label_file_path;
+		$printed = isset($job->printed) && (int) $job->printed === 1 ? 'Ja' : 'Nei';
+		$tracking_number = isset($job->tracking_number) ? (string) $job->tracking_number : '';
+		$tracking_url = isset($job->tracking_url) ? (string) $job->tracking_url : '';
+		$tracking_text = $tracking_number;
+		if ($tracking_url !== '') {
+			$tracking_text .= ' (<a href="' . esc_url($tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($tracking_url) . '</a>)';
 		}
 
-		return implode("\n", $lines);
+		return 'Posten Norgespakke etikett opprettet. Sporingsnummer: ' . $tracking_text . '. Utskrift: ' . $printed . '.';
 	}
 
 	private function set_order_status_verified($order, $status, $note) {
@@ -1149,7 +1224,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$order->add_order_note((string) $note, false, true);
 	}
 
-	private function store_label_pdf($job_id, $label_base64) {
+	private function store_label_pdf($job_id, $label_base64, $label_filename = '') {
 		$label_base64 = trim((string) $label_base64);
 		if (strpos($label_base64, ',') !== false && preg_match('/^data:application\/pdf;base64,/', $label_base64)) {
 			$label_base64 = substr($label_base64, strpos($label_base64, ',') + 1);
@@ -1172,7 +1247,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$this->write_label_dir_guards($dir);
-		$file = trailingslashit($dir) . sanitize_file_name('posten-label-' . $job_id . '.pdf');
+		$label_filename = sanitize_file_name((string) $label_filename);
+		if ($label_filename === '' || strtolower(substr($label_filename, -4)) !== '.pdf') {
+			$label_filename = 'posten-label-' . $job_id . '.pdf';
+		}
+		$file = trailingslashit($dir) . sanitize_file_name($job_id . '-' . $label_filename);
 		$written = file_put_contents($file, $pdf, LOCK_EX);
 		if ($written === false) {
 			return new WP_Error('posten_label_write_failed', 'Kunne ikke lagre label PDF.', array('status' => 500));
@@ -1206,6 +1285,168 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return strpos($target, $base . DIRECTORY_SEPARATOR) === 0;
+	}
+
+	private function migrate_table_defaults() {
+		global $wpdb;
+		$table = $this->get_table_name();
+		$now = gmdate('Y-m-d H:i:s');
+
+		$wpdb->query("UPDATE {$table} SET order_number = CAST(order_id AS CHAR) WHERE (order_number IS NULL OR order_number = '')");
+		$wpdb->query($wpdb->prepare("UPDATE {$table} SET source = %s WHERE (source IS NULL OR source = '')", 'admin_manual_norgespakke'));
+		$wpdb->query($wpdb->prepare("UPDATE {$table} SET service = %s WHERE (service IS NULL OR service = '')", 'norgespakke'));
+		$wpdb->query($wpdb->prepare("UPDATE {$table} SET method_key = %s WHERE (method_key IS NULL OR method_key = '')", LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY));
+		$wpdb->query("UPDATE {$table} SET created_at_gmt = requested_at_gmt WHERE (created_at_gmt IS NULL OR created_at_gmt = '0000-00-00 00:00:00') AND requested_at_gmt IS NOT NULL AND requested_at_gmt <> '0000-00-00 00:00:00'");
+		$wpdb->query($wpdb->prepare("UPDATE {$table} SET created_at_gmt = %s WHERE created_at_gmt IS NULL OR created_at_gmt = '0000-00-00 00:00:00'", $now));
+		$wpdb->query("UPDATE {$table} SET updated_at_gmt = created_at_gmt WHERE updated_at_gmt IS NULL OR updated_at_gmt = '0000-00-00 00:00:00'");
+		$wpdb->query("UPDATE {$table} SET last_error = failure_message WHERE (last_error IS NULL OR last_error = '') AND failure_message IS NOT NULL AND failure_message <> ''");
+	}
+
+	private function validate_recipient_for_norgespakke($recipient) {
+		$required = array(
+			'name' => 'navn',
+			'address_1' => 'adresse',
+			'postcode' => 'postnummer',
+			'city' => 'sted',
+			'country' => 'land',
+		);
+		$missing = array();
+		foreach ($required as $key => $label) {
+			if (!isset($recipient[$key]) || trim((string) $recipient[$key]) === '') {
+				$missing[] = $label;
+			}
+		}
+		if (!empty($missing)) {
+			return new WP_Error('invalid_recipient', 'Mottaker mangler ' . implode(', ', $missing) . '.');
+		}
+		if (strtoupper((string) $recipient['country']) !== 'NO') {
+			return new WP_Error('invalid_recipient_country', 'Manuell Norgespakke kan bare brukes for mottakerland NO.');
+		}
+
+		return true;
+	}
+
+	private function sanitize_optional_dimension($package, $keys, $label, $index, &$errors) {
+		foreach ($keys as $key) {
+			if (!array_key_exists($key, $package) || $package[$key] === '') {
+				continue;
+			}
+			$value = $package[$key];
+			if (is_string($value)) {
+				$value = str_replace(',', '.', $value);
+			}
+			if (!is_numeric($value)) {
+				$errors[] = 'Kolli ' . $index . ' har ugyldig ' . $label . '.';
+				return 0.0;
+			}
+			$value = (float) $value;
+			if ($value < 0) {
+				$errors[] = 'Kolli ' . $index . ' har negativ ' . $label . '.';
+				return 0.0;
+			}
+			return $value;
+		}
+
+		return 0.0;
+	}
+
+	private function get_order_recipient_phone($order) {
+		$shipping_phone = '';
+		if ($order && is_object($order) && method_exists($order, 'get_shipping_phone')) {
+			$shipping_phone = sanitize_text_field((string) $order->get_shipping_phone());
+		}
+		if ($shipping_phone !== '') {
+			return $shipping_phone;
+		}
+
+		return sanitize_text_field((string) $order->get_billing_phone());
+	}
+
+	private function get_order_method_lock_name($order_id, $method_key) {
+		return 'lp_posten_job_' . md5(absint($order_id) . '|' . (string) $method_key);
+	}
+
+	private function acquire_job_lock($lock_name) {
+		global $wpdb;
+		$lock_name = substr(sanitize_key((string) $lock_name), 0, 64);
+		$acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', $lock_name, 10));
+		if ((string) $acquired !== '1') {
+			return new WP_Error('posten_job_lock_failed', 'Kunne ikke låse Posten etikettkø for ordren. Prøv igjen.');
+		}
+
+		return true;
+	}
+
+	private function release_job_lock($lock_name) {
+		global $wpdb;
+		$lock_name = substr(sanitize_key((string) $lock_name), 0, 64);
+		$wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock_name));
+	}
+
+	private function is_admin_override_request() {
+		return current_user_can('manage_woocommerce');
+	}
+
+	private function build_default_tracking_url($tracking_number) {
+		return esc_url_raw('https://sporing.posten.no/sporing/' . rawurlencode((string) $tracking_number));
+	}
+
+	private function parse_bool_param($value) {
+		if (is_bool($value)) {
+			return $value;
+		}
+		$value = strtolower(trim((string) $value));
+		return in_array($value, array('1', 'true', 'yes', 'ja', 'on'), true);
+	}
+
+	private function set_order_status_if_current($order, $expected_status, $target_status, $note) {
+		if (!$order || !method_exists($order, 'get_status')) {
+			return false;
+		}
+		if ((string) $order->get_status() !== (string) $expected_status) {
+			return false;
+		}
+
+		return $this->set_order_status_verified($order, $target_status, $note);
+	}
+
+	private function get_job_status_label($status) {
+		switch ((string) $status) {
+			case self::JOB_STATUS_QUEUED:
+			case self::JOB_STATUS_PROCESSING:
+				return 'Venter på etikett';
+			case self::JOB_STATUS_COMPLETED:
+				return 'Etikett opprettet';
+			case self::JOB_STATUS_FAILED:
+				return 'Feilet';
+		}
+
+		return (string) $status;
+	}
+
+	private function get_admin_label_url($row) {
+		if (empty($row->label_file_path) || !current_user_can('manage_woocommerce')) {
+			return '';
+		}
+
+		return add_query_arg(
+			'_wpnonce',
+			wp_create_nonce('wp_rest'),
+			rest_url(self::REST_NAMESPACE . self::REST_ROUTE_PRIMARY . '/' . rawurlencode((string) $row->job_id) . '/label')
+		);
+	}
+
+	private function get_job_datetime($row, $field, $fallback = '') {
+		if (isset($row->$field) && trim((string) $row->$field) !== '' && (string) $row->$field !== '0000-00-00 00:00:00') {
+			return (string) $row->$field;
+		}
+
+		return (string) $fallback;
+	}
+
+	private function nullable_datetime($value) {
+		$value = trim((string) $value);
+		return $value === '' || $value === '0000-00-00 00:00:00' ? null : $value;
 	}
 
 	private function get_request_token($request) {

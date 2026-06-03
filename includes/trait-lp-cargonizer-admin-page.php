@@ -2336,7 +2336,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					$posten_robot_token_exists = !empty($posten_robot_settings['token_hash']);
 					$posten_robot_token_generated = isset($posten_robot_settings['token_generated_at_gmt']) ? sanitize_text_field((string) $posten_robot_settings['token_generated_at_gmt']) : '';
 					?>
-					<p class="description">For manuell Norgespakke blir Book shipment omdirigert til en lokal Posten-labelko. Den lokale Playwright-roboten henter jobber via REST API og laster tracking/label tilbake til ordren.</p>
+					<p class="description">For manuell Norgespakke blir Book shipment omdirigert til en lokal Posten-etikettkø. Den lokale Playwright-roboten henter jobber via REST API og laster sporing/etikett tilbake til ordren.</p>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>
@@ -2345,7 +2345,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<input type="hidden" name="lp_cargonizer_posten_robot_enabled" value="0">
 									<label>
 										<input type="checkbox" name="lp_cargonizer_posten_robot_enabled" value="1" <?php checked(!empty($posten_robot_settings['enabled'])); ?>>
-										Aktiver Posten-labelko for manuell Norgespakke
+										Aktiver Posten-etikettkø for manuell Norgespakke
 									</label>
 									<p class="description">Paavirker bare <code>manual|norgespakke</code>. Vanlige Logistra/Cargonizer-metoder bruker fortsatt eksisterende booking, print og tracking.</p>
 								</td>
@@ -2375,7 +2375,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										Generer ny robot-token
 									</button>
 									<p class="description">Token vises bare én gang etter generering. Roboten kan sende den som <code><?php echo esc_html(LP_Cargonizer_Posten_Label_Automation::TOKEN_HEADER); ?></code> eller Bearer-token.</p>
-									<p class="description">REST-endepunkt: <code><?php echo esc_html(rest_url(LP_Cargonizer_Posten_Label_Automation::REST_NAMESPACE . '/posten-label-jobs')); ?></code></p>
+									<p class="description">REST-endepunkt: <code><?php echo esc_html(rest_url(LP_Cargonizer_Posten_Label_Automation::REST_NAMESPACE . LP_Cargonizer_Posten_Label_Automation::REST_ROUTE_PRIMARY)); ?></code></p>
 								</td>
 							</tr>
 							<tr>
