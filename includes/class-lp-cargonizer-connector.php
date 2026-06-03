@@ -343,6 +343,116 @@ class LP_Cargonizer_Connector {
 		return $this->settings_service->get_enabled_method_pricing();
 	}
 
+	private function get_available_service_ids_for_method($method_key, $services = array()) {
+		$service_ids = array();
+		foreach ((array) $services as $service) {
+			if (!is_array($service)) {
+				continue;
+			}
+			$service_id = isset($service['service_id']) ? sanitize_text_field((string) $service['service_id']) : '';
+			if ($service_id !== '') {
+				$service_ids[] = $service_id;
+			}
+		}
+
+		if (!empty($service_ids)) {
+			return array_values(array_unique($service_ids));
+		}
+
+		$settings = $this->get_settings();
+		$available_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+		foreach ($available_methods as $method) {
+			if (!is_array($method)) {
+				continue;
+			}
+			$current_method_key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
+			if ($current_method_key !== $method_key) {
+				continue;
+			}
+			foreach ((array) (isset($method['services']) ? $method['services'] : array()) as $service) {
+				if (!is_array($service)) {
+					continue;
+				}
+				$service_id = isset($service['service_id']) ? sanitize_text_field((string) $service['service_id']) : '';
+				if ($service_id !== '') {
+					$service_ids[] = $service_id;
+				}
+			}
+			break;
+		}
+
+		return array_values(array_unique($service_ids));
+	}
+
+	private function get_warehouse_available_service_id_map($method_key, $services = array()) {
+		$method_key = sanitize_text_field((string) $method_key);
+		if ($method_key === '') {
+			return array();
+		}
+
+		$all_service_ids = $this->get_available_service_ids_for_method($method_key, $services);
+		$all_service_map = array_fill_keys($all_service_ids, true);
+		$settings = $this->get_settings();
+		$method_extra_services = isset($settings['method_extra_services']) && is_array($settings['method_extra_services']) ? $settings['method_extra_services'] : array();
+
+		if (!array_key_exists($method_key, $method_extra_services)) {
+			return $all_service_map;
+		}
+
+		$allowed_map = array();
+		foreach ((array) $method_extra_services[$method_key] as $service_id) {
+			$clean_service_id = sanitize_text_field((string) $service_id);
+			if ($clean_service_id !== '' && (empty($all_service_map) || isset($all_service_map[$clean_service_id]))) {
+				$allowed_map[$clean_service_id] = true;
+			}
+		}
+
+		return $allowed_map;
+	}
+
+	private function filter_services_by_warehouse_availability($method_key, $services) {
+		$services = is_array($services) ? $services : array();
+		if (empty($services)) {
+			return array();
+		}
+
+		$allowed_map = $this->get_warehouse_available_service_id_map($method_key, $services);
+		if (empty($allowed_map)) {
+			return array();
+		}
+
+		$filtered = array();
+		foreach ($services as $service) {
+			if (!is_array($service)) {
+				continue;
+			}
+			$service_id = isset($service['service_id']) ? sanitize_text_field((string) $service['service_id']) : '';
+			if ($service_id !== '' && isset($allowed_map[$service_id])) {
+				$filtered[] = $service;
+			}
+		}
+
+		return $filtered;
+	}
+
+	private function filter_selected_service_ids_by_warehouse_availability($method_key, $selected_service_ids, $services = array()) {
+		$selected_service_ids = is_array($selected_service_ids) ? $selected_service_ids : array();
+		$allowed_map = $this->get_warehouse_available_service_id_map($method_key, $services);
+		if (empty($allowed_map)) {
+			return array();
+		}
+
+		$filtered = array();
+		foreach ($selected_service_ids as $selected_service_id) {
+			$clean_service_id = sanitize_text_field((string) $selected_service_id);
+			if ($clean_service_id !== '' && isset($allowed_map[$clean_service_id])) {
+				$filtered[] = $clean_service_id;
+			}
+		}
+
+		return array_values(array_unique($filtered));
+	}
+
 
 	private function apply_rounding_mode($value, $mode) {
 		return $this->estimator_service->apply_rounding_mode($value, $mode);
