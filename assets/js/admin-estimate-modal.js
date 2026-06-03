@@ -51,6 +51,10 @@
 			var currentCheckoutSelection = null;
 			var bookingNotifyDefault = (config.bookingDefaults && Number(config.bookingDefaults.notifyEmailToConsignee) === 0) ? 0 : 1;
 			var printerLoadWarningMessage = '';
+			var currentShippingOptions = [];
+			var servicepartnerLookupCache = {};
+			var servicepartnerPrefetchInFlight = {};
+			var servicepartnerLookupGeneration = 0;
 
 			function esc(s){
 				s = (s === null || s === undefined) ? '' : String(s);
@@ -271,6 +275,7 @@
 
 			function renderShippingOptions(options){
 				if (!Array.isArray(options) || !options.length) {
+					currentShippingOptions = [];
 					shippingOptionsList.innerHTML = '<em>Ingen fraktvalg funnet.</em>';
 					if (selectAllShippingBtn) {
 						selectAllShippingBtn.textContent = 'Velg alle';
@@ -278,6 +283,7 @@
 					return;
 				}
 
+				currentShippingOptions = options.slice();
 				var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;">';
 				options.forEach(function(option){
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
@@ -492,8 +498,16 @@
 				return !!productId && ids.indexOf(productId) !== -1;
 			}
 
+			function isManualNorgespakkeMethod(method){
+				if (!method) { return false; }
+				if (method.is_manual_norgespakke === true || method.is_manual_norgespakke === '1') { return true; }
+				var key = (method.agreement_id || '') + '|' + (method.product_id || '');
+				return key === 'manual|norgespakke';
+			}
+
 			function isMethodExplicitlyHomeDelivery(method){
 				if (!method) { return false; }
+				if (isManualNorgespakkeMethod(method)) { return false; }
 				var strictHomeIds = [
 					'mypack_home',
 					'mypack_small_home',
@@ -511,6 +525,7 @@
 
 			function isMethodExplicitlyPickupPoint(method){
 				if (!method) { return false; }
+				if (isManualNorgespakkeMethod(method)) { return false; }
 				var strictPickupIds = [
 					'mypack',
 					'mypack_collect',
@@ -544,6 +559,7 @@
 
 			function methodLikelyNeedsServicepartner(method){
 				if (!method) { return false; }
+				if (isManualNorgespakkeMethod(method)) { return false; }
 				if (isMethodExplicitlyHomeDelivery(method) && !isMethodExplicitlyPickupPoint(method)) {
 					return false;
 				}
@@ -710,6 +726,66 @@
 				'</div>';
 			}
 
+			function getCachedServicepartnerLookup(methodKey){
+				if (!methodKey || !servicepartnerLookupCache[methodKey]) { return null; }
+				return servicepartnerLookupCache[methodKey];
+			}
+
+			function cacheServicepartnerLookup(methodKey, options, debug, success){
+				if (!methodKey) { return; }
+				servicepartnerLookupCache[methodKey] = {
+					options: Array.isArray(options) ? options : [],
+					debug: debug || {},
+					success: !!success
+				};
+			}
+
+			function applyServicepartnerCacheToMethod(method){
+				if (!method || !methodLikelyNeedsServicepartner(method) || method.servicepartner) { return method; }
+				var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+				var cached = getCachedServicepartnerLookup(methodKey);
+				var options = cached && Array.isArray(cached.options) ? cached.options : [];
+				var defaultOption = pickDefaultServicepartnerOption(options);
+				if (!defaultOption || !defaultOption.value) { return method; }
+				var enriched = Object.assign({}, method);
+				enriched.servicepartner = String(defaultOption.value);
+				enriched.servicepartner_customer_number = defaultOption.customer_number ? String(defaultOption.customer_number) : '';
+				enriched.servicepartner_selected_option = defaultOption;
+				enriched.servicepartner_selection_source = 'prefetched';
+				enriched.servicepartner_user_selected = false;
+				return enriched;
+			}
+
+			function applyServicepartnerCacheToRow(row){
+				if (!row || !methodLikelyNeedsServicepartner(row)) { return row; }
+				var methodKey = methodKeyForRow(row);
+				var cached = getCachedServicepartnerLookup(methodKey);
+				if (!cached) { return row; }
+				var options = Array.isArray(cached.options) ? cached.options : [];
+				if ((!Array.isArray(row.servicepartner_options) || !row.servicepartner_options.length) && options.length) {
+					row.servicepartner_options = options;
+				}
+				if ((!row.servicepartner_fetch || !Object.keys(row.servicepartner_fetch).length) && cached.debug) {
+					row.servicepartner_fetch = cached.debug;
+				}
+				if (!row.selected_servicepartner && options.length) {
+					var defaultOption = pickDefaultServicepartnerOption(options);
+					if (defaultOption && defaultOption.value) {
+						row.selected_servicepartner = String(defaultOption.value);
+						row.selected_servicepartner_customer_number = defaultOption.customer_number ? String(defaultOption.customer_number) : '';
+						row.selected_servicepartner_option = defaultOption;
+						row.servicepartner_selection_source = 'prefetched';
+						row.servicepartner_auto_selected = true;
+					}
+				} else if (row.selected_servicepartner && (!row.selected_servicepartner_option || !Object.keys(row.selected_servicepartner_option).length)) {
+					var selectedOption = findServicepartnerOption(row, row.selected_servicepartner);
+					if (selectedOption) {
+						row.selected_servicepartner_option = selectedOption;
+					}
+				}
+				return row;
+			}
+
 			function getFetchFailureDetails(payload, debug){
 				var message = (payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil';
 				var statusText = debug && debug.http_status ? ' (HTTP ' + debug.http_status + ')' : '';
@@ -767,9 +843,7 @@
 
 			function isManualNorgespakkeRow(row){
 				if (!row) { return false; }
-				if (row.is_manual_norgespakke) { return true; }
-				var key = (row.agreement_id || '') + '|' + (row.product_id || '');
-				return key === 'manual|norgespakke';
+				return isManualNorgespakkeMethod(row);
 			}
 
 			function getManualNorgespakkePackages(row){
@@ -1164,10 +1238,34 @@
 						};
 					}
 				}
+				for (var k = 0; k < currentShippingOptions.length; k++) {
+					var option = currentShippingOptions[k] || {};
+					var optionKey = (option.agreement_id || '') + '|' + (option.product_id || '');
+					if (optionKey === methodKey || (option.key && String(option.key) === methodKey)) {
+						return {
+							key: option.key || methodKey,
+							agreement_id: option.agreement_id || '',
+							agreement_name: option.agreement_name || '',
+							agreement_description: option.agreement_description || '',
+							agreement_number: option.agreement_number || '',
+							carrier_id: option.carrier_id || '',
+							carrier_name: option.carrier_name || '',
+							product_id: option.product_id || '',
+							product_name: option.product_name || '',
+							is_manual: !!option.is_manual,
+							is_manual_norgespakke: !!option.is_manual_norgespakke || optionKey === 'manual|norgespakke',
+							delivery_to_pickup_point: isMethodExplicitlyPickupPoint(option),
+							delivery_to_home: isMethodExplicitlyHomeDelivery(option),
+							services: Array.isArray(option.services) ? option.services : []
+						};
+					}
+				}
 				return null;
 			}
 
-			function fetchServicepartnersForMethod(methodKey){
+			function fetchServicepartnersForMethod(methodKey, options){
+				var opts = options || {};
+				var lookupGeneration = opts.generation !== undefined ? opts.generation : servicepartnerLookupGeneration;
 				var methodData = getMethodDataByKey(methodKey);
 				if (!methodData) { return Promise.resolve([]); }
 				var form = new FormData();
@@ -1192,13 +1290,19 @@
 					})
 					.then(function(res){
 						var payload = res && res.json ? res.json : null;
+						if (lookupGeneration !== servicepartnerLookupGeneration) {
+							return [];
+						}
 						var httpStatus = res && res.httpStatus ? res.httpStatus : 0;
 						var debug = (payload && payload.data && payload.data.debug) ? payload.data.debug : {};
 						debug.http_status = debug.http_status || httpStatus;
 						var options = (payload && payload.success && payload.data && Array.isArray(payload.data.options)) ? payload.data.options : [];
+						cacheServicepartnerLookup(methodKey, options, debug, !!(payload && payload.success));
 						var currentProactiveMethodKey = bookingServicepartnerSelect ? bookingServicepartnerSelect.getAttribute('data-method-key') : '';
+						var changedRows = false;
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
+								changedRows = true;
 								row.servicepartner_options = options;
 								row.servicepartner_fetch = debug;
 								var selectedServicepartner = row.selected_servicepartner ? String(row.selected_servicepartner) : '';
@@ -1236,7 +1340,9 @@
 							}
 							return row;
 						});
-						renderEstimateResults(latestEstimateResults);
+						if (changedRows && !opts.silent) {
+							renderEstimateResults(latestEstimateResults);
+						}
 						if (currentMode === 'booking' && bookingResultsContent) {
 							var retrySelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 							if (retrySelect) {
@@ -1321,14 +1427,22 @@
 						return options;
 					})
 					.catch(function(){
+						if (lookupGeneration !== servicepartnerLookupGeneration) {
+							return [];
+						}
+						cacheServicepartnerLookup(methodKey, [], { success:false, http_status:0, error_message:'Teknisk feil ved henting av servicepartnere.', raw_response_body:'', request_url:'' }, false);
+						var changedRows = false;
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
+								changedRows = true;
 								row.servicepartner_fetch = { success:false, http_status:0, error_message:'Teknisk feil ved henting av servicepartnere.', raw_response_body:'', request_url:'' };
 								row.error = 'Teknisk feil ved henting av servicepartnere.';
 							}
 							return row;
 						});
-						renderEstimateResults(latestEstimateResults);
+						if (changedRows && !opts.silent) {
+							renderEstimateResults(latestEstimateResults);
+						}
 						if (currentMode === 'booking' && bookingServicepartnerSelect && bookingServicepartnerSelect.getAttribute('data-method-key') === methodKey) {
 							setProactiveServicepartnerHelp('Kunne ikke hente servicepartnere: Teknisk feil ved henting av servicepartnere. (HTTP 0)', '#b32d2e');
 						}
@@ -1336,11 +1450,49 @@
 					});
 			}
 
+			function prefetchServicepartnersForEstimateOptions(options){
+				if (currentMode !== 'estimate' || !Array.isArray(options) || !options.length) { return; }
+				var methodKeys = [];
+				var seen = {};
+				options.forEach(function(option){
+					if (!methodLikelyNeedsServicepartner(option)) { return; }
+					var methodKey = (option.agreement_id || '') + '|' + (option.product_id || '');
+					if (!methodKey || methodKey === '|' || seen[methodKey] || servicepartnerLookupCache[methodKey] || servicepartnerPrefetchInFlight[methodKey]) { return; }
+					seen[methodKey] = true;
+					methodKeys.push(methodKey);
+				});
+				if (!methodKeys.length) { return; }
+				var queue = methodKeys.slice(0, 10);
+				var active = 0;
+				var maxConcurrent = 3;
+				var generation = servicepartnerLookupGeneration;
+				function pump(){
+					if (generation !== servicepartnerLookupGeneration) { return; }
+					while (active < maxConcurrent && queue.length) {
+						var methodKey = queue.shift();
+						active++;
+						servicepartnerPrefetchInFlight[methodKey] = true;
+						(function(prefetchMethodKey){
+							fetchServicepartnersForMethod(prefetchMethodKey, { silent: true, prefetch: true, generation: generation })
+								.finally(function(){
+									if (generation === servicepartnerLookupGeneration) {
+										delete servicepartnerPrefetchInFlight[prefetchMethodKey];
+									}
+									active--;
+									pump();
+								});
+						})(methodKey);
+					}
+				}
+				pump();
+			}
+
 			function runEstimateForSingleMethod(methodKey, selectedServicepartner, useSmsService){
 				var colli = collectColliData();
 				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) { return; }
 				var methodData = getMethodDataByKey(methodKey);
 				if (!methodData) { return; }
+				methodData = applyServicepartnerCacheToMethod(methodData);
 				var isDsvMethod = ((methodData.carrier_id || '') + ' ' + (methodData.carrier_name || '')).toLowerCase().indexOf('dsv') !== -1;
 				var shouldRunProgressiveDsv = isDsvMethod && colli.payload.packages.length > 1;
 				var form = new FormData();
@@ -1436,6 +1588,7 @@
 					resultsContent.innerHTML = '<em>Ingen resultater å vise.</em>';
 					return;
 				}
+				results = results.map(applyServicepartnerCacheToRow);
 				latestEstimateResults = results.slice();
 
 				var okResults = [];
@@ -1786,6 +1939,7 @@
 						applyCheckoutSelectionPrefill();
 						updateBookingServicesSelector();
 						updateProactiveBookingServicepartner();
+						prefetchServicepartnersForEstimateOptions(res.data.options || []);
 					})
 					.catch(function(){
 						shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved henting av fraktvalg.</span>';
@@ -1807,6 +1961,7 @@
 					resultsContent.innerHTML = '<span style="color:#b32d2e;">Velg minst én fraktmetode før estimering.</span>';
 					return null;
 				}
+				methods = methods.map(applyServicepartnerCacheToMethod);
 				return { packages: colli.payload.packages, methods: methods };
 			}
 
@@ -2293,6 +2448,10 @@
 				currentBookingState = null;
 				currentCheckoutSelection = null;
 				printerLoadWarningMessage = '';
+				currentShippingOptions = [];
+				servicepartnerLookupCache = {};
+				servicepartnerPrefetchInFlight = {};
+				servicepartnerLookupGeneration++;
 				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
 				if (bookingResultsContent) {
