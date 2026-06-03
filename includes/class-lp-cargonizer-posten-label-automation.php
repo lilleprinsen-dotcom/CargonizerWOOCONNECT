@@ -349,37 +349,51 @@ class LP_Cargonizer_Posten_Label_Automation {
 			}
 
 			$now = gmdate('Y-m-d H:i:s');
-			$job_id = $this->generate_job_id($order_id);
-			$inserted = $wpdb->insert($table, array(
-				'job_id' => $job_id,
-				'order_id' => $order_id,
-				'order_number' => $order_number,
-				'status' => self::JOB_STATUS_QUEUED,
-				'source' => $source,
-				'service' => 'norgespakke',
-				'method_key' => $method_key,
-				'recipient_json' => $this->json_encode($recipient),
-				'packages_json' => $this->json_encode($clean_packages),
-				'shipping_json' => $this->json_encode($shipping),
-				'sender_json' => $this->json_encode($sender),
-				'items_json' => $this->json_encode($items),
-				'tracking_number' => '',
-				'tracking_url' => '',
-				'label_file_path' => '',
-				'label_attachment_id' => 0,
-				'printed' => 0,
-				'worker_id' => '',
-				'attempts' => 0,
-				'last_error' => '',
-				'requested_by_user_id' => get_current_user_id(),
-				'created_at_gmt' => $now,
-				'updated_at_gmt' => $now,
-				'requested_at_gmt' => $now,
-				'failure_message' => '',
-			), array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s'));
+			$job_id = '';
+			$db_error = '';
+			$inserted = false;
+			$insert_formats = array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s');
+			for ($job_id_attempt = 0; $job_id_attempt < 8; $job_id_attempt++) {
+				$job_id = $this->generate_job_id($order_id, $job_id_attempt);
+				$inserted = $wpdb->insert($table, array(
+					'job_id' => $job_id,
+					'order_id' => $order_id,
+					'order_number' => $order_number,
+					'status' => self::JOB_STATUS_QUEUED,
+					'source' => $source,
+					'service' => 'norgespakke',
+					'method_key' => $method_key,
+					'recipient_json' => $this->json_encode($recipient),
+					'packages_json' => $this->json_encode($clean_packages),
+					'shipping_json' => $this->json_encode($shipping),
+					'sender_json' => $this->json_encode($sender),
+					'items_json' => $this->json_encode($items),
+					'tracking_number' => '',
+					'tracking_url' => '',
+					'label_file_path' => '',
+					'label_attachment_id' => 0,
+					'printed' => 0,
+					'worker_id' => '',
+					'attempts' => 0,
+					'last_error' => '',
+					'requested_by_user_id' => get_current_user_id(),
+					'created_at_gmt' => $now,
+					'updated_at_gmt' => $now,
+					'requested_at_gmt' => $now,
+					'failure_message' => '',
+				), $insert_formats);
+
+				if ($inserted) {
+					break;
+				}
+
+				$db_error = isset($wpdb->last_error) ? trim((string) $wpdb->last_error) : '';
+				if (!$this->is_duplicate_job_id_insert_error($db_error)) {
+					break;
+				}
+			}
 
 			if (!$inserted) {
-				$db_error = isset($wpdb->last_error) ? trim((string) $wpdb->last_error) : '';
 				return new WP_Error('posten_job_insert_failed', 'Kunne ikke opprette Posten etikettjobb i databasen.' . ($db_error !== '' ? ' Databasefeil: ' . $db_error : ''));
 			}
 
@@ -2431,9 +2445,34 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return '';
 	}
 
-	private function generate_job_id($order_id) {
-		$uuid = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : bin2hex(random_bytes(16));
-		return substr('posten_' . absint($order_id) . '_' . str_replace('-', '', $uuid), 0, 64);
+	private function generate_job_id($order_id, $attempt = 0) {
+		$entropy = array(
+			(string) absint($order_id),
+			(string) absint($attempt),
+			(string) microtime(true),
+			uniqid('', true),
+		);
+		if (function_exists('wp_generate_uuid4')) {
+			$entropy[] = (string) wp_generate_uuid4();
+		}
+		if (function_exists('wp_rand')) {
+			$entropy[] = (string) wp_rand(0, PHP_INT_MAX);
+		}
+		if (function_exists('random_bytes')) {
+			try {
+				$entropy[] = bin2hex(random_bytes(16));
+			} catch (Throwable $throwable) {
+				$entropy[] = $throwable->getMessage();
+			}
+		}
+
+		$suffix = substr(hash('sha256', implode('|', $entropy)), 0, 32);
+		return substr('posten_' . absint($order_id) . '_' . $suffix, 0, 64);
+	}
+
+	private function is_duplicate_job_id_insert_error($db_error) {
+		$db_error = (string) $db_error;
+		return stripos($db_error, 'Duplicate entry') !== false && stripos($db_error, 'job_id') !== false;
 	}
 
 	private function sanitize_job_id($job_id) {
