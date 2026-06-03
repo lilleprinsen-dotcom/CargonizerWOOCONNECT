@@ -753,7 +753,7 @@ class LP_Cargonizer_Connector {
 
 		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => 40,
-			'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
+			'headers' => array_merge($this->get_auth_headers(isset($method_payload['sender_id_override']) ? $method_payload['sender_id_override'] : ''), array('Content-Type' => 'application/xml')),
 			'body' => $xml,
 		));
 

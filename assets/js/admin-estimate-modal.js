@@ -34,6 +34,8 @@
 			var modalTitle = document.getElementById('lp-cargonizer-modal-title');
 			var estimatePriceResults = document.getElementById('lp-cargonizer-estimate-price-results');
 			var bookingPrinterSection = document.getElementById('lp-cargonizer-booking-printer-section');
+			var bookingSenderProfileChoice = document.getElementById('lp-cargonizer-booking-sender-profile');
+			var bookingSenderHelp = document.getElementById('lp-cargonizer-booking-sender-help');
 			var bookingPrinterChoice = document.getElementById('lp-cargonizer-booking-printer-choice');
 			var bookingPrinterHelp = document.getElementById('lp-cargonizer-booking-printer-help');
 			var bookingNotifySection = document.getElementById('lp-cargonizer-booking-notify-section');
@@ -66,6 +68,8 @@
 			var printerLoadWarningMessage = '';
 			var currentPrinters = [];
 			var currentDefaultPrinterId = '';
+			var currentSenderProfiles = [];
+			var currentDefaultSenderProfileId = '';
 			var currentShippingOptions = [];
 				var servicepartnerLookupCache = {};
 				var servicepartnerPrefetchInFlight = {};
@@ -82,6 +86,87 @@
 				var n = parseFloat(v);
 				return isNaN(n) ? 0 : n;
 			}
+
+				function getSelectedSenderProfileId(){
+					return bookingSenderProfileChoice ? (bookingSenderProfileChoice.value || currentDefaultSenderProfileId || '') : (currentDefaultSenderProfileId || '');
+				}
+
+				function getSenderProfileById(profileId){
+					var id = profileId ? String(profileId) : '';
+					for (var i = 0; i < currentSenderProfiles.length; i++) {
+						if (String(currentSenderProfiles[i].profile_id || '') === id) {
+							return currentSenderProfiles[i];
+						}
+					}
+					return null;
+				}
+
+				function formatSenderProfileLabel(profile){
+					if (!profile) { return 'Standard sender'; }
+					var name = profile.name || profile.company || profile.sender_id || 'Sender';
+					var senderId = profile.sender_id ? ' (' + profile.sender_id + ')' : '';
+					var place = [profile.postcode || '', profile.city || ''].filter(Boolean).join(' ');
+					return name + senderId + (place ? ' - ' + place : '');
+				}
+
+				function updateSenderHelp(){
+					if (!bookingSenderHelp) { return; }
+					var profile = getSenderProfileById(getSelectedSenderProfileId());
+					if (!profile) {
+						bookingSenderHelp.textContent = currentSenderProfiles.length ? 'Velg hvilken senderadresse estimat og booking skal bruke.' : 'Ingen senderadresser er lagret fra Cargonizer-innstillingene.';
+						return;
+					}
+					var addressParts = [];
+					if (profile.address_line) { addressParts.push(profile.address_line); }
+					if (profile.postal_line) { addressParts.push(profile.postal_line); }
+					if (profile.country) { addressParts.push(profile.country); }
+					bookingSenderHelp.textContent = 'Bruker Sender ID ' + (profile.sender_id || '—') + (addressParts.length ? ': ' + addressParts.join(', ') : '.');
+				}
+
+				function populateSenderProfileChoice(profiles, defaultProfileId){
+					currentSenderProfiles = Array.isArray(profiles) ? profiles.slice() : [];
+					currentDefaultSenderProfileId = defaultProfileId ? String(defaultProfileId) : '';
+					if (!currentDefaultSenderProfileId && currentSenderProfiles.length) {
+						for (var i = 0; i < currentSenderProfiles.length; i++) {
+							if (currentSenderProfiles[i] && currentSenderProfiles[i].is_default) {
+								currentDefaultSenderProfileId = String(currentSenderProfiles[i].profile_id || '');
+								break;
+							}
+						}
+						if (!currentDefaultSenderProfileId) {
+							currentDefaultSenderProfileId = String(currentSenderProfiles[0].profile_id || '');
+						}
+					}
+					if (!bookingSenderProfileChoice) {
+						return;
+					}
+					var html = '';
+					currentSenderProfiles.forEach(function(profile){
+						var profileId = profile && profile.profile_id ? String(profile.profile_id) : '';
+						if (!profileId) { return; }
+						html += '<option value="' + esc(profileId) + '">' + esc(formatSenderProfileLabel(profile)) + '</option>';
+					});
+					bookingSenderProfileChoice.innerHTML = html || '<option value="">Standard sender</option>';
+					bookingSenderProfileChoice.value = currentDefaultSenderProfileId || (currentSenderProfiles[0] && currentSenderProfiles[0].profile_id ? String(currentSenderProfiles[0].profile_id) : '');
+					updateSenderHelp();
+				}
+
+				function clearSenderSensitiveState(){
+					servicepartnerLookupCache = {};
+					servicepartnerPrefetchInFlight = {};
+					servicepartnerLookupGeneration++;
+					bookingRecommendationsReady = false;
+					latestEstimateResults = [];
+					if (resultsContent) {
+						resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
+					}
+					if (bookingRecommendationsContent) {
+						bookingRecommendationsContent.innerHTML = 'Ingen anbefalinger hentet enda.';
+					}
+					setShippingOptionsVisibility();
+					clearProactiveServicepartnerState();
+					hideBookingConfirmation();
+				}
 
 				function shouldAutoSelectPickup(){
 					return bookingPickupAutoselectMode !== 'none';
@@ -1451,6 +1536,7 @@
 				form.append('action', 'lp_cargonizer_get_servicepartner_options');
 				form.append('nonce', (config.nonces && config.nonces.servicepartners ? config.nonces.servicepartners : ''));
 				form.append('order_id', currentOrderId || '');
+				form.append('warehouse_profile_id', getSelectedSenderProfileId());
 				form.append('agreement_id', methodData.agreement_id || '');
 				form.append('product_id', methodData.product_id || '');
 				form.append('carrier_id', methodData.carrier_id || '');
@@ -1684,6 +1770,7 @@
 					? (config.nonces && config.nonces.estimateBaseline ? config.nonces.estimateBaseline : '')
 					: (config.nonces && config.nonces.estimate ? config.nonces.estimate : ''));
 				form.append('order_id', currentOrderId);
+				form.append('warehouse_profile_id', getSelectedSenderProfileId());
 				colli.payload.packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){ form.append('packages['+idx+']['+key+']', pkg[key]); });
 				});
@@ -2231,6 +2318,13 @@
 				var selectedServiceIds = Array.isArray(bookingData.selected_service_ids) ? bookingData.selected_service_ids.filter(function(v){ return v !== null && v !== undefined && v !== ''; }) : [];
 				var createdByUser = bookingData.created_by_display_name || bookingData.created_by_user_login || '—';
 				var estimatedPrice = bookingData.estimated_shipping_price || 'ikke tilgjengelig';
+				var senderText = bookingData.sender_profile_name || bookingData.sender_id || '—';
+				if (bookingData.sender_id && bookingData.sender_profile_name) {
+					senderText += ' (' + bookingData.sender_id + ')';
+				}
+				if (bookingData.sender_address) {
+					senderText += ' - ' + bookingData.sender_address;
+				}
 				var statusChange = bookingData.status_change || {};
 				var statusChangeHtml = '';
 				if (statusChange && statusChange.enabled) {
@@ -2245,6 +2339,7 @@
 					'<div><strong>Piece numbers:</strong> ' + esc(pieceNumbers.length ? pieceNumbers.join(', ') : '—') + '</div>' +
 					'<div><strong>Tracking URL:</strong> ' + (bookingData.tracking_url ? '<a href="' + esc(bookingData.tracking_url) + '" target="_blank" rel="noopener noreferrer">' + esc(bookingData.tracking_url) + '</a>' : '—') + '</div>' +
 					(methodLabel ? '<div><strong>Fraktmetode:</strong> ' + esc(methodLabel) + '</div>' : '') +
+					'<div><strong>Sender:</strong> ' + esc(senderText) + '</div>' +
 					'<div><strong>Opprettet av:</strong> ' + esc(createdByUser) + '</div>' +
 					'<div><strong>Estimert fraktpris:</strong> ' + esc(estimatedPrice) + '</div>' +
 					'<div><strong>Valgte tilleggstjenester:</strong> ' + esc(selectedServiceIds.length ? selectedServiceIds.join(', ') : 'Ingen') + '</div>' +
@@ -2390,6 +2485,7 @@
 
 			function appendEstimatePayload(form, packages, methods){
 				form.append('order_id', currentOrderId);
+				form.append('warehouse_profile_id', getSelectedSenderProfileId());
 				packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){
 						appendFormValue(form, 'packages['+idx+']['+key+']', pkg[key]);
@@ -2633,9 +2729,11 @@
 					var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
 					var receiverName = currentRecipient && currentRecipient.name ? currentRecipient.name : '—';
 					var receiverPostcode = currentRecipient && currentRecipient.postcode ? currentRecipient.postcode : '—';
+					var senderProfile = getSenderProfileById(getSelectedSenderProfileId());
 					pendingBookingPreselectedMethod = preselectedMethod ? method : null;
 					if (bookingConfirmationContent) {
 						bookingConfirmationContent.innerHTML = '<div style="display:grid;grid-template-columns:minmax(140px,max-content) 1fr;gap:6px 12px;align-items:start;">' +
+							'<strong>Sender</strong><span>' + esc(formatSenderProfileLabel(senderProfile)) + '</span>' +
 							'<strong>Antall kolli</strong><span>' + esc(colli.payload.packages.length) + '</span>' +
 							'<strong>Mottaker</strong><span>' + esc(receiverName) + '</span>' +
 							'<strong>Postnummer</strong><span>' + esc(receiverPostcode) + '</span>' +
@@ -2743,6 +2841,7 @@
 				form.append('action', 'lp_cargonizer_book_shipment');
 				form.append('nonce', bookingNonce);
 				form.append('order_id', currentOrderId);
+				form.append('warehouse_profile_id', getSelectedSenderProfileId());
 				colli.payload.packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){
 						form.append('packages['+idx+']['+key+']', pkg[key]);
@@ -2870,6 +2969,12 @@
 				}
 				if (bookingPrinterChoice) {
 					bookingPrinterChoice.addEventListener('change', hideBookingConfirmation);
+				}
+				if (bookingSenderProfileChoice) {
+					bookingSenderProfileChoice.addEventListener('change', function(){
+						updateSenderHelp();
+						clearSenderSensitiveState();
+					});
 				}
 				if (bookingNotifyCheckbox) {
 					bookingNotifyCheckbox.addEventListener('change', hideBookingConfirmation);
@@ -3011,6 +3116,7 @@
 						currentRecipient = d.recipient || {};
 						currentBookingState = d.booking_state || null;
 						currentCheckoutSelection = d.checkout_selection || null;
+						populateSenderProfileChoice(d.sender_profiles || [], d.default_sender_profile_id || '');
 						if (d.booking_defaults && typeof d.booking_defaults.notify_email_to_consignee !== 'undefined') {
 							bookingNotifyDefault = Number(d.booking_defaults.notify_email_to_consignee) === 0 ? 0 : 1;
 						}
@@ -3080,6 +3186,8 @@
 				printerLoadWarningMessage = '';
 				currentPrinters = [];
 				currentDefaultPrinterId = '';
+				currentSenderProfiles = [];
+				currentDefaultSenderProfileId = '';
 					currentShippingOptions = [];
 					servicepartnerLookupCache = {};
 					servicepartnerPrefetchInFlight = {};
@@ -3098,6 +3206,12 @@
 				}
 				if (bookingPrinterHelp) {
 					bookingPrinterHelp.textContent = '';
+				}
+				if (bookingSenderProfileChoice) {
+					bookingSenderProfileChoice.innerHTML = '<option value="">Standard sender</option>';
+				}
+				if (bookingSenderHelp) {
+					bookingSenderHelp.textContent = '';
 				}
 				if (bookingNotifyCheckbox) {
 					bookingNotifyCheckbox.checked = bookingNotifyDefault === 1;

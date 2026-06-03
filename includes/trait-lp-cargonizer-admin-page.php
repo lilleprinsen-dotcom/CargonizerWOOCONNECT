@@ -170,6 +170,15 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				<div id="lp-cargonizer-estimate-loading" style="display:none;margin:12px 0;"><em>Laster ordredata...</em></div>
 				<div id="lp-cargonizer-estimate-error" style="display:none;margin:12px 0;color:#b32d2e;"></div>
 				<div id="lp-cargonizer-estimate-content" style="display:none;">
+					<div id="lp-cargonizer-booking-sender-section" style="background:#fcfcfc;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;">
+						<label style="display:flex;flex-direction:column;gap:4px;">
+							<span>Senderadresse</span>
+							<select id="lp-cargonizer-booking-sender-profile" style="max-width:520px;">
+								<option value="">Standard sender</option>
+							</select>
+						</label>
+						<div id="lp-cargonizer-booking-sender-help" style="margin-top:6px;color:#646970;"></div>
+					</div>
 					<div id="lp-cargonizer-estimate-overview" style="background:#f6f7f7;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;"></div>
 					<div id="lp-cargonizer-estimate-recipient" style="background:#f6f7f7;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;"></div>
 					<div id="lp-cargonizer-estimate-lines" style="margin-bottom:16px;"></div>
@@ -818,13 +827,32 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'checkout_method_rules' => array(
 					'rules' => $this->parse_checkout_method_rules_editor_input(isset($_POST['lp_cargonizer_checkout_method_rules']) && is_array($_POST['lp_cargonizer_checkout_method_rules']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules']) : array()),
 				),
-				'warehouse_profiles' => isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array(),
+				'warehouse_profiles' => isset($_POST['lp_cargonizer_warehouse_profiles']) && is_array($_POST['lp_cargonizer_warehouse_profiles'])
+					? wp_unslash($_POST['lp_cargonizer_warehouse_profiles'])
+					: (isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array()),
 				'checkout_fallback' => array(
 					'on_quote_failure' => isset($_POST['lp_cargonizer_checkout_fallback_on_quote_failure']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_on_quote_failure'])) : '',
 					'allow_checkout_with_fallback' => isset($_POST['lp_cargonizer_checkout_fallback_allow_checkout']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_allow_checkout'])) : '0',
 					'safe_fallback_rates' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_fallback_rates_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_fallback_rates_json']) : ''),
 				),
 			);
+
+			$posted_sender_id_field = isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '';
+			$sender_id_field_changed = $posted_sender_id_field !== '' && $posted_sender_id_field !== (isset($settings['sender_id']) ? sanitize_text_field((string) $settings['sender_id']) : '');
+			if (!$sender_id_field_changed && !empty($new_settings['warehouse_profiles']['default_profile_id']) && !empty($new_settings['warehouse_profiles']['profiles']) && is_array($new_settings['warehouse_profiles']['profiles'])) {
+				$posted_default_sender_profile_id = sanitize_key((string) $new_settings['warehouse_profiles']['default_profile_id']);
+				foreach ($new_settings['warehouse_profiles']['profiles'] as $posted_sender_profile) {
+					if (!is_array($posted_sender_profile)) {
+						continue;
+					}
+					$posted_sender_profile_id = isset($posted_sender_profile['profile_id']) ? sanitize_key((string) $posted_sender_profile['profile_id']) : '';
+					$posted_sender_id = isset($posted_sender_profile['sender_id']) ? sanitize_text_field((string) $posted_sender_profile['sender_id']) : '';
+					if ($posted_sender_profile_id !== '' && $posted_sender_profile_id === $posted_default_sender_profile_id && $posted_sender_id !== '') {
+						$new_settings['sender_id'] = $posted_sender_id;
+						break;
+					}
+				}
+			}
 
 			$new_settings = $this->sanitize_settings($new_settings);
 			$profiles_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : '');
@@ -1525,11 +1553,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					$sender_addresses = isset($sender_addresses_fetch_result['addresses']) && is_array($sender_addresses_fetch_result['addresses'])
 						? $sender_addresses_fetch_result['addresses']
 						: array();
+					$default_sender_profile_id = $this->get_default_sender_profile_id($settings);
+					$current_default_sender_profile = $this->resolve_selected_warehouse_profile($default_sender_profile_id);
+					$current_default_sender_id = isset($current_default_sender_profile['sender_id']) ? sanitize_text_field((string) $current_default_sender_profile['sender_id']) : '';
 					?>
 					<?php if (!empty($sender_addresses_fetch_result['success']) && !empty($sender_addresses)) : ?>
+						<p class="description">Velg hvilken senderadresse som skal være standard i Book shipment-popupen. Lageret kan fortsatt bytte senderadresse før estimering og booking.</p>
 						<table class="widefat striped" style="max-width:1000px;">
 							<thead>
 								<tr>
+									<th>Standard</th>
 									<th>ID</th>
 									<th>Navn</th>
 									<th>Adresse</th>
@@ -1538,7 +1571,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 								</tr>
 							</thead>
 							<tbody>
-								<?php foreach ($sender_addresses as $sender_address) : ?>
+								<?php foreach ($sender_addresses as $sender_address_index => $sender_address) : ?>
 									<?php
 									$sender_id = isset($sender_address['id']) ? sanitize_text_field((string) $sender_address['id']) : '';
 									$sender_name = isset($sender_address['name']) ? sanitize_text_field((string) $sender_address['name']) : '';
@@ -1549,8 +1582,30 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									$sender_country = isset($sender_address['country']) ? sanitize_text_field((string) $sender_address['country']) : '';
 									$sender_address_line = trim($sender_address_1 . ($sender_address_2 !== '' ? ', ' . $sender_address_2 : ''));
 									$sender_postal_line = trim($sender_postcode . ' ' . $sender_city);
+									$sender_profile_id = $this->build_sender_profile_id($sender_id);
+									$sender_profile_name = $sender_name !== '' ? $sender_name : ($sender_id !== '' ? 'Sender ' . $sender_id : 'Sender');
 									?>
 									<tr>
+										<td>
+											<?php if ($sender_id !== '') : ?>
+												<label>
+													<input type="radio" name="lp_cargonizer_warehouse_profiles[default_profile_id]" value="<?php echo esc_attr($sender_profile_id); ?>" <?php checked($default_sender_profile_id === $sender_profile_id || $current_default_sender_id === $sender_id || ($default_sender_profile_id === '' && (string) $settings['sender_id'] === $sender_id)); ?>>
+													<span class="screen-reader-text"><?php echo esc_html('Bruk ' . $sender_profile_name . ' som standard sender'); ?></span>
+												</label>
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][profile_id]" value="<?php echo esc_attr($sender_profile_id); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][name]" value="<?php echo esc_attr($sender_profile_name); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][sender_id]" value="<?php echo esc_attr($sender_id); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][company]" value="<?php echo esc_attr($sender_name); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][address1]" value="<?php echo esc_attr($sender_address_1); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][address2]" value="<?php echo esc_attr($sender_address_2); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][postcode]" value="<?php echo esc_attr($sender_postcode); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][city]" value="<?php echo esc_attr($sender_city); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][country]" value="<?php echo esc_attr($sender_country); ?>">
+												<input type="hidden" name="lp_cargonizer_warehouse_profiles[profiles][<?php echo esc_attr($sender_address_index); ?>][active]" value="1">
+											<?php else : ?>
+												—
+											<?php endif; ?>
+										</td>
 										<td><?php echo esc_html($sender_id !== '' ? $sender_id : '—'); ?></td>
 										<td><?php echo esc_html($sender_name !== '' ? $sender_name : '—'); ?></td>
 										<td><?php echo esc_html($sender_address_line !== '' ? $sender_address_line : '—'); ?></td>
