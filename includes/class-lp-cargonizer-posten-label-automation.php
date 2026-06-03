@@ -2539,10 +2539,109 @@ class LP_Cargonizer_Posten_Label_Automation {
 			}
 			$pdf->Output('F', $output_path);
 		} catch (Throwable $throwable) {
-			return new WP_Error('posten_pdf_stamp_failed', 'PDF-stempling feilet: ' . $throwable->getMessage());
+			$error = new WP_Error('posten_pdf_stamp_failed', 'PDF-stempling feilet: ' . $throwable->getMessage());
+			if ($this->is_recoverable_pdf_stamp_error($error)) {
+				$fallback = $this->stamp_pdf_file_with_printable_annotation($original_path, $output_path, $stamp_text, $settings);
+				if (!is_wp_error($fallback)) {
+					return $fallback;
+				}
+
+				return new WP_Error('posten_pdf_stamp_failed', $error->get_error_message() . ' Annotation fallback feilet: ' . $fallback->get_error_message());
+			}
+
+			return $error;
 		}
 
 		return is_readable($output_path) ? $output_path : new WP_Error('posten_pdf_stamp_output_missing', 'Stemplet PDF ble ikke opprettet.');
+	}
+
+	private function stamp_pdf_file_with_printable_annotation($original_path, $output_path, $stamp_text, $settings) {
+		$pdf = is_readable($original_path) ? file_get_contents($original_path) : false;
+		if ($pdf === false || strpos((string) $pdf, '%PDF') !== 0) {
+			return new WP_Error('posten_pdf_annotation_original_unreadable', 'Original PDF kan ikke leses for annotation fallback.');
+		}
+
+		$page = $this->find_first_pdf_page_object($pdf);
+		if (is_wp_error($page)) {
+			return $page;
+		}
+
+		$max_object_number = $this->get_max_pdf_object_number($pdf);
+		if ($max_object_number < 1) {
+			return new WP_Error('posten_pdf_annotation_object_scan_failed', 'Kunne ikke finne PDF-objekter for annotation fallback.');
+		}
+
+		$font_object_number = $max_object_number + 1;
+		$appearance_object_number = $max_object_number + 2;
+		$annotation_object_number = $max_object_number + 3;
+		$media_box = $this->extract_pdf_page_media_box((string) $page['content']);
+		$font_size = isset($settings['stamp_font_size']) ? max(6, min(24, (float) $settings['stamp_font_size'])) : 10;
+		$x = isset($settings['stamp_x_mm']) ? max(0, (float) $settings['stamp_x_mm']) * 72 / 25.4 : 8 * 72 / 25.4;
+		$y_from_top = isset($settings['stamp_y_mm']) ? max(0, (float) $settings['stamp_y_mm']) * 72 / 25.4 : 8 * 72 / 25.4;
+		$page_left = (float) $media_box[0];
+		$page_bottom = (float) $media_box[1];
+		$page_right = (float) $media_box[2];
+		$page_top = (float) $media_box[3];
+		$max_width = isset($settings['stamp_max_width_mm']) ? max(10, (float) $settings['stamp_max_width_mm']) * 72 / 25.4 : 80 * 72 / 25.4;
+		$width = min($max_width, max(36, ($page_right - $page_left) - $x - 4));
+		$max_lines = isset($settings['stamp_max_lines']) ? max(1, min(5, absint($settings['stamp_max_lines']))) : 2;
+		$lines = $this->wrap_pdf_annotation_stamp_lines($stamp_text, $font_size, $width, $max_lines);
+		if (empty($lines)) {
+			return new WP_Error('posten_pdf_annotation_empty_text', 'Annotation fallback mangler tekst.');
+		}
+		$line_height = max(8.0, $font_size * 1.25);
+		$height = (count($lines) * $line_height) + 4;
+		$rect_left = $page_left + $x;
+		$rect_top = $page_top - $y_from_top;
+		$rect_bottom = max($page_bottom + 2, $rect_top - $height);
+		$rect_top = $rect_bottom + $height;
+		if ($rect_top > $page_top) {
+			$rect_top = $page_top - 2;
+			$rect_bottom = max($page_bottom + 2, $rect_top - $height);
+		}
+		$rect_right = min($page_right - 2, $rect_left + $width);
+		$width = $rect_right - $rect_left;
+		$height = $rect_top - $rect_bottom;
+		$appearance_stream = $this->build_pdf_annotation_appearance_stream($lines, $font_size, $width, $height);
+		$font_object = $font_object_number . " 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n";
+		$appearance_object = $appearance_object_number . " 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 " . $this->format_pdf_decimal($width) . ' ' . $this->format_pdf_decimal($height) . '] /Resources << /Font << /F1 ' . $font_object_number . " 0 R >> >> /Length " . strlen($appearance_stream) . " >>\nstream\n" . $appearance_stream . "\nendstream\nendobj\n";
+		$annotation_object = $annotation_object_number . " 0 obj\n<< /Type /Annot /Subtype /FreeText /Rect [" . implode(' ', array_map(array($this, 'format_pdf_decimal'), array($rect_left, $rect_bottom, $rect_right, $rect_top))) . '] /Contents (' . $this->escape_pdf_literal($stamp_text) . ') /F 4 /Border [0 0 0] /C [1 1 1] /DA (/F1 ' . $this->format_pdf_decimal($font_size) . " Tf 0 0 0 rg) /AP << /N " . $appearance_object_number . " 0 R >> >>\nendobj\n";
+		$updated_page_content = $this->add_annotation_to_pdf_page_content((string) $page['content'], $annotation_object_number . ' 0 R');
+		if (is_wp_error($updated_page_content)) {
+			return $updated_page_content;
+		}
+		$page_object = (int) $page['object_number'] . ' ' . (int) $page['generation'] . " obj\n" . $updated_page_content . "\nendobj\n";
+		$root_ref = $this->get_pdf_root_reference($pdf);
+		if ($root_ref === '') {
+			return new WP_Error('posten_pdf_annotation_missing_root', 'Kunne ikke finne PDF Root for annotation fallback.');
+		}
+		$prev_startxref = $this->get_pdf_previous_startxref($pdf);
+		$objects = array(
+			$font_object_number => $font_object,
+			$appearance_object_number => $appearance_object,
+			$annotation_object_number => $annotation_object,
+			(int) $page['object_number'] => $page_object,
+		);
+		$incremental = "\n";
+		$offsets = array();
+		foreach ($objects as $object_number => $object_body) {
+			$offsets[$object_number] = strlen($pdf) + strlen($incremental);
+			$incremental .= $object_body;
+		}
+		$xref_offset = strlen($pdf) + strlen($incremental);
+		ksort($offsets, SORT_NUMERIC);
+		$incremental .= "xref\n";
+		foreach ($offsets as $object_number => $offset) {
+			$generation = (int) $object_number === (int) $page['object_number'] ? (int) $page['generation'] : 0;
+			$incremental .= (int) $object_number . " 1\n" . sprintf('%010d %05d n ', $offset, $generation) . "\n";
+		}
+		$incremental .= "trailer\n<< /Size " . ($max_object_number + 4) . ' /Root ' . $root_ref . ($prev_startxref > 0 ? ' /Prev ' . $prev_startxref : '') . " >>\nstartxref\n" . $xref_offset . "\n%%EOF\n";
+		$written = file_put_contents($output_path, $pdf . $incremental, LOCK_EX);
+		if ($written === false) {
+			return new WP_Error('posten_pdf_annotation_write_failed', 'Kunne ikke lagre annotation-stemplet PDF.');
+		}
+
+		return is_readable($output_path) ? $output_path : new WP_Error('posten_pdf_annotation_output_missing', 'Annotation-stemplet PDF ble ikke opprettet.');
 	}
 
 	private function is_recoverable_pdf_stamp_error($error) {
@@ -2567,6 +2666,141 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return 'PDF-stempling støttes ikke for denne Posten-PDF-en. Bruker original PDF. Teknisk detalj: ' . $message;
+	}
+
+	private function find_first_pdf_page_object($pdf) {
+		if (!preg_match_all('/(\d+)\s+(\d+)\s+obj\b(.*?)endobj/s', (string) $pdf, $matches, PREG_SET_ORDER)) {
+			return new WP_Error('posten_pdf_page_not_found', 'Kunne ikke finne PDF-side for annotation fallback.');
+		}
+		foreach ($matches as $match) {
+			$content = isset($match[3]) ? (string) $match[3] : '';
+			if (preg_match('/\/Type\s*\/Page\b/', $content)) {
+				return array(
+					'object_number' => (int) $match[1],
+					'generation' => (int) $match[2],
+					'content' => trim($content),
+				);
+			}
+		}
+
+		return new WP_Error('posten_pdf_page_not_found', 'Kunne ikke finne første PDF-side for annotation fallback.');
+	}
+
+	private function get_max_pdf_object_number($pdf) {
+		if (!preg_match_all('/(\d+)\s+\d+\s+obj\b/', (string) $pdf, $matches)) {
+			return 0;
+		}
+		$numbers = array_map('absint', $matches[1]);
+		return empty($numbers) ? 0 : max($numbers);
+	}
+
+	private function extract_pdf_page_media_box($page_content) {
+		if (preg_match('/\/(?:MediaBox|CropBox)\s*\[([^\]]+)\]/', (string) $page_content, $match)) {
+			$values = preg_split('/\s+/', trim((string) $match[1]));
+			$values = array_values(array_filter($values, 'strlen'));
+			if (count($values) >= 4) {
+				return array(
+					(float) $values[0],
+					(float) $values[1],
+					(float) $values[2],
+					(float) $values[3],
+				);
+			}
+		}
+
+		return array(0.0, 0.0, 283.465, 425.197);
+	}
+
+	private function wrap_pdf_annotation_stamp_lines($text, $font_size, $max_width, $max_lines) {
+		$text = $this->sanitize_stamp_text_value($text);
+		if ($text === '') {
+			return array();
+		}
+		$max_chars = max(8, (int) floor((float) $max_width / max(3.0, (float) $font_size * 0.55)));
+		$words = preg_split('/\s+/', $text);
+		$lines = array();
+		$current = '';
+		foreach ($words as $word) {
+			$candidate = $current === '' ? $word : $current . ' ' . $word;
+			if ($current !== '' && strlen($candidate) > $max_chars) {
+				$lines[] = $current;
+				$current = $word;
+				if (count($lines) >= $max_lines) {
+					break;
+				}
+			} else {
+				$current = $candidate;
+			}
+		}
+		if ($current !== '' && count($lines) < $max_lines) {
+			$lines[] = $current;
+		}
+
+		return array_slice($lines, 0, $max_lines);
+	}
+
+	private function build_pdf_annotation_appearance_stream($lines, $font_size, $width, $height) {
+		$font_size = (float) $font_size;
+		$line_height = max(8.0, $font_size * 1.25);
+		$y = max(2.0, (float) $height - $font_size - 2);
+		$stream = "q\n1 1 1 rg\n0 0 " . $this->format_pdf_decimal($width) . ' ' . $this->format_pdf_decimal($height) . " re f\nBT\n/F1 " . $this->format_pdf_decimal($font_size) . " Tf\n0 0 0 rg\n2 " . $this->format_pdf_decimal($y) . " Td\n";
+		foreach ((array) $lines as $line) {
+			$stream .= '(' . $this->escape_pdf_literal($line) . ") Tj\n0 -" . $this->format_pdf_decimal($line_height) . " Td\n";
+		}
+		$stream .= "ET\nQ";
+
+		return $stream;
+	}
+
+	private function add_annotation_to_pdf_page_content($page_content, $annotation_ref) {
+		$page_content = trim((string) $page_content);
+		$annotation_ref = trim((string) $annotation_ref);
+		if ($page_content === '' || $annotation_ref === '') {
+			return new WP_Error('posten_pdf_annotation_page_invalid', 'PDF-side kunne ikke oppdateres med annotation.');
+		}
+		if (preg_match('/\/Annots\s+\d+\s+\d+\s+R/', $page_content)) {
+			return new WP_Error('posten_pdf_annotation_indirect_annots', 'PDF-side har indirekte annotationsliste som ikke støttes av enkel fallback.');
+		}
+		if (preg_match('/\/Annots\s*\[(.*?)\]/s', $page_content)) {
+			return preg_replace('/\/Annots\s*\[(.*?)\]/s', '/Annots [$1 ' . $annotation_ref . ']', $page_content, 1);
+		}
+		$insert_at = strrpos($page_content, '>>');
+		if ($insert_at === false) {
+			return new WP_Error('posten_pdf_annotation_page_dict_invalid', 'PDF-side mangler dictionary for annotation fallback.');
+		}
+
+		return substr($page_content, 0, $insert_at) . "\n/Annots [" . $annotation_ref . "]\n" . substr($page_content, $insert_at);
+	}
+
+	private function get_pdf_root_reference($pdf) {
+		if (preg_match_all('/\/Root\s+(\d+\s+\d+\s+R)/', (string) $pdf, $matches) && !empty($matches[1])) {
+			return trim((string) end($matches[1]));
+		}
+
+		return '';
+	}
+
+	private function get_pdf_previous_startxref($pdf) {
+		if (preg_match_all('/startxref\s+(\d+)/', (string) $pdf, $matches) && !empty($matches[1])) {
+			return absint(end($matches[1]));
+		}
+
+		return 0;
+	}
+
+	private function format_pdf_decimal($value) {
+		$value = str_replace(',', '.', sprintf('%.3F', (float) $value));
+		$value = rtrim(rtrim($value, '0'), '.');
+		return $value === '' || $value === '-0' ? '0' : $value;
+	}
+
+	private function escape_pdf_literal($text) {
+		$text = $this->encode_pdf_text($text);
+		$text = str_replace('\\', '\\\\', $text);
+		$text = str_replace('(', '\\(', $text);
+		$text = str_replace(')', '\\)', $text);
+		$text = str_replace(array("\r", "\n"), ' ', $text);
+		return $text;
 	}
 
 	private function load_pdf_stamping_library() {
