@@ -655,6 +655,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			}
 			$method_sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
 			$method_sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+			if ($method_sender_profile_id === '' && $method_sender_id !== '') {
+				$method_sender_profile_id = sanitize_key('sender_' . $method_sender_id);
+			}
 			if ($method_sender_profile_id !== '' && $default_sender_profile_id !== '' && $method_sender_profile_id !== $default_sender_profile_id) {
 				continue;
 			}
