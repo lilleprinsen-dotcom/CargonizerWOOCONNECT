@@ -93,6 +93,7 @@ class LP_Cargonizer_Connector {
 		add_action('wp_ajax_lp_cargonizer_get_servicepartner_options', array($this, 'ajax_get_servicepartner_options'));
 		add_action('wp_ajax_lp_cargonizer_get_printers', array($this, 'ajax_get_printers'));
 		add_action('wp_ajax_lp_cargonizer_book_shipment', array($this, 'ajax_book_shipment'));
+		add_action('lp_cargonizer_retry_booking_order_status_change', array($this, 'retry_booking_order_status_change'), 10, 3);
 		add_action('woocommerce_product_options_shipping', array($this, 'render_product_profile_override_fields'));
 		add_action('woocommerce_process_product_meta', array($this, 'save_product_profile_override_fields'));
 	}

@@ -24,6 +24,7 @@ class LP_Cargonizer_Settings_Service {
 			'booking_email_notification_default' => 1,
 			'booking_estimator_top_count' => 3,
 			'booking_pickup_autoselect_mode' => 'nearest',
+			'booking_order_status_after_created' => '',
 			'printer_aliases' => array(),
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
@@ -71,6 +72,9 @@ class LP_Cargonizer_Settings_Service {
 			'booking_pickup_autoselect_mode' => isset($input['booking_pickup_autoselect_mode'])
 				? $this->sanitize_booking_pickup_autoselect_mode($input['booking_pickup_autoselect_mode'])
 				: $this->sanitize_booking_pickup_autoselect_mode(isset($current['booking_pickup_autoselect_mode']) ? $current['booking_pickup_autoselect_mode'] : 'nearest'),
+			'booking_order_status_after_created' => isset($input['booking_order_status_after_created'])
+				? $this->sanitize_booking_order_status_after_created($input['booking_order_status_after_created'])
+				: $this->sanitize_booking_order_status_after_created(isset($current['booking_order_status_after_created']) ? $current['booking_order_status_after_created'] : ''),
 			'printer_aliases' => array(),
 			'available_methods' => array(),
 			'enabled_methods' => array(),
@@ -477,6 +481,34 @@ class LP_Cargonizer_Settings_Service {
 	private function sanitize_booking_pickup_autoselect_mode($value) {
 		$mode = sanitize_key((string) $value);
 		return in_array($mode, array('nearest', 'none'), true) ? $mode : 'nearest';
+	}
+
+	private function sanitize_booking_order_status_after_created($value) {
+		$status = sanitize_key((string) $value);
+		if (strpos($status, 'wc-') === 0) {
+			$status = substr($status, 3);
+		}
+		if ($status === '') {
+			return '';
+		}
+
+		if (function_exists('wc_get_order_statuses')) {
+			$allowed_statuses = array();
+			foreach (wc_get_order_statuses() as $status_key => $status_label) {
+				$clean_key = sanitize_key((string) $status_key);
+				if (strpos($clean_key, 'wc-') === 0) {
+					$clean_key = substr($clean_key, 3);
+				}
+				if ($clean_key !== '') {
+					$allowed_statuses[$clean_key] = true;
+				}
+			}
+			if (!isset($allowed_statuses[$status])) {
+				return '';
+			}
+		}
+
+		return $status;
 	}
 
 	private function sanitize_shipping_profiles_settings($input, $current) {

@@ -793,6 +793,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
 				'booking_estimator_top_count' => isset($_POST['lp_cargonizer_booking_estimator_top_count']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_estimator_top_count'])) : (isset($settings['booking_estimator_top_count']) ? $settings['booking_estimator_top_count'] : 3),
 				'booking_pickup_autoselect_mode' => isset($_POST['lp_cargonizer_booking_pickup_autoselect_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_pickup_autoselect_mode'])) : (isset($settings['booking_pickup_autoselect_mode']) ? $settings['booking_pickup_autoselect_mode'] : 'nearest'),
+				'booking_order_status_after_created' => isset($_POST['lp_cargonizer_booking_order_status_after_created']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_order_status_after_created'])) : (isset($settings['booking_order_status_after_created']) ? $settings['booking_order_status_after_created'] : ''),
 				'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => is_array($posted_enabled_methods)
@@ -1107,8 +1108,114 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			}
 		}
 		?>
-		<div class="wrap">
+		<div class="wrap lp-cargonizer-admin-page">
 			<h1>Cargonizer for WooCommerce</h1>
+
+			<style>
+				.lp-cargonizer-admin-page {
+					max-width: 1320px;
+				}
+				.lp-cargonizer-admin-page h1 {
+					margin-bottom: 6px;
+				}
+				.lp-cargonizer-admin-page h2 {
+					margin-top: 0;
+					padding-bottom: 8px;
+					border-bottom: 1px solid #dcdcde;
+				}
+				.lp-cargonizer-admin-page .form-table th {
+					width: 230px;
+				}
+				.lp-cargonizer-admin-page .form-table td {
+					max-width: 980px;
+				}
+				.lp-cargonizer-settings-shell,
+				.lp-cargonizer-admin-card {
+					background: #fff;
+					border: 1px solid #dcdcde;
+					border-radius: 6px;
+					padding: 18px 20px;
+					margin: 18px 0;
+					box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
+				}
+				.lp-cargonizer-settings-nav {
+					position: sticky;
+					top: 32px;
+					z-index: 2;
+					display: flex;
+					gap: 8px;
+					flex-wrap: wrap;
+					align-items: center;
+					padding: 10px;
+					margin: 0 0 18px 0;
+					border: 1px solid #c3c4c7;
+					border-radius: 6px;
+					background: #f6f7f7;
+				}
+				.lp-cargonizer-settings-nav strong {
+					margin-right: 4px;
+				}
+				.lp-cargonizer-settings-nav a {
+					display: inline-flex;
+					align-items: center;
+					min-height: 28px;
+					padding: 0 9px;
+					border-radius: 4px;
+					text-decoration: none;
+					background: #fff;
+					border: 1px solid #dcdcde;
+				}
+				.lp-cargonizer-settings-nav a:hover,
+				.lp-cargonizer-settings-nav a:focus {
+					border-color: #2271b1;
+					box-shadow: 0 0 0 1px #2271b1;
+				}
+				.lp-cargonizer-settings-section {
+					padding: 16px 0 18px;
+					border-top: 1px solid #f0f0f1;
+				}
+				.lp-cargonizer-settings-section:first-of-type {
+					padding-top: 0;
+					border-top: 0;
+				}
+				.lp-cargonizer-methods-groups {
+					max-height: none !important;
+				}
+				.lp-cargonizer-method-row {
+					border-top-color: #dcdcde !important;
+				}
+				.lp-cargonizer-method-row > div:last-child {
+					min-width: 0 !important;
+					width: 100%;
+					overflow-x: auto;
+					padding-bottom: 4px;
+				}
+				.lp-cargonizer-save-strip {
+					position: sticky;
+					bottom: 0;
+					z-index: 3;
+					display: flex;
+					gap: 8px;
+					flex-wrap: wrap;
+					justify-content: flex-end;
+					align-items: center;
+					padding: 12px 0 0;
+					margin-top: 14px;
+					border-top: 1px solid #dcdcde;
+					background: #fff;
+				}
+				@media (max-width: 960px) {
+					.lp-cargonizer-settings-nav {
+						position: static;
+					}
+					.lp-cargonizer-admin-page .form-table th,
+					.lp-cargonizer-admin-page .form-table td {
+						display: block;
+						width: 100%;
+						max-width: 100%;
+					}
+				}
+			</style>
 
 			<p>
 				Enklere oppsett for butikk: start i <strong>Enkelt oppsett</strong>, og bruk <strong>Avansert</strong> ved behov.
@@ -1346,11 +1453,20 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				<?php endif; ?>
 			</div>
 
-			<div style="background:#fff;border:1px solid #ddd;padding:20px;margin:20px 0;max-width:900px;">
-				<h2>Tilkobling</h2>
+			<div class="lp-cargonizer-settings-shell">
+				<h2 id="lp-cargonizer-section-connection">Tilkobling</h2>
 				<p class="description">Legg inn API-nøkkel og sender-ID for å hente metoder og priser fra Cargonizer.</p>
 				<form method="post">
 					<?php wp_nonce_field(self::NONCE_ACTION_SAVE); ?>
+					<nav class="lp-cargonizer-settings-nav" aria-label="Cargonizer innstillinger">
+						<strong>Hopp til</strong>
+						<a href="#lp-cargonizer-section-connection">Tilkobling</a>
+						<a href="#lp-cargonizer-section-booking">Booking</a>
+						<a href="#lp-cargonizer-section-printers">Printere</a>
+						<a href="#lp-cargonizer-section-methods">Fraktmetoder</a>
+						<a href="#lp-cargonizer-section-checkout">Checkout</a>
+						<a href="#lp-cargonizer-section-advanced">Avansert</a>
+					</nav>
 
 					<table class="form-table" role="presentation">
 						<tbody>
@@ -1450,12 +1566,17 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<p class="description" style="color:#b32d2e;"><?php echo esc_html($sender_addresses_fetch_result['message'] !== '' ? $sender_addresses_fetch_result['message'] : 'Kunne ikke hente sender-adresser.'); ?></p>
 					<?php endif; ?>
 
-					<h2>Booking-standardvalg</h2>
+					<h2 id="lp-cargonizer-section-booking">Booking-standardvalg</h2>
 					<?php
 					$booking_estimator_top_count = isset($settings['booking_estimator_top_count']) ? max(3, min(5, absint($settings['booking_estimator_top_count']))) : 3;
 					$booking_pickup_autoselect_mode = isset($settings['booking_pickup_autoselect_mode']) && in_array((string) $settings['booking_pickup_autoselect_mode'], array('nearest', 'none'), true)
 						? (string) $settings['booking_pickup_autoselect_mode']
 						: 'nearest';
+					$booking_order_status_after_created = isset($settings['booking_order_status_after_created']) ? sanitize_key((string) $settings['booking_order_status_after_created']) : '';
+					if (strpos($booking_order_status_after_created, 'wc-') === 0) {
+						$booking_order_status_after_created = substr($booking_order_status_after_created, 3);
+					}
+					$order_status_options = function_exists('wc_get_order_statuses') ? wc_get_order_statuses() : array();
 					?>
 					<table class="form-table" role="presentation">
 						<tbody>
@@ -1495,10 +1616,35 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<p class="description">Admin kan fortsatt overstyre hentested/servicepartner i booking-popupen før sendingen bookes.</p>
 								</td>
 							</tr>
+							<tr>
+								<th scope="row">
+									<label for="lp_cargonizer_booking_order_status_after_created">Ordrestatus etter booking</label>
+								</th>
+								<td>
+									<select name="lp_cargonizer_booking_order_status_after_created" id="lp_cargonizer_booking_order_status_after_created">
+										<option value="" <?php selected($booking_order_status_after_created, ''); ?>>Ikke endre status automatisk</option>
+										<?php foreach ($order_status_options as $status_key => $status_label) : ?>
+											<?php
+											$clean_status_key = sanitize_key((string) $status_key);
+											if (strpos($clean_status_key, 'wc-') === 0) {
+												$clean_status_key = substr($clean_status_key, 3);
+											}
+											if ($clean_status_key === '') {
+												continue;
+											}
+											?>
+											<option value="<?php echo esc_attr($clean_status_key); ?>" <?php selected($booking_order_status_after_created, $clean_status_key); ?>>
+												<?php echo esc_html($status_label); ?>
+											</option>
+										<?php endforeach; ?>
+									</select>
+									<p class="description">Når Cargonizer-booking er opprettet, endres statusen automatisk, ordren lastes inn på nytt, og pluginen verifiserer at statusen faktisk ble lagret. Hvis verifisering feiler, planlegges automatisk retry uten admin-handling.</p>
+								</td>
+							</tr>
 						</tbody>
 					</table>
 
-					<h2>Standard printer for innlogget admin</h2>
+					<h2 id="lp-cargonizer-section-printers">Standard printer for innlogget admin</h2>
 					<p>Denne innstillingen lagres kun på deg som innlogget admin-bruker.</p>
 					<?php
 					$printer_fetch_result = array(
@@ -1586,7 +1732,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</table>
 
 
-					<h2>Når metoder skal vises/skjules</h2>
+					<h2 id="lp-cargonizer-section-methods">Når metoder skal vises/skjules</h2>
 					<p class="description">Velg hvilke metoder som skal være aktive. Prisfeltene under hver metode bruker samme beregningslogikk som før.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
@@ -1895,7 +2041,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</button>
 					</p>
 
-					<p>
+					<p class="lp-cargonizer-save-strip">
 						<button type="submit" name="lp_cargonizer_save_settings" class="button button-primary">
 							Lagre innstillinger og metodevalg
 						</button>
@@ -1911,7 +2057,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					?>
 
 					<hr style="margin:24px 0;">
-					<h2>Grunnoppsett / Enkel oppsett</h2>
+					<h2 id="lp-cargonizer-section-checkout">Grunnoppsett / Enkel oppsett</h2>
 					<p class="description" style="max-width:900px;">Anbefalt for vanlig butikkdrift. Sett Norge-only, fri frakt-terskel, 69 kr under terskel, hentested og fallback uten å åpne avanserte JSON-felt.</p>
 					<h3 style="margin-bottom:4px;">Fraktpriser i checkout (valgfritt)</h3>
 					<p class="description" style="margin-top:0;">Standardmodus er admin booking only. Aktiver live checkout under for å vise Cargonizer/Logistra i kundekassen.</p>
@@ -2048,7 +2194,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</tbody>
 					</table>
 
-					<details style="margin:18px 0;border:1px solid #dcdcde;padding:10px 12px;background:#fff;">
+					<details id="lp-cargonizer-section-advanced" style="margin:18px 0;border:1px solid #dcdcde;padding:10px 12px;background:#fff;">
 						<summary style="cursor:pointer;font-weight:600;">Avansert</summary>
 						<p class="description" style="margin-top:8px;">Her finner du produkt-/pakkeregler, synlighetsregler og JSON-editorer. Skjult som standard for å gjøre daglig bruk enklere.</p>
 
@@ -2325,6 +2471,11 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<p class="description">Fallback-rater som JSON-array med feltene method_key, label og price.</p>
 					<textarea name="lp_cargonizer_checkout_fallback_rates_json" rows="8" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_fallback['safe_fallback_rates']) ? $checkout_fallback['safe_fallback_rates'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
 					</details>
+					<p class="lp-cargonizer-save-strip">
+						<button type="submit" name="lp_cargonizer_save_settings" class="button button-primary">
+							Lagre innstillinger
+						</button>
+					</p>
 				</form>
 
 				<hr style="margin:24px 0;">
