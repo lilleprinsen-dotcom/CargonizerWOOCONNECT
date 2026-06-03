@@ -612,6 +612,135 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		);
 	}
 
+	private function handle_direct_print_upload($settings) {
+		$result = array(
+			'success' => false,
+			'message' => '',
+			'http_status' => 0,
+			'raw_response' => '',
+		);
+
+		if (empty($settings['api_key'])) {
+			$result['message'] = 'Legg inn API key før du bruker DirectPrint dokumentutskrift.';
+			return $result;
+		}
+
+		$printer_id = isset($_POST['lp_cargonizer_direct_print_printer_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_direct_print_printer_id'])) : '';
+		if ($printer_id === '') {
+			$result['message'] = 'Velg en printer.';
+			return $result;
+		}
+
+		if (empty($_FILES['lp_cargonizer_direct_print_file']) || !is_array($_FILES['lp_cargonizer_direct_print_file'])) {
+			$result['message'] = 'Velg en PDF-, ZPL- eller EPL-fil.';
+			return $result;
+		}
+
+		$uploaded_file = $_FILES['lp_cargonizer_direct_print_file'];
+		$upload_error = isset($uploaded_file['error']) ? (int) $uploaded_file['error'] : UPLOAD_ERR_NO_FILE;
+		if ($upload_error !== UPLOAD_ERR_OK) {
+			$result['message'] = $this->get_direct_print_upload_error_message($upload_error);
+			return $result;
+		}
+
+		$tmp_name = isset($uploaded_file['tmp_name']) && is_string($uploaded_file['tmp_name']) ? $uploaded_file['tmp_name'] : '';
+		if ($tmp_name === '' || !is_uploaded_file($tmp_name) || !is_readable($tmp_name)) {
+			$result['message'] = 'Kunne ikke lese den opplastede filen.';
+			return $result;
+		}
+
+		$file_size = isset($uploaded_file['size']) ? (int) $uploaded_file['size'] : 0;
+		if ($file_size <= 0) {
+			$result['message'] = 'Filen er tom.';
+			return $result;
+		}
+
+		$max_upload_size = (int) apply_filters('lp_cargonizer_direct_print_max_upload_size', 10 * 1024 * 1024);
+		if (function_exists('wp_max_upload_size')) {
+			$wp_max_upload_size = (int) wp_max_upload_size();
+			if ($wp_max_upload_size > 0 && ($max_upload_size <= 0 || $wp_max_upload_size < $max_upload_size)) {
+				$max_upload_size = $wp_max_upload_size;
+			}
+		}
+		if ($max_upload_size > 0 && $file_size > $max_upload_size) {
+			$result['message'] = 'Filen er for stor. Maks størrelse er ' . size_format($max_upload_size) . '.';
+			return $result;
+		}
+
+		$content_type = $this->resolve_direct_print_upload_content_type($uploaded_file);
+		if ($content_type === '') {
+			$result['message'] = 'Filtypen støttes ikke. Bruk PDF, ZPL eller EPL.';
+			return $result;
+		}
+
+		$file_contents = file_get_contents($tmp_name);
+		if ($file_contents === false || $file_contents === '') {
+			$result['message'] = 'Kunne ikke lese filinnholdet.';
+			return $result;
+		}
+
+		if ($content_type === 'application/pdf' && strpos($file_contents, '%PDF') !== 0) {
+			$result['message'] = 'PDF-filen ser ikke ut til å være en gyldig PDF.';
+			return $result;
+		}
+
+		$print_result = $this->print_document_to_printer($printer_id, $file_contents, $content_type);
+		$result['http_status'] = isset($print_result['http_status']) ? (int) $print_result['http_status'] : 0;
+		$result['raw_response'] = isset($print_result['raw_response']) ? (string) $print_result['raw_response'] : '';
+
+		if (empty($print_result['success'])) {
+			$error = isset($print_result['error']) ? sanitize_text_field((string) $print_result['error']) : '';
+			$result['message'] = $error !== '' ? 'DirectPrint feilet: ' . $error : 'DirectPrint feilet.';
+			return $result;
+		}
+
+		$file_name = isset($uploaded_file['name']) && is_scalar($uploaded_file['name']) ? sanitize_file_name((string) $uploaded_file['name']) : '';
+		$result['success'] = true;
+		$result['message'] = 'Filen ble sendt til DirectPrint' . ($file_name !== '' ? ': ' . $file_name : '') . '.';
+		return $result;
+	}
+
+	private function get_direct_print_upload_error_message($upload_error) {
+		$messages = array(
+			UPLOAD_ERR_INI_SIZE => 'Filen er større enn serverens opplastingsgrense.',
+			UPLOAD_ERR_FORM_SIZE => 'Filen er større enn tillatt opplastingsgrense.',
+			UPLOAD_ERR_PARTIAL => 'Filen ble bare delvis lastet opp.',
+			UPLOAD_ERR_NO_FILE => 'Velg en PDF-, ZPL- eller EPL-fil.',
+			UPLOAD_ERR_NO_TMP_DIR => 'Serveren mangler midlertidig opplastingsmappe.',
+			UPLOAD_ERR_CANT_WRITE => 'Serveren kunne ikke lagre opplastingen midlertidig.',
+			UPLOAD_ERR_EXTENSION => 'En PHP-utvidelse stoppet opplastingen.',
+		);
+
+		return isset($messages[$upload_error]) ? $messages[$upload_error] : 'Opplastingen feilet.';
+	}
+
+	private function resolve_direct_print_upload_content_type($uploaded_file) {
+		$file_name = isset($uploaded_file['name']) && is_scalar($uploaded_file['name']) ? sanitize_file_name((string) $uploaded_file['name']) : '';
+		$extension = strtolower((string) pathinfo($file_name, PATHINFO_EXTENSION));
+		$extension_map = array(
+			'pdf' => 'application/pdf',
+			'zpl' => 'application/x.zpl',
+			'epl' => 'application/x.epl',
+		);
+		if (isset($extension_map[$extension])) {
+			return $extension_map[$extension];
+		}
+
+		$client_type = isset($uploaded_file['type']) && is_scalar($uploaded_file['type']) ? strtolower(trim((string) $uploaded_file['type'])) : '';
+		$client_type = strtok($client_type, ';');
+		$mime_map = array(
+			'application/pdf' => 'application/pdf',
+			'application/x-pdf' => 'application/pdf',
+			'application/x.zpl' => 'application/x.zpl',
+			'application/x-zpl' => 'application/x.zpl',
+			'application/vnd.zebra-zpl' => 'application/x.zpl',
+			'application/x.epl' => 'application/x.epl',
+			'application/x-epl' => 'application/x.epl',
+		);
+
+		return isset($mime_map[$client_type]) ? $mime_map[$client_type] : '';
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -625,6 +754,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$result   = null;
 		$method_refresh = null;
 		$admin_servicepoint_diag_result = null;
+		$direct_print_result = null;
 
 		// Lagre innstillinger
 		if (
@@ -691,6 +821,21 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$current_user_default_printer_id = $posted_default_printer_id;
 
 			echo '<div class="notice notice-success"><p>Innstillinger lagret.</p></div>';
+		}
+
+		if (isset($_POST['lp_cargonizer_direct_print_upload'])) {
+			if (!isset($_POST['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_DIRECT_PRINT_UPLOAD)) {
+				$direct_print_result = array(
+					'success' => false,
+					'message' => 'Ugyldig sikkerhetsnøkkel. Last siden på nytt og prøv igjen.',
+				);
+			} else {
+				$direct_print_result = $this->handle_direct_print_upload($settings);
+			}
+
+			$direct_print_notice_class = !empty($direct_print_result['success']) ? 'notice-success' : 'notice-error';
+			$direct_print_message = isset($direct_print_result['message']) ? (string) $direct_print_result['message'] : '';
+			echo '<div class="notice ' . esc_attr($direct_print_notice_class) . '"><p>' . esc_html($direct_print_message !== '' ? $direct_print_message : 'DirectPrint request fullført.') . '</p></div>';
 		}
 
 		// Test autentisering + hent fraktmetoder
@@ -2069,6 +2214,69 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<p class="description">Fallback-rater som JSON-array med feltene method_key, label og price.</p>
 					<textarea name="lp_cargonizer_checkout_fallback_rates_json" rows="8" class="large-text code"><?php echo esc_textarea(wp_json_encode(isset($checkout_fallback['safe_fallback_rates']) ? $checkout_fallback['safe_fallback_rates'] : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)); ?></textarea>
 					</details>
+				</form>
+
+				<hr style="margin:24px 0;">
+				<h2>DirectPrint dokumentutskrift</h2>
+				<p class="description">Last opp en ferdig PDF-, ZPL- eller EPL-fil og send den direkte til valgt Logistra/Cargonizer DirectPrint-printer.</p>
+				<?php
+				$direct_print_selected_printer_id = isset($_POST['lp_cargonizer_direct_print_printer_id'])
+					? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_direct_print_printer_id']))
+					: $current_user_default_printer_id;
+				$direct_print_disabled = empty($settings['api_key']) || empty($available_printers);
+				?>
+				<form method="post" enctype="multipart/form-data">
+					<?php wp_nonce_field(self::NONCE_ACTION_DIRECT_PRINT_UPLOAD); ?>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_direct_print_printer_id">Printer</label></th>
+								<td>
+									<select name="lp_cargonizer_direct_print_printer_id" id="lp_cargonizer_direct_print_printer_id" required <?php disabled($direct_print_disabled); ?>>
+										<option value="">Velg printer</option>
+										<?php foreach ($available_printers as $printer) : ?>
+											<?php
+											$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+											if ($printer_id === '') {
+												continue;
+											}
+											$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+											?>
+											<option value="<?php echo esc_attr($printer_id); ?>" <?php selected($direct_print_selected_printer_id, $printer_id); ?>>
+												<?php echo esc_html($printer_label); ?>
+											</option>
+										<?php endforeach; ?>
+									</select>
+									<?php if (empty($settings['api_key'])) : ?>
+										<p class="description">Legg inn API key for å hente printere før DirectPrint kan brukes.</p>
+									<?php elseif (empty($available_printers)) : ?>
+										<p class="description" style="color:#b32d2e;"><?php echo esc_html($printer_fetch_result['message'] !== '' ? $printer_fetch_result['message'] : 'Kunne ikke hente printerliste.'); ?></p>
+									<?php else : ?>
+										<p class="description">Printerlisten hentes fra Cargonizer uten Sender ID, slik DirectPrint printer-endepunktet krever.</p>
+									<?php endif; ?>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_direct_print_file">Fil</label></th>
+								<td>
+									<input
+										type="file"
+										name="lp_cargonizer_direct_print_file"
+										id="lp_cargonizer_direct_print_file"
+										accept=".pdf,.zpl,.epl,application/pdf,application/x.zpl,application/x.epl"
+										required
+										<?php disabled($direct_print_disabled); ?>
+									/>
+									<p class="description">Støttede formater: PDF, ZPL og EPL. Filen lagres ikke i WordPress; den sendes videre til Cargonizer som DirectPrint-jobb.</p>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+					<p>
+						<button type="submit" name="lp_cargonizer_direct_print_upload" class="button button-primary" <?php disabled($direct_print_disabled); ?>>
+							Skriv ut fil
+						</button>
+					</p>
 				</form>
 			</div>
 
