@@ -377,6 +377,8 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			'agreement_id' => isset($method['agreement_id']) ? (string) $method['agreement_id'] : '',
 			'carrier_id' => isset($method['carrier_id']) ? (string) $method['carrier_id'] : '',
 			'product_id' => isset($method['product_id']) ? (string) $method['product_id'] : '',
+			'sender_id' => isset($method['sender_id']) ? (string) $method['sender_id'] : '',
+			'sender_entity_id' => isset($method['sender_entity_id']) ? (string) $method['sender_entity_id'] : '',
 			'recipient' => $recipient,
 			'packages' => $packages,
 			'package_summary' => $package_summary,
@@ -401,6 +403,10 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		}
 
 		$quote_method = is_array($method) ? $method : array();
+		$quote_sender_id_override = isset($quote_method['sender_id']) ? sanitize_text_field((string) $quote_method['sender_id']) : '';
+		if ($quote_sender_id_override !== '') {
+			$quote_method['sender_id_override'] = $quote_sender_id_override;
+		}
 		$servicepartner_resolution = array();
 		$manual_servicepartner = isset($quote_method['servicepartner']) ? sanitize_text_field((string) $quote_method['servicepartner']) : '';
 		if ($this->api_service->method_requires_servicepartner_for_estimate($quote_method) && $manual_servicepartner === '') {
@@ -433,7 +439,7 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$timeout = $this->resolve_frontend_quote_timeout($live_settings);
 		$response = wp_remote_post(LP_Cargonizer_Api_Service::build_endpoint_url('/consignment_costs.xml'), array(
 			'timeout' => $timeout,
-			'headers' => array_merge($this->api_service->get_auth_headers(), array(
+			'headers' => array_merge($this->api_service->get_auth_headers($quote_sender_id_override), array(
 				'Accept' => 'application/xml',
 				'Content-Type' => 'application/xml',
 			)),
@@ -641,6 +647,38 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$warehouse_profiles = isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array();
 		$default_sender_profile_id = isset($warehouse_profiles['default_profile_id']) ? sanitize_key((string) $warehouse_profiles['default_profile_id']) : '';
 		$default_sender_id = isset($settings['sender_id']) ? sanitize_text_field((string) $settings['sender_id']) : '';
+		$default_sender_entity_id = '';
+		$profiles = isset($warehouse_profiles['profiles']) && is_array($warehouse_profiles['profiles']) ? $warehouse_profiles['profiles'] : array();
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) {
+				continue;
+			}
+			$profile_id = isset($profile['profile_id']) ? sanitize_key((string) $profile['profile_id']) : '';
+			$profile_sender_id = isset($profile['sender_id']) ? sanitize_text_field((string) $profile['sender_id']) : '';
+			if (($default_sender_profile_id !== '' && $profile_id === $default_sender_profile_id) || ($default_sender_profile_id === '' && $default_sender_id !== '' && $profile_sender_id === $default_sender_id)) {
+				$default_sender_entity_id = isset($profile['sender_entity_id']) ? sanitize_text_field((string) $profile['sender_entity_id']) : '';
+				if ($default_sender_id === '' && $profile_sender_id !== '') {
+					$default_sender_id = $profile_sender_id;
+				}
+				break;
+			}
+		}
+		$default_sender_aliases = array($default_sender_profile_id);
+		if ($default_sender_id !== '') {
+			$default_sender_aliases[] = $default_sender_id;
+			$default_sender_aliases[] = sanitize_key('sender_' . $default_sender_id);
+		}
+		if ($default_sender_entity_id !== '') {
+			$default_sender_aliases[] = $default_sender_entity_id;
+			$default_sender_aliases[] = sanitize_key('sender_' . $default_sender_entity_id);
+		}
+		$default_sender_alias_map = array();
+		foreach ($default_sender_aliases as $default_sender_alias) {
+			$default_sender_alias = sanitize_key((string) $default_sender_alias);
+			if ($default_sender_alias !== '') {
+				$default_sender_alias_map[$default_sender_alias] = true;
+			}
+		}
 		$methods = array();
 		foreach ($available as $method) {
 			if (!is_array($method)) {
@@ -655,13 +693,37 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 			}
 			$method_sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
 			$method_sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+			$method_sender_entity_id = isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : '';
 			if ($method_sender_profile_id === '' && $method_sender_id !== '') {
 				$method_sender_profile_id = sanitize_key('sender_' . $method_sender_id);
 			}
-			if ($method_sender_profile_id !== '' && $default_sender_profile_id !== '' && $method_sender_profile_id !== $default_sender_profile_id) {
-				continue;
+			if ($method_sender_profile_id === '' && !empty($method['key']) && strpos((string) $method['key'], '::') !== false) {
+				$key_parts = explode('::', (string) $method['key'], 2);
+				$method_sender_profile_id = sanitize_key((string) $key_parts[0]);
 			}
-			if ($method_sender_profile_id !== '' && $default_sender_profile_id === '' && $default_sender_id !== '' && $method_sender_id !== '' && $method_sender_id !== $default_sender_id) {
+			$method_sender_aliases = array($method_sender_profile_id);
+			if ($method_sender_id !== '') {
+				$method_sender_aliases[] = $method_sender_id;
+				$method_sender_aliases[] = sanitize_key('sender_' . $method_sender_id);
+			}
+			if ($method_sender_entity_id !== '') {
+				$method_sender_aliases[] = $method_sender_entity_id;
+				$method_sender_aliases[] = sanitize_key('sender_' . $method_sender_entity_id);
+			}
+			$has_method_sender_identity = false;
+			$matches_default_sender = false;
+			foreach ($method_sender_aliases as $method_sender_alias) {
+				$method_sender_alias = sanitize_key((string) $method_sender_alias);
+				if ($method_sender_alias === '') {
+					continue;
+				}
+				$has_method_sender_identity = true;
+				if (isset($default_sender_alias_map[$method_sender_alias])) {
+					$matches_default_sender = true;
+					break;
+				}
+			}
+			if ($has_method_sender_identity && !empty($default_sender_alias_map) && !$matches_default_sender) {
 				continue;
 			}
 			$pricing = isset($method_pricing[$key]) && is_array($method_pricing[$key]) ? $method_pricing[$key] : array();

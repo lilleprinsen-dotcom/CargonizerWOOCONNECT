@@ -281,6 +281,7 @@ class LP_Cargonizer_Connector {
 		$sender_profile_id = isset($sender_profile['profile_id']) ? sanitize_key((string) $sender_profile['profile_id']) : '';
 		$sender_profile_name = isset($sender_profile['name']) ? sanitize_text_field((string) $sender_profile['name']) : '';
 		$sender_id = isset($sender_profile['sender_id']) ? sanitize_text_field((string) $sender_profile['sender_id']) : '';
+		$sender_entity_id = isset($sender_profile['sender_entity_id']) ? sanitize_text_field((string) $sender_profile['sender_entity_id']) : '';
 
 		foreach ($agreements as $agreement) {
 			$agreement_id = isset($agreement['agreement_id']) ? (string) $agreement['agreement_id'] : '';
@@ -314,6 +315,7 @@ class LP_Cargonizer_Connector {
 						'sender_profile_id' => $sender_profile_id,
 						'sender_profile_name' => $sender_profile_name,
 						'sender_id' => $sender_id,
+						'sender_entity_id' => $sender_entity_id,
 						'agreement_id' => $agreement_id,
 						'agreement_name' => $display_agreement_name,
 						'agreement_description' => $agreement_description,

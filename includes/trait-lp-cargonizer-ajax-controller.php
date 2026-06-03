@@ -162,6 +162,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'sender_profile_id' => '',
 			'sender_profile_name' => '',
 			'sender_id' => '',
+			'sender_entity_id' => '',
 			'sender_address' => '',
 			'servicepartner' => '',
 			'servicepartner_customer_number' => '',
@@ -959,6 +960,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'sender_profile_id' => isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '',
 			'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
 			'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
+			'sender_entity_id' => isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : '',
 			'agreement_id' => $agreement_id,
 			'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 			'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -1210,7 +1212,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
 		}
 
-		$sender_id_override = isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '';
+		$sender_id_override = !empty($method_payload['sender_id']) ? (string) $method_payload['sender_id'] : (isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '');
 		$method_payload['sender_id_override'] = $sender_id_override;
 		$method_payload['warehouse_profile_id'] = isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '';
 		$method_payload['warehouse_profile_name'] = isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '';
@@ -1310,6 +1312,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['sender_profile_id'] = isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '';
 		$booking_state['sender_profile_name'] = isset($warehouse_profile['name']) ? (string) $warehouse_profile['name'] : '';
 		$booking_state['sender_id'] = $sender_id_override;
+		$booking_state['sender_entity_id'] = isset($warehouse_profile['sender_entity_id']) ? (string) $warehouse_profile['sender_entity_id'] : '';
 		$sender_address_parts = array();
 		if (!empty($warehouse_profile['address_line'])) {
 			$sender_address_parts[] = (string) $warehouse_profile['address_line'];
@@ -1362,6 +1365,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		if (!empty($warehouse_profile)) {
 			update_post_meta($order->get_id(), '_lp_cargonizer_warehouse_profile_id', isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '');
 			update_post_meta($order->get_id(), '_lp_cargonizer_sender_id_used', isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '');
+			update_post_meta($order->get_id(), '_lp_cargonizer_sender_entity_id_used', isset($warehouse_profile['sender_entity_id']) ? (string) $warehouse_profile['sender_entity_id'] : '');
 			update_post_meta($order->get_id(), '_lp_cargonizer_sender_profile_name', isset($warehouse_profile['name']) ? (string) $warehouse_profile['name'] : '');
 		}
 
@@ -1493,20 +1497,63 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		$selected_profile_id = isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '';
+		$selected_sender_id = isset($warehouse_profile['sender_id']) ? sanitize_text_field((string) $warehouse_profile['sender_id']) : '';
+		$selected_sender_entity_id = isset($warehouse_profile['sender_entity_id']) ? sanitize_text_field((string) $warehouse_profile['sender_entity_id']) : '';
+		$selected_aliases = array($selected_profile_id);
+		if ($selected_sender_id !== '') {
+			$selected_aliases[] = $selected_sender_id;
+			$selected_aliases[] = $this->build_sender_profile_id($selected_sender_id);
+		}
+		if ($selected_sender_entity_id !== '') {
+			$selected_aliases[] = $selected_sender_entity_id;
+			$selected_aliases[] = $this->build_sender_profile_id($selected_sender_entity_id);
+		}
+		$selected_alias_map = array();
+		foreach ($selected_aliases as $selected_alias) {
+			$selected_alias = sanitize_key((string) $selected_alias);
+			if ($selected_alias !== '') {
+				$selected_alias_map[$selected_alias] = true;
+			}
+		}
+
 		$method_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+		$method_sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+		$method_sender_entity_id = isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : '';
 		if ($method_profile_id === '' && isset($method['warehouse_profile_id'])) {
 			$method_profile_id = sanitize_key((string) $method['warehouse_profile_id']);
 		}
-		if ($method_profile_id === '' && !empty($method['sender_id'])) {
-			$method_profile_id = $this->build_sender_profile_id($method['sender_id']);
+		if ($method_profile_id === '' && $method_sender_id !== '') {
+			$method_profile_id = $this->build_sender_profile_id($method_sender_id);
 		}
 		if ($method_profile_id === '' && isset($method['key']) && strpos((string) $method['key'], '::') !== false) {
 			$key_parts = explode('::', (string) $method['key'], 2);
 			$method_profile_id = sanitize_key((string) $key_parts[0]);
 		}
 
-		if ($method_profile_id !== '') {
-			return $selected_profile_id !== '' && $method_profile_id === $selected_profile_id;
+		$method_aliases = array($method_profile_id);
+		if ($method_sender_id !== '') {
+			$method_aliases[] = $method_sender_id;
+			$method_aliases[] = $this->build_sender_profile_id($method_sender_id);
+		}
+		if ($method_sender_entity_id !== '') {
+			$method_aliases[] = $method_sender_entity_id;
+			$method_aliases[] = $this->build_sender_profile_id($method_sender_entity_id);
+		}
+
+		$has_method_identity = false;
+		foreach ($method_aliases as $method_alias) {
+			$method_alias = sanitize_key((string) $method_alias);
+			if ($method_alias === '') {
+				continue;
+			}
+			$has_method_identity = true;
+			if (isset($selected_alias_map[$method_alias])) {
+				return true;
+			}
+		}
+
+		if ($has_method_identity) {
+			return false;
 		}
 
 		$default_profile_id = $this->get_default_sender_profile_id();
@@ -1659,12 +1706,13 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				),
 			), 200);
 		}
+		$effective_sender_id_override = !empty($enabled_method['sender_id']) ? sanitize_text_field((string) $enabled_method['sender_id']) : $sender_id_override;
 		$method = array_merge($enabled_method, array(
 			'country' => $method['country'],
 			'postcode' => $method['postcode'],
 			'city' => $method['city'],
 			'address' => $method['address'],
-			'sender_id_override' => $sender_id_override,
+			'sender_id_override' => $effective_sender_id_override,
 			'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 		));
 
@@ -1824,6 +1872,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'sender_profile_id' => isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '',
 				'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
 				'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
+				'sender_entity_id' => isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : (isset($warehouse_profile['sender_entity_id']) ? sanitize_text_field((string) $warehouse_profile['sender_entity_id']) : ''),
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -1846,7 +1895,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'is_manual' => !empty($method['is_manual']),
 				'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
 				'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
-				'sender_id_override' => $sender_id_override,
+				'sender_id_override' => !empty($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : $sender_id_override,
 				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 				'warehouse_profile_name' => isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '',
 			);
@@ -1927,6 +1976,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'sender_profile_id' => isset($method_payload['warehouse_profile_id']) ? $method_payload['warehouse_profile_id'] : '',
 				'sender_profile_name' => isset($method_payload['warehouse_profile_name']) ? $method_payload['warehouse_profile_name'] : '',
 				'sender_id' => isset($method_payload['sender_id_override']) ? $method_payload['sender_id_override'] : '',
+				'sender_entity_id' => isset($method_payload['sender_entity_id']) ? $method_payload['sender_entity_id'] : '',
 				'requires_sms_service' => false,
 				'sms_service_missing' => false,
 				'sms_service_error' => '',
@@ -2009,6 +2059,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					'sender_profile_id' => isset($method_payload['warehouse_profile_id']) ? $method_payload['warehouse_profile_id'] : '',
 					'sender_profile_name' => isset($method_payload['warehouse_profile_name']) ? $method_payload['warehouse_profile_name'] : '',
 					'sender_id' => isset($method_payload['sender_id_override']) ? $method_payload['sender_id_override'] : '',
+					'sender_entity_id' => isset($method_payload['sender_entity_id']) ? $method_payload['sender_entity_id'] : '',
 				),
 			);
 
@@ -2391,6 +2442,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'sender_profile_id' => isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '',
 				'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
 				'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
+				'sender_entity_id' => isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : (isset($warehouse_profile['sender_entity_id']) ? sanitize_text_field((string) $warehouse_profile['sender_entity_id']) : ''),
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -2410,7 +2462,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 				'is_manual' => !empty($method['is_manual']),
 				'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
-				'sender_id_override' => $sender_id_override,
+				'sender_id_override' => !empty($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : $sender_id_override,
 				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 				'warehouse_profile_name' => isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '',
 				);
@@ -2470,6 +2522,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'sender_profile_id' => isset($method_payload['warehouse_profile_id']) ? $method_payload['warehouse_profile_id'] : '',
 				'sender_profile_name' => isset($method_payload['warehouse_profile_name']) ? $method_payload['warehouse_profile_name'] : '',
 				'sender_id' => isset($method_payload['sender_id_override']) ? $method_payload['sender_id_override'] : '',
+				'sender_entity_id' => isset($method_payload['sender_entity_id']) ? $method_payload['sender_entity_id'] : '',
 				'requires_sms_service' => false,
 				'sms_service_missing' => false,
 				'sms_service_error' => '',
