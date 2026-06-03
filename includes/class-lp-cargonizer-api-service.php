@@ -614,6 +614,7 @@ class LP_Cargonizer_Api_Service {
 		$city = isset($method['city']) ? sanitize_text_field((string) $method['city']) : '';
 		$address = isset($method['address']) ? sanitize_text_field((string) $method['address']) : '';
 		$name = isset($method['name']) ? sanitize_text_field((string) $method['name']) : '';
+		$sender_id_override = isset($method['sender_id_override']) ? sanitize_text_field((string) $method['sender_id_override']) : '';
 		$request_timeout_seconds = isset($method['request_timeout_seconds']) ? (float) $method['request_timeout_seconds'] : 30.0;
 		if ($request_timeout_seconds <= 0) {
 			$request_timeout_seconds = 30.0;
@@ -699,7 +700,8 @@ class LP_Cargonizer_Api_Service {
 				!empty($attempt_definition['use_custom']),
 				$custom_params,
 				$result['carrier_family'],
-				$request_timeout_seconds
+				$request_timeout_seconds,
+				$sender_id_override
 			);
 
 			$result['attempts'][] = $attempt_result['attempt_debug'];
@@ -743,7 +745,7 @@ class LP_Cargonizer_Api_Service {
 		return $result;
 	}
 
-	private function execute_servicepartner_lookup_attempt($label, $base_query, $included_fields, $use_custom_params, $custom_params, $carrier_family, $request_timeout_seconds = 30.0) {
+	private function execute_servicepartner_lookup_attempt($label, $base_query, $included_fields, $use_custom_params, $custom_params, $carrier_family, $request_timeout_seconds = 30.0, $sender_id_override = '') {
 		$query = array();
 		$omitted_params = array();
 
