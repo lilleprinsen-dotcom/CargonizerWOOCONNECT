@@ -247,12 +247,40 @@ class LP_Cargonizer_Connector {
 	}
 
 
-	private function flatten_shipping_methods($agreements) {
+	private function build_sender_method_key($agreement_id, $product_id, $sender_profile_id = '') {
+		$agreement_id = sanitize_text_field((string) $agreement_id);
+		$product_id = sanitize_text_field((string) $product_id);
+		$sender_profile_id = sanitize_key((string) $sender_profile_id);
+
+		if ($agreement_id === 'manual' && $product_id === 'norgespakke') {
+			return self::MANUAL_NORGESPAKKE_KEY;
+		}
+
+		$base_key = implode('|', array($agreement_id, $product_id));
+		return $sender_profile_id !== '' ? $sender_profile_id . '::' . $base_key : $base_key;
+	}
+
+	private function get_legacy_method_key($method) {
+		$method = is_array($method) ? $method : array();
+		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
+		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+		if ($agreement_id === '' && isset($method['transport_agreement_id'])) {
+			$agreement_id = sanitize_text_field((string) $method['transport_agreement_id']);
+		}
+		return implode('|', array($agreement_id, $product_id));
+	}
+
+	private function flatten_shipping_methods($agreements, $sender_profile = array()) {
 		$options = array();
 
 		if (!is_array($agreements)) {
 			return $options;
 		}
+
+		$sender_profile = is_array($sender_profile) ? $sender_profile : array();
+		$sender_profile_id = isset($sender_profile['profile_id']) ? sanitize_key((string) $sender_profile['profile_id']) : '';
+		$sender_profile_name = isset($sender_profile['name']) ? sanitize_text_field((string) $sender_profile['name']) : '';
+		$sender_id = isset($sender_profile['sender_id']) ? sanitize_text_field((string) $sender_profile['sender_id']) : '';
 
 		foreach ($agreements as $agreement) {
 			$agreement_id = isset($agreement['agreement_id']) ? (string) $agreement['agreement_id'] : '';
@@ -273,7 +301,8 @@ class LP_Cargonizer_Connector {
 				if ($agreement_id === '' || $product_id === '') {
 					continue;
 				}
-				$key = implode('|', array($agreement_id, $product_id));
+				$legacy_key = implode('|', array($agreement_id, $product_id));
+				$key = $this->build_sender_method_key($agreement_id, $product_id, $sender_profile_id);
 
 				if ($key === '|') {
 					continue;
@@ -281,6 +310,10 @@ class LP_Cargonizer_Connector {
 
 					$options[] = array(
 						'key' => $key,
+						'legacy_key' => $legacy_key,
+						'sender_profile_id' => $sender_profile_id,
+						'sender_profile_name' => $sender_profile_name,
+						'sender_id' => $sender_id,
 						'agreement_id' => $agreement_id,
 						'agreement_name' => $display_agreement_name,
 						'agreement_description' => $agreement_description,
@@ -295,7 +328,7 @@ class LP_Cargonizer_Connector {
 			}
 		}
 
-		return $this->ensure_internal_manual_methods($options);
+		return $options;
 	}
 
 

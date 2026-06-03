@@ -483,6 +483,10 @@
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
 					var agreementText = option.agreement_description || option.agreement_name || option.agreement_id || '—';
 					var productText = option.product_name || option.product_id || '—';
+					var senderText = option.sender_profile_name || option.sender_id || '';
+					if (option.sender_profile_name && option.sender_id) {
+						senderText = option.sender_profile_name + ' (' + option.sender_id + ')';
+					}
 					var isManualNorgespakke = !!option.is_manual_norgespakke || (((option.agreement_id || '') + '|' + (option.product_id || '')) === 'manual|norgespakke');
 					var isManual = !!option.is_manual;
 					var deliveryToPickupPoint = isMethodExplicitlyPickupPoint(option);
@@ -504,9 +508,10 @@
 						});
 					}
 					html += '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;background:#fff;line-height:1.35;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'" data-services="'+esc(JSON.stringify(Array.isArray(option.services) ? option.services : []))+'">' +
+						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-sender-profile-id="'+esc(option.sender_profile_id || '')+'" data-sender-profile-name="'+esc(option.sender_profile_name || '')+'" data-sender-id="'+esc(option.sender_id || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'" data-services="'+esc(JSON.stringify(Array.isArray(option.services) ? option.services : []))+'">' +
 						'<span style="display:flex;flex-direction:column;gap:3px;">' +
 							'<strong>'+esc(label)+(isManual ? ' <span style="font-weight:400;color:#646970;">(manuell)</span>' : '')+'</strong>' +
+							(senderText ? '<span style="color:#646970;">Sender: '+esc(senderText)+'</span>' : '') +
 							'<span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—')+'</span>' +
 							'<span style="color:#646970;">Fraktavtale: '+esc(agreementText)+'</span>' +
 							'<span style="color:#646970;">Produkt: '+esc(productText)+'</span>' +
@@ -538,6 +543,9 @@
 				}
 				return {
 					key: option.key || optionKey,
+					sender_profile_id: option.sender_profile_id || '',
+					sender_profile_name: option.sender_profile_name || '',
+					sender_id: option.sender_id || '',
 					agreement_id: option.agreement_id || '',
 					agreement_name: option.agreement_name || '',
 					agreement_description: option.agreement_description || '',
@@ -556,6 +564,11 @@
 					delivery_to_pickup_point: isMethodExplicitlyPickupPoint(option),
 					delivery_to_home: isMethodExplicitlyHomeDelivery(option)
 				};
+			}
+
+			function methodKeyForMethod(method){
+				if (!method) { return ''; }
+				return method.key || method.method_key || ((method.agreement_id || '') + '|' + (method.product_id || ''));
 			}
 
 			function toggleSelectAllShippingOptions(){
@@ -590,6 +603,9 @@
 					var services = parseDataServices(input.getAttribute('data-services') || '');
 					selected.push({
 						key: input.getAttribute('data-method-key') || '',
+						sender_profile_id: input.getAttribute('data-sender-profile-id') || '',
+						sender_profile_name: input.getAttribute('data-sender-profile-name') || '',
+						sender_id: input.getAttribute('data-sender-id') || '',
 						agreement_id: input.getAttribute('data-agreement-id') || '',
 						agreement_name: input.getAttribute('data-agreement-name') || '',
 						agreement_description: input.getAttribute('data-agreement-description') || '',
@@ -697,7 +713,8 @@
 
 
 				function methodKeyForRow(row){
-					return (row && row.agreement_id ? row.agreement_id : '') + '|' + (row && row.product_id ? row.product_id : '');
+					if (!row) { return ''; }
+					return row.method_key || row.key || ((row.agreement_id || '') + '|' + (row.product_id || ''));
 				}
 
 				function getResultRowByMethodKey(methodKey){
@@ -742,7 +759,7 @@
 			function isManualNorgespakkeMethod(method){
 				if (!method) { return false; }
 				if (method.is_manual_norgespakke === true || method.is_manual_norgespakke === '1') { return true; }
-				var key = (method.agreement_id || '') + '|' + (method.product_id || '');
+				var key = methodKeyForMethod(method);
 				return key === 'manual|norgespakke';
 			}
 
@@ -815,7 +832,7 @@
 				if (!methodLikelyNeedsServicepartner(selectedMethods[0])) {
 					return '';
 				}
-				return (selectedMethods[0].agreement_id || '') + '|' + (selectedMethods[0].product_id || '');
+				return methodKeyForMethod(selectedMethods[0]);
 			}
 
 			function renderProactiveServicepartnerOptions(methodKey, options, selectedValue){
@@ -984,7 +1001,7 @@
 			function applyServicepartnerCacheToMethod(method){
 				if (!method || !methodLikelyNeedsServicepartner(method) || method.servicepartner) { return method; }
 				if (!shouldAutoSelectPickup()) { return method; }
-				var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+				var methodKey = methodKeyForMethod(method);
 				var cached = getCachedServicepartnerLookup(methodKey);
 				var options = cached && Array.isArray(cached.options) ? cached.options : [];
 				var defaultOption = pickDefaultServicepartnerOption(options);
@@ -1485,6 +1502,10 @@
 				for (var j = 0; j < latestEstimateResults.length; j++) {
 					if (methodKeyForRow(latestEstimateResults[j]) === methodKey) {
 						return {
+							key: latestEstimateResults[j].key || latestEstimateResults[j].method_key || methodKey,
+							sender_profile_id: latestEstimateResults[j].sender_profile_id || '',
+							sender_profile_name: latestEstimateResults[j].sender_profile_name || '',
+							sender_id: latestEstimateResults[j].sender_id || '',
 							agreement_id: latestEstimateResults[j].agreement_id || '',
 							agreement_name: latestEstimateResults[j].agreement_name || '',
 							agreement_description: latestEstimateResults[j].agreement_description || '',
@@ -1504,10 +1525,13 @@
 				}
 				for (var k = 0; k < currentShippingOptions.length; k++) {
 					var option = currentShippingOptions[k] || {};
-					var optionKey = (option.agreement_id || '') + '|' + (option.product_id || '');
+					var optionKey = methodKeyForMethod(option);
 					if (optionKey === methodKey || (option.key && String(option.key) === methodKey)) {
 						return {
 							key: option.key || methodKey,
+							sender_profile_id: option.sender_profile_id || '',
+							sender_profile_name: option.sender_profile_name || '',
+							sender_id: option.sender_id || '',
 							agreement_id: option.agreement_id || '',
 							agreement_name: option.agreement_name || '',
 							agreement_description: option.agreement_description || '',
@@ -1537,6 +1561,7 @@
 				form.append('nonce', (config.nonces && config.nonces.servicepartners ? config.nonces.servicepartners : ''));
 				form.append('order_id', currentOrderId || '');
 				form.append('warehouse_profile_id', getSelectedSenderProfileId());
+				form.append('method_key', methodData.key || methodKey || '');
 				form.append('agreement_id', methodData.agreement_id || '');
 				form.append('product_id', methodData.product_id || '');
 				form.append('carrier_id', methodData.carrier_id || '');
@@ -1725,7 +1750,7 @@
 				var seen = {};
 				options.forEach(function(option){
 					if (!methodLikelyNeedsServicepartner(option)) { return; }
-					var methodKey = (option.agreement_id || '') + '|' + (option.product_id || '');
+					var methodKey = methodKeyForMethod(option);
 					if (!methodKey || methodKey === '|' || seen[methodKey] || servicepartnerLookupCache[methodKey] || servicepartnerPrefetchInFlight[methodKey]) { return; }
 					seen[methodKey] = true;
 					methodKeys.push(methodKey);
@@ -2419,9 +2444,11 @@
 
 			function fetchShippingOptions(){
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
+				currentShippingOptions = [];
 				var form = new FormData();
 				form.append('action', 'lp_cargonizer_get_shipping_options');
 				form.append('nonce', (config.nonces && config.nonces.fetchOptions ? config.nonces.fetchOptions : ''));
+				form.append('warehouse_profile_id', getSelectedSenderProfileId());
 				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
@@ -2516,7 +2543,7 @@
 						renderBookingRecommendations(latestEstimateResults);
 					})
 					.catch(function(){
-						var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+						var methodKey = methodKeyForMethod(method);
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
 								row.optimization_state = 'failed';
@@ -2592,7 +2619,7 @@
 						renderBookingRecommendations(latestEstimateResults);
 
 						methods.forEach(function(method){
-							var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+							var methodKey = methodKeyForMethod(method);
 							for (var i = 0; i < latestEstimateResults.length; i++) {
 								if (methodKeyForRow(latestEstimateResults[i]) === methodKey && latestEstimateResults[i].optimization_state === 'pending') {
 									optimizeDsvMethod(method, colli.payload.packages);
@@ -2639,7 +2666,7 @@
 						renderEstimateResults(latestEstimateResults);
 
 						validData.methods.forEach(function(method){
-							var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+							var methodKey = methodKeyForMethod(method);
 							for (var i = 0; i < latestEstimateResults.length; i++) {
 								if (methodKeyForRow(latestEstimateResults[i]) === methodKey && latestEstimateResults[i].optimization_state === 'pending') {
 									optimizeDsvMethod(method, validData.packages);
@@ -2680,7 +2707,7 @@
 					if (!method) { return '—'; }
 					var parts = [method.agreement_name || '', method.product_name || ''].filter(function(value){ return !!value; });
 					if (parts.length) { return parts.join(' - '); }
-					return ((method.agreement_id || '') + '|' + (method.product_id || '')) || '—';
+					return methodKeyForMethod(method) || '—';
 				}
 
 				function getBookingConfirmationPriceText(methodKey){
@@ -2726,7 +2753,7 @@
 						return;
 					}
 					var method = selectedResult.method;
-					var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+					var methodKey = methodKeyForMethod(method);
 					var receiverName = currentRecipient && currentRecipient.name ? currentRecipient.name : '—';
 					var receiverPostcode = currentRecipient && currentRecipient.postcode ? currentRecipient.postcode : '—';
 					var senderProfile = getSenderProfileById(getSelectedSenderProfileId());
@@ -2767,7 +2794,7 @@
 				}
 
 				var method = selectedResult.method;
-				var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+				var methodKey = methodKeyForMethod(method);
 				var selectedServicepartner = '';
 				if (bookingResultsContent) {
 					var servicepartnerSelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
@@ -2974,6 +3001,7 @@
 					bookingSenderProfileChoice.addEventListener('change', function(){
 						updateSenderHelp();
 						clearSenderSensitiveState();
+						fetchShippingOptions();
 					});
 				}
 				if (bookingNotifyCheckbox) {
