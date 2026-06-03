@@ -559,6 +559,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$payload['key'] = implode('|', array($payload['agreement_id'], $payload['product_id']));
 		}
 		$payload['is_manual_norgespakke'] = $this->is_manual_norgespakke_method($payload);
+		$payload['services'] = $this->filter_services_by_warehouse_availability($payload['key'], $payload['services']);
+		$payload['selected_service_ids'] = $this->filter_selected_service_ids_by_warehouse_availability($payload['key'], $payload['selected_service_ids'], $payload['services']);
 
 		return $payload;
 	}
@@ -992,6 +994,7 @@ $servicepartner_selection_debug = array(
 			$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
 			$option['delivery_to_pickup_point'] = !empty($pricing['delivery_to_pickup_point']);
 			$option['delivery_to_home'] = !empty($pricing['delivery_to_home']);
+			$option['services'] = $this->filter_services_by_warehouse_availability($method_key, isset($option['services']) && is_array($option['services']) ? $option['services'] : array());
 		}
 		unset($option);
 
@@ -1202,14 +1205,16 @@ $servicepartner_selection_debug = array(
 				'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
 				'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
 			);
-			if ($method_payload['key'] === '') {
-				$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
-			}
-			$method_payload['is_manual_norgespakke'] = $this->is_manual_norgespakke_method($method_payload);
-			error_log('LP Cargonizer estimate freight: method context=' . wp_json_encode(array(
-				'method_key' => isset($method_payload['key']) ? $method_payload['key'] : '',
-				'agreement_id' => isset($method_payload['agreement_id']) ? $method_payload['agreement_id'] : '',
-				'product_id' => isset($method_payload['product_id']) ? $method_payload['product_id'] : '',
+				if ($method_payload['key'] === '') {
+					$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+				}
+				$method_payload['is_manual_norgespakke'] = $this->is_manual_norgespakke_method($method_payload);
+				$method_payload['services'] = $this->filter_services_by_warehouse_availability($method_payload['key'], $method_payload['services']);
+				$method_payload['selected_service_ids'] = $this->filter_selected_service_ids_by_warehouse_availability($method_payload['key'], $method_payload['selected_service_ids'], $method_payload['services']);
+				error_log('LP Cargonizer estimate freight: method context=' . wp_json_encode(array(
+					'method_key' => isset($method_payload['key']) ? $method_payload['key'] : '',
+					'agreement_id' => isset($method_payload['agreement_id']) ? $method_payload['agreement_id'] : '',
+					'product_id' => isset($method_payload['product_id']) ? $method_payload['product_id'] : '',
 				'carrier_id' => isset($method_payload['carrier_id']) ? $method_payload['carrier_id'] : '',
 				'carrier_name' => isset($method_payload['carrier_name']) ? $method_payload['carrier_name'] : '',
 				'product_name' => isset($method_payload['product_name']) ? $method_payload['product_name'] : '',
@@ -1745,11 +1750,13 @@ $servicepartner_selection_debug = array(
 				'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 				'is_manual' => !empty($method['is_manual']),
 				'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
-			);
-			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
-			if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
-				continue;
-			}
+				);
+				$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+				$method_payload['services'] = $this->filter_services_by_warehouse_availability($method_key, $method_payload['services']);
+				$method_payload['selected_service_ids'] = $this->filter_selected_service_ids_by_warehouse_availability($method_key, $method_payload['selected_service_ids'], $method_payload['services']);
+				if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
+					continue;
+				}
 			if ($method_payload['sms_service_id'] === '') {
 				$sms_service = $this->find_sms_service_for_method($method);
 				$method_payload['sms_service_id'] = $sms_service['service_id'];

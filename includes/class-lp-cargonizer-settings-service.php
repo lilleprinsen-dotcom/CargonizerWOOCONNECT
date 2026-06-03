@@ -29,6 +29,7 @@ class LP_Cargonizer_Settings_Service {
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
 			'method_pricing' => array(),
+			'method_extra_services' => array(),
 			'live_checkout' => $this->get_live_checkout_defaults(),
 			'shipping_profiles' => $this->get_shipping_profiles_defaults(),
 			'package_resolution' => $this->get_package_resolution_defaults(),
@@ -75,6 +76,7 @@ class LP_Cargonizer_Settings_Service {
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
 			'method_pricing' => array(),
+			'method_extra_services' => array(),
 			'live_checkout' => $this->sanitize_live_checkout_settings(
 				isset($input['live_checkout']) && is_array($input['live_checkout']) ? $input['live_checkout'] : array(),
 				isset($current['live_checkout']) && is_array($current['live_checkout']) ? $current['live_checkout'] : array()
@@ -120,6 +122,7 @@ class LP_Cargonizer_Settings_Service {
 		}
 
 		$available_map = array();
+		$available_service_ids_by_method = array();
 		foreach ($available_methods as $method) {
 			if (!is_array($method)) {
 				continue;
@@ -146,6 +149,7 @@ class LP_Cargonizer_Settings_Service {
 				'services' => array(),
 			);
 
+			$available_service_ids_by_method[$method_key] = array();
 			if (isset($method['services']) && is_array($method['services'])) {
 				foreach ($method['services'] as $service) {
 					if (!is_array($service)) {
@@ -161,11 +165,36 @@ class LP_Cargonizer_Settings_Service {
 						'service_name' => $service_name,
 						'attributes' => $this->sanitize_service_attributes(isset($service['attributes']) && is_array($service['attributes']) ? $service['attributes'] : array()),
 					);
+					if ($service_id !== '') {
+						$available_service_ids_by_method[$method_key][] = $service_id;
+					}
 				}
 			}
 
 			$output['available_methods'][] = $clean_method;
 			$available_map[$method_key] = true;
+			$available_service_ids_by_method[$method_key] = array_values(array_unique($available_service_ids_by_method[$method_key]));
+		}
+
+		$method_extra_services_input = isset($input['method_extra_services']) && is_array($input['method_extra_services'])
+			? $input['method_extra_services']
+			: (isset($current['method_extra_services']) && is_array($current['method_extra_services']) ? $current['method_extra_services'] : array());
+		foreach ($available_service_ids_by_method as $method_key => $available_service_ids) {
+			if (empty($available_service_ids)) {
+				continue;
+			}
+			$available_service_map = array_fill_keys($available_service_ids, true);
+			$has_explicit_service_input = is_array($method_extra_services_input) && array_key_exists($method_key, $method_extra_services_input);
+			$selected_service_ids = $has_explicit_service_input ? $method_extra_services_input[$method_key] : $available_service_ids;
+			$selected_service_ids = is_array($selected_service_ids) ? $selected_service_ids : array();
+			$output['method_extra_services'][$method_key] = array();
+			foreach ($selected_service_ids as $selected_service_id) {
+				$clean_service_id = sanitize_text_field((string) $selected_service_id);
+				if ($clean_service_id !== '' && isset($available_service_map[$clean_service_id])) {
+					$output['method_extra_services'][$method_key][] = $clean_service_id;
+				}
+			}
+			$output['method_extra_services'][$method_key] = array_values(array_unique($output['method_extra_services'][$method_key]));
 		}
 
 		if (isset($input['enabled_methods']) && is_array($input['enabled_methods'])) {

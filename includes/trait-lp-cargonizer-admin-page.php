@@ -223,26 +223,34 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<div style="margin-bottom:8px;color:#646970;">Valgfrie tilleggstjenester for valgt fraktmetode.</div>
 						<select id="lp-cargonizer-booking-services-choice" multiple size="6" style="width:100%;max-width:520px;"></select>
 						<div id="lp-cargonizer-booking-services-help" style="margin-top:6px;color:#646970;"></div>
-					</div>
-					<div id="lp-cargonizer-booking-servicepartner-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
-						<h3 style="margin:0 0 8px 0;">Utleveringssted / servicepartner</h3>
-						<div id="lp-cargonizer-booking-servicepartner-help" style="margin-bottom:8px;color:#646970;"></div>
-						<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-							<select id="lp-cargonizer-booking-servicepartner-select" style="min-width:280px;max-width:100%;">
-								<option value="">Velg servicepartner…</option>
-							</select>
-							<button type="button" class="button button-small" id="lp-cargonizer-booking-servicepartner-refresh">Hent servicepartnere</button>
 						</div>
-					</div>
-					<div id="lp-cargonizer-booking-results" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
-						<h3 style="margin:0 0 8px 0;">Booking result</h3>
-						<div id="lp-cargonizer-booking-results-content" style="color:#646970;">Ingen booking kjørt enda.</div>
-					</div>
-					<div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;align-items:center;">
-						<button type="button" class="button button-primary" id="lp-cargonizer-run-estimate">Estimer fraktpris</button>
-						<button type="button" class="button button-primary" id="lp-cargonizer-run-booking" style="display:none;">Book shipment</button>
-						<button type="button" class="button" id="lp-cargonizer-close-bottom">Lukk</button>
-					</div>
+						<div id="lp-cargonizer-booking-servicepartner-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+							<h3 style="margin:0 0 8px 0;">Utleveringssted / servicepartner</h3>
+							<div id="lp-cargonizer-booking-servicepartner-help" style="margin-bottom:8px;color:#646970;"></div>
+							<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+								<select id="lp-cargonizer-booking-servicepartner-select" style="min-width:280px;max-width:100%;">
+									<option value="">Velg servicepartner…</option>
+								</select>
+								<button type="button" class="button button-small" id="lp-cargonizer-booking-servicepartner-refresh">Hent servicepartnere</button>
+							</div>
+						</div>
+						<div id="lp-cargonizer-booking-confirmation" style="display:none;margin-top:12px;padding:12px;border:1px solid #2271b1;background:#f0f6fc;">
+							<h3 style="margin:0 0 8px 0;">Bekreft booking</h3>
+							<div id="lp-cargonizer-booking-confirmation-content" style="color:#1d2327;"></div>
+							<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+								<button type="button" class="button button-primary" id="lp-cargonizer-confirm-booking">Bekreft booking</button>
+								<button type="button" class="button" id="lp-cargonizer-cancel-booking-confirmation">Endre valg</button>
+							</div>
+						</div>
+						<div id="lp-cargonizer-booking-results" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+							<h3 style="margin:0 0 8px 0;">Booking result</h3>
+							<div id="lp-cargonizer-booking-results-content" style="color:#646970;">Ingen booking kjørt enda.</div>
+						</div>
+						<div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;align-items:center;">
+							<button type="button" class="button button-primary" id="lp-cargonizer-run-estimate">Estimer fraktpris</button>
+							<button type="button" class="button button-primary" id="lp-cargonizer-run-booking" style="display:none;">Vis bekreftelse</button>
+							<button type="button" class="button" id="lp-cargonizer-close-bottom">Lukk</button>
+						</div>
 				</div>
 			</div>
 		</div>
@@ -792,6 +800,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array()),
 				'method_discounts' => isset($_POST['lp_cargonizer_method_discounts']) && is_array($_POST['lp_cargonizer_method_discounts']) ? wp_unslash($_POST['lp_cargonizer_method_discounts']) : array(),
 				'method_pricing' => isset($_POST['lp_cargonizer_method_pricing']) && is_array($_POST['lp_cargonizer_method_pricing']) ? wp_unslash($_POST['lp_cargonizer_method_pricing']) : array(),
+				'method_extra_services' => isset($_POST['lp_cargonizer_method_extra_services']) && is_array($_POST['lp_cargonizer_method_extra_services']) ? wp_unslash($_POST['lp_cargonizer_method_extra_services']) : (isset($settings['method_extra_services']) && is_array($settings['method_extra_services']) ? $settings['method_extra_services'] : array()),
 				'live_checkout' => isset($_POST['lp_cargonizer_live_checkout']) && is_array($_POST['lp_cargonizer_live_checkout']) ? wp_unslash($_POST['lp_cargonizer_live_checkout']) : array(),
 				'shipping_profiles' => array(
 					'default_profile_slug' => isset($_POST['lp_cargonizer_shipping_profiles_default_slug']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_shipping_profiles_default_slug'])) : '',
@@ -1677,6 +1686,22 @@ trait LP_Cargonizer_Admin_Page_Trait {
 											$delivery_to_home = isset($pricing['delivery_to_home']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_home']) : true;
 											$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
 											$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
+											$method_services = isset($method['services']) && is_array($method['services']) ? $method['services'] : array();
+											$all_method_service_ids = array();
+											foreach ($method_services as $method_service) {
+												if (!is_array($method_service)) {
+													continue;
+												}
+												$method_service_id = isset($method_service['service_id']) ? sanitize_text_field((string) $method_service['service_id']) : '';
+												if ($method_service_id !== '') {
+													$all_method_service_ids[] = $method_service_id;
+												}
+											}
+											$all_method_service_ids = array_values(array_unique($all_method_service_ids));
+											$method_extra_services = isset($settings['method_extra_services']) && is_array($settings['method_extra_services']) ? $settings['method_extra_services'] : array();
+											$selected_extra_service_ids = array_key_exists($method_key, $method_extra_services) && is_array($method_extra_services[$method_key])
+												? array_values(array_unique(array_map('strval', $method_extra_services[$method_key])))
+												: $all_method_service_ids;
 											?>
 											<div class="lp-cargonizer-method-row" style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-top:1px solid #f0f0f1;">
 												<input class="lp-cargonizer-method-toggle" type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked($is_enabled); ?>>
@@ -1752,6 +1777,46 @@ trait LP_Cargonizer_Admin_Page_Trait {
 															</label>
 														</span>
 													</label>
+													<?php if (!empty($method_services)) : ?>
+														<div style="grid-column:1 / -1;padding:8px 10px;border:1px solid #dcdcde;background:#fcfcfc;">
+															<div style="font-weight:600;margin-bottom:4px;">Tilleggstjenester tilgjengelig for lager</div>
+															<div style="color:#646970;margin-bottom:6px;">Velg hvilke hentede Cargonizer-tjenester som skal kunne velges i Book shipment-popupen.</div>
+															<input type="hidden" name="lp_cargonizer_method_extra_services[<?php echo esc_attr($method_key); ?>][]" value="">
+															<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 10px;">
+																<?php foreach ($method_services as $method_service) : ?>
+																	<?php
+																	if (!is_array($method_service)) {
+																		continue;
+																	}
+																	$service_id = isset($method_service['service_id']) ? sanitize_text_field((string) $method_service['service_id']) : '';
+																	$service_name = isset($method_service['service_name']) ? sanitize_text_field((string) $method_service['service_name']) : '';
+																	if ($service_id === '') {
+																		continue;
+																	}
+																	$attributes = isset($method_service['attributes']) && is_array($method_service['attributes']) ? $method_service['attributes'] : array();
+																	$requires_attributes = false;
+																	foreach ($attributes as $attribute) {
+																		$required_value = isset($attribute['required']) ? strtolower((string) $attribute['required']) : '';
+																		if (in_array($required_value, array('true', '1', 'yes'), true)) {
+																			$requires_attributes = true;
+																			break;
+																		}
+																	}
+																	$service_label = $service_name !== '' ? $service_name . ' (' . $service_id . ')' : $service_id;
+																	?>
+																	<label style="display:flex;gap:6px;align-items:flex-start;">
+																		<input type="checkbox" name="lp_cargonizer_method_extra_services[<?php echo esc_attr($method_key); ?>][]" value="<?php echo esc_attr($service_id); ?>" <?php checked(in_array($service_id, $selected_extra_service_ids, true)); ?>>
+																		<span>
+																			<?php echo esc_html($service_label); ?>
+																			<?php if ($requires_attributes) : ?>
+																				<small style="display:block;color:#8a4b00;">Krever parametre; vises deaktivert i booking til parameterstøtte finnes.</small>
+																			<?php endif; ?>
+																		</span>
+																	</label>
+																<?php endforeach; ?>
+															</div>
+														</div>
+													<?php endif; ?>
 												</div>
 											</div>
 										<?php endforeach; ?>

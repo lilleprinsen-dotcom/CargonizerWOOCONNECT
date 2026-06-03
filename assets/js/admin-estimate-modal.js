@@ -24,12 +24,13 @@
 			var closeBottomBtn = document.getElementById('lp-cargonizer-close-bottom');
 			var bookingSetupSection = document.getElementById('lp-cargonizer-booking-setup-section');
 			var bookingRecommendations = document.getElementById('lp-cargonizer-booking-recommendations');
-			var bookingRecommendationsContent = document.getElementById('lp-cargonizer-booking-recommendations-content');
-			var runBookingEstimatorBtn = document.getElementById('lp-cargonizer-run-booking-estimator');
-			var shippingOptionsList = document.getElementById('lp-cargonizer-shipping-options-list');
-			var selectAllShippingBtn = document.getElementById('lp-cargonizer-select-all-shipping');
-			var resultsContent = document.getElementById('lp-cargonizer-results-content');
-			var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
+				var bookingRecommendationsContent = document.getElementById('lp-cargonizer-booking-recommendations-content');
+				var runBookingEstimatorBtn = document.getElementById('lp-cargonizer-run-booking-estimator');
+				var shippingOptionsSection = document.getElementById('lp-cargonizer-estimate-shipping-options');
+				var shippingOptionsList = document.getElementById('lp-cargonizer-shipping-options-list');
+				var selectAllShippingBtn = document.getElementById('lp-cargonizer-select-all-shipping');
+				var resultsContent = document.getElementById('lp-cargonizer-results-content');
+				var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
 			var modalTitle = document.getElementById('lp-cargonizer-modal-title');
 			var estimatePriceResults = document.getElementById('lp-cargonizer-estimate-price-results');
 			var bookingPrinterSection = document.getElementById('lp-cargonizer-booking-printer-section');
@@ -43,10 +44,14 @@
 			var bookingServicepartnerSection = document.getElementById('lp-cargonizer-booking-servicepartner-section');
 			var bookingServicepartnerHelp = document.getElementById('lp-cargonizer-booking-servicepartner-help');
 			var bookingServicepartnerSelect = document.getElementById('lp-cargonizer-booking-servicepartner-select');
-			var bookingServicepartnerRefreshBtn = document.getElementById('lp-cargonizer-booking-servicepartner-refresh');
-			var bookingResultsSection = document.getElementById('lp-cargonizer-booking-results');
-			var bookingResultsContent = document.getElementById('lp-cargonizer-booking-results-content');
-			var runBookingBtn = document.getElementById('lp-cargonizer-run-booking');
+				var bookingServicepartnerRefreshBtn = document.getElementById('lp-cargonizer-booking-servicepartner-refresh');
+				var bookingConfirmationSection = document.getElementById('lp-cargonizer-booking-confirmation');
+				var bookingConfirmationContent = document.getElementById('lp-cargonizer-booking-confirmation-content');
+				var confirmBookingBtn = document.getElementById('lp-cargonizer-confirm-booking');
+				var cancelBookingConfirmationBtn = document.getElementById('lp-cargonizer-cancel-booking-confirmation');
+				var bookingResultsSection = document.getElementById('lp-cargonizer-booking-results');
+				var bookingResultsContent = document.getElementById('lp-cargonizer-booking-results-content');
+				var runBookingBtn = document.getElementById('lp-cargonizer-run-booking');
 			var currentOrderId = null;
 			var currentRecipient = {};
 			var latestEstimateResults = [];
@@ -62,9 +67,11 @@
 			var currentPrinters = [];
 			var currentDefaultPrinterId = '';
 			var currentShippingOptions = [];
-			var servicepartnerLookupCache = {};
-			var servicepartnerPrefetchInFlight = {};
-			var servicepartnerLookupGeneration = 0;
+				var servicepartnerLookupCache = {};
+				var servicepartnerPrefetchInFlight = {};
+				var servicepartnerLookupGeneration = 0;
+				var bookingRecommendationsReady = false;
+				var pendingBookingPreselectedMethod = null;
 
 			function esc(s){
 				s = (s === null || s === undefined) ? '' : String(s);
@@ -76,9 +83,35 @@
 				return isNaN(n) ? 0 : n;
 			}
 
-			function shouldAutoSelectPickup(){
-				return bookingPickupAutoselectMode !== 'none';
-			}
+				function shouldAutoSelectPickup(){
+					return bookingPickupAutoselectMode !== 'none';
+				}
+
+				function setShippingOptionsVisibility(){
+					if (!shippingOptionsSection) { return; }
+					shippingOptionsSection.style.display = currentMode === 'booking' && bookingRecommendationsReady ? 'none' : '';
+				}
+
+				function setBookingActionLoading(isLoading){
+					if (runBookingBtn) {
+						runBookingBtn.disabled = !!isLoading;
+						runBookingBtn.textContent = isLoading ? 'Booker...' : 'Vis bekreftelse';
+					}
+					if (confirmBookingBtn) {
+						confirmBookingBtn.disabled = !!isLoading;
+						confirmBookingBtn.textContent = isLoading ? 'Booker...' : 'Bekreft booking';
+					}
+				}
+
+				function hideBookingConfirmation(){
+					pendingBookingPreselectedMethod = null;
+					if (bookingConfirmationSection) {
+						bookingConfirmationSection.style.display = 'none';
+					}
+					if (bookingConfirmationContent) {
+						bookingConfirmationContent.innerHTML = '';
+					}
+				}
 
 			function parseDataServices(raw){
 				if (!raw) { return []; }
@@ -314,21 +347,22 @@
 							'<select class="lp-colli-printer-select">' + buildColliPrinterOptionsHtml('') + '</select>' +
 						'</label>' +
 					'</div>';
-				row.querySelector('.lp-remove-colli').addEventListener('click', function(){ row.remove(); refreshColliRowTitles(); collectColliData(); });
+					row.querySelector('.lp-remove-colli').addEventListener('click', function(){ hideBookingConfirmation(); row.remove(); refreshColliRowTitles(); collectColliData(); });
 				row.querySelector('.lp-colli-printer-toggle').addEventListener('click', function(){
 					row.setAttribute('data-printer-open', row.getAttribute('data-printer-open') === '1' ? '0' : '1');
 					refreshColliPrinterControls();
 				});
 				row.querySelectorAll('[data-colli-field="weight"],[data-colli-field="length"],[data-colli-field="width"],[data-colli-field="height"]').forEach(function(input){
-					input.addEventListener('input', function(){
-						validateNumberField(input);
-						collectColliData();
-					});
+						input.addEventListener('input', function(){
+							hideBookingConfirmation();
+							validateNumberField(input);
+							collectColliData();
+						});
 					input.addEventListener('blur', function(){ validateNumberField(input); });
-				});
-				row.querySelectorAll('[data-colli-field="name"],[data-colli-field="description"]').forEach(function(input){
-					input.addEventListener('input', collectColliData);
-				});
+					});
+					row.querySelectorAll('[data-colli-field="name"],[data-colli-field="description"]').forEach(function(input){
+						input.addEventListener('input', function(){ hideBookingConfirmation(); collectColliData(); });
+					});
 				bindVolume(row);
 				validateColliRow(row);
 				colliList.appendChild(row);
@@ -577,11 +611,21 @@
 			}
 
 
-			function methodKeyForRow(row){
-				return (row && row.agreement_id ? row.agreement_id : '') + '|' + (row && row.product_id ? row.product_id : '');
-			}
+				function methodKeyForRow(row){
+					return (row && row.agreement_id ? row.agreement_id : '') + '|' + (row && row.product_id ? row.product_id : '');
+				}
 
-			function needsSmsService(row){
+				function getResultRowByMethodKey(methodKey){
+					if (!methodKey || !Array.isArray(latestEstimateResults)) { return null; }
+					for (var i = 0; i < latestEstimateResults.length; i++) {
+						if (methodKeyForRow(latestEstimateResults[i]) === methodKey) {
+							return latestEstimateResults[i];
+						}
+					}
+					return null;
+				}
+
+				function needsSmsService(row){
 				if (!row) { return false; }
 				if (row.requires_sms_service) { return true; }
 				var errorText = (row.error || '').toLowerCase();
@@ -939,15 +983,37 @@
 						bookingServicepartnerSelect.value = value;
 					}
 				}
-				if (bookingResultsContent && source !== 'retry') {
-					var retrySelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
-					if (retrySelect) {
-						retrySelect.value = value;
+					if (bookingResultsContent && source !== 'retry') {
+						var retrySelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+						if (retrySelect) {
+							retrySelect.value = value;
+						}
+					}
+					if (bookingRecommendationsContent && source !== 'recommendation') {
+						var recommendationSelect = bookingRecommendationsContent.querySelector('.lp-recommendation-servicepartner-select[data-method-key="'+methodKey+'"]');
+						if (recommendationSelect) {
+							recommendationSelect.value = value;
+						}
 					}
 				}
-			}
 
-			function shortRaw(text, maxLen){
+				function updateRowServicepartnerSelection(methodKey, value, selectEl, source){
+					var selectedValue = value ? String(value) : '';
+					latestEstimateResults = latestEstimateResults.map(function(row){
+						if (methodKeyForRow(row) === methodKey) {
+							row.selected_servicepartner = selectedValue;
+							row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(selectEl);
+							row.selected_servicepartner_option = resolveServicepartnerSelectedOption(methodKey, selectedValue) || {};
+							row.servicepartner_selection_source = selectedValue ? (source || 'manual') : 'none';
+							row.servicepartner_user_selected = !!selectedValue;
+							row.servicepartner_auto_selected = false;
+							row.auto_selection_reason = selectedValue ? 'manual_selection' : '';
+						}
+						return row;
+					});
+				}
+
+				function shortRaw(text, maxLen){
 				var value = String(text || '').trim();
 				var max = maxLen || 350;
 				if (!value) { return ''; }
@@ -1453,9 +1519,10 @@
 							}
 							return row;
 						});
-						if (changedRows && !opts.silent) {
-							renderEstimateResults(latestEstimateResults);
-						}
+							if (changedRows && !opts.silent) {
+								renderEstimateResults(latestEstimateResults);
+								renderBookingRecommendations(latestEstimateResults);
+							}
 						if (currentMode === 'booking' && bookingResultsContent) {
 							var retrySelect = bookingResultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 							if (retrySelect) {
@@ -1555,9 +1622,10 @@
 							}
 							return row;
 						});
-						if (changedRows && !opts.silent) {
-							renderEstimateResults(latestEstimateResults);
-						}
+							if (changedRows && !opts.silent) {
+								renderEstimateResults(latestEstimateResults);
+								renderBookingRecommendations(latestEstimateResults);
+							}
 						if (currentMode === 'booking' && bookingServicepartnerSelect && bookingServicepartnerSelect.getAttribute('data-method-key') === methodKey) {
 							setProactiveServicepartnerHelp('Kunne ikke hente servicepartnere: Teknisk feil ved henting av servicepartnere. (HTTP 0)', '#b32d2e');
 						}
@@ -1565,8 +1633,8 @@
 					});
 			}
 
-			function prefetchServicepartnersForEstimateOptions(options){
-				if (currentMode !== 'estimate' || !Array.isArray(options) || !options.length) { return; }
+				function prefetchServicepartnersForEstimateOptions(options){
+					if (!Array.isArray(options) || !options.length) { return; }
 				var methodKeys = [];
 				var seen = {};
 				options.forEach(function(option){
@@ -1619,16 +1687,23 @@
 				colli.payload.packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){ form.append('packages['+idx+']['+key+']', pkg[key]); });
 				});
-				Object.keys(methodData).forEach(function(key){ form.append('methods[0]['+key+']', methodData[key]); });
-				if (selectedServicepartner) {
-					var selectedCustomerNumber = '';
-					var selectedOption = resolveServicepartnerSelectedOption(methodKey, selectedServicepartner);
-					if (resultsContent) {
-						var selectedServicepartnerSelect = resultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
-						selectedCustomerNumber = getSelectedServicepartnerCustomerNumber(selectedServicepartnerSelect);
-					}
-					form.append('methods[0][servicepartner]', selectedServicepartner);
-					if (selectedOption) {
+					Object.keys(methodData).forEach(function(key){ appendFormValue(form, 'methods[0]['+key+']', methodData[key]); });
+					if (selectedServicepartner) {
+						var selectedCustomerNumber = '';
+						var selectedOption = resolveServicepartnerSelectedOption(methodKey, selectedServicepartner);
+						if (resultsContent) {
+							var selectedServicepartnerSelect = resultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+							selectedCustomerNumber = getSelectedServicepartnerCustomerNumber(selectedServicepartnerSelect);
+						}
+						if (!selectedCustomerNumber && bookingRecommendationsContent) {
+							var selectedRecommendationSelect = bookingRecommendationsContent.querySelector('.lp-recommendation-servicepartner-select[data-method-key="'+methodKey+'"]');
+							selectedCustomerNumber = getSelectedServicepartnerCustomerNumber(selectedRecommendationSelect);
+						}
+						if (!selectedCustomerNumber && bookingServicepartnerSelect && (bookingServicepartnerSelect.getAttribute('data-method-key') || '') === methodKey) {
+							selectedCustomerNumber = getSelectedServicepartnerCustomerNumber(bookingServicepartnerSelect);
+						}
+						form.append('methods[0][servicepartner]', selectedServicepartner);
+						if (selectedOption) {
 						['value', 'label', 'customer_number', 'postcode', 'city', 'country', 'address1', 'address2', 'name'].forEach(function(key){
 							if (selectedOption[key] !== undefined && selectedOption[key] !== null && selectedOption[key] !== '') {
 								form.append('methods[0][servicepartner_selected_option]['+key+']', selectedOption[key]);
@@ -1653,10 +1728,11 @@
 						if (!res || !res.success || !res.data || !Array.isArray(res.data.results) || !res.data.results.length) {
 							return;
 						}
-						var row = res.data.results[0];
-						mergeResultByMethod(row);
-						renderEstimateResults(latestEstimateResults);
-						if (shouldRunProgressiveDsv && row && row.optimization_state === 'pending') {
+							var row = res.data.results[0];
+							mergeResultByMethod(row);
+							renderEstimateResults(latestEstimateResults);
+							renderBookingRecommendations(latestEstimateResults);
+							if (shouldRunProgressiveDsv && row && row.optimization_state === 'pending') {
 							optimizeDsvMethod(methodData, colli.payload.packages);
 						}
 					});
@@ -1859,68 +1935,119 @@
 				return price !== '' ? (price + ' kr') : 'Pris mangler';
 			}
 
-			function getRecommendationColliSummary(row){
-				var summary = row && row.request_summary ? row.request_summary : {};
-				var packages = Array.isArray(summary.packages) ? summary.packages : [];
-				var count = summary.number_of_packages !== undefined ? parseInt(summary.number_of_packages, 10) : packages.length;
+				function getRecommendationColliSummary(row){
+					var summary = row && row.request_summary ? row.request_summary : {};
+					var packages = Array.isArray(summary.packages) ? summary.packages : [];
+					var count = summary.number_of_packages !== undefined ? parseInt(summary.number_of_packages, 10) : packages.length;
 				if (isNaN(count) || count < 0) { count = packages.length; }
 				var totalWeight = 0;
 				packages.forEach(function(pkg){
 					totalWeight += toNum(pkg && pkg.weight);
 				});
 				var weightText = totalWeight > 0 ? (Math.round(totalWeight * 100) / 100 + ' kg') : 'vekt ikke satt';
-				return (count || 0) + ' kolli, ' + weightText;
-			}
-
-			function renderBookingRecommendations(results){
-				if (!bookingRecommendationsContent) { return; }
-				if (currentMode !== 'booking') { return; }
-				if (!Array.isArray(results) || !results.length) {
-					bookingRecommendationsContent.innerHTML = '<em>Ingen anbefalinger hentet enda.</em>';
-					return;
+					return (count || 0) + ' kolli, ' + weightText;
 				}
-				var okResults = results.filter(function(row){
-					return row && String(row.status || '').toLowerCase() === 'ok' && !isNaN(getRowPriceValue(row));
+
+				function renderRecommendationPickupControl(row, methodKey){
+					if (!methodLikelyNeedsServicepartner(row)) { return ''; }
+					var options = Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
+					var currentValue = row.selected_servicepartner ? String(row.selected_servicepartner) : '';
+					var selectedOption = findServicepartnerOption(row, currentValue);
+					var selectedLabel = currentValue ? formatServicepartnerOptionLabel(selectedOption, currentValue) : 'Hentested må velges';
+					var selectedDistance = formatServicepartnerDistance(selectedOption);
+					var statusColor = currentValue ? '#125228' : '#8a4b00';
+					var optionsHtml = buildServicepartnerOptionsHtml(options, currentValue);
+					var controls = options.length
+						? '<select class="lp-recommendation-servicepartner-select" data-method-key="' + esc(methodKey) + '" style="min-width:220px;max-width:100%;">' + optionsHtml + '</select><button type="button" class="button button-small lp-recommendation-method-retry" data-method-key="' + esc(methodKey) + '">Estimer med valgt hentested</button>'
+						: '<button type="button" class="button button-small lp-recommendation-servicepartner-refresh" data-method-key="' + esc(methodKey) + '">Hent hentesteder</button><span style="color:#646970;">Ingen hentesteder lastet.</span>';
+					return '<div style="margin-top:6px;padding:8px 10px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;">' +
+						'<div style="font-size:12px;font-weight:600;color:' + statusColor + ';">' + esc(selectedLabel) + (selectedDistance ? ' <span style="font-weight:400;color:#646970;">' + esc(selectedDistance) + '</span>' : '') + '</div>' +
+						'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px;">' + controls + '</div>' +
+					'</div>';
+				}
+
+				function renderCalculatedOptionRow(row){
+					var methodKey = methodKeyForRow(row);
+					var selectedOption = row && row.selected_servicepartner ? findServicepartnerOption(row, row.selected_servicepartner) : null;
+					var pickupLabel = row && row.selected_servicepartner ? formatServicepartnerOptionLabel(selectedOption, row.selected_servicepartner) : '';
+					return '<tr>' +
+						'<td><strong>' + esc(row.method_name || row.product_name || 'Ukjent metode') + '</strong><div style="color:#646970;">' + esc(row.carrier_name || '—') + ' / ' + esc(row.product_id || '—') + '</div></td>' +
+						'<td>' + esc(formatDeliveryTypeText(row)) + '</td>' +
+						'<td style="font-weight:700;color:#125228;">' + esc(formatRecommendationPrice(row)) + '</td>' +
+						'<td>' + esc(pickupLabel || '—') + '</td>' +
+						'<td><button type="button" class="button button-small lp-booking-recommendation-select" data-method-key="' + esc(methodKey) + '">Velg</button></td>' +
+					'</tr>';
+				}
+
+				function renderBookingRecommendations(results){
+					if (!bookingRecommendationsContent) { return; }
+					if (currentMode !== 'booking') { return; }
+					if (!Array.isArray(results) || !results.length) {
+						bookingRecommendationsReady = false;
+						setShippingOptionsVisibility();
+						bookingRecommendationsContent.innerHTML = '<em>Ingen anbefalinger hentet enda.</em>';
+						return;
+					}
+					var okResults = results.filter(function(row){
+						return row && String(row.status || '').toLowerCase() === 'ok' && !isNaN(getRowPriceValue(row));
 				});
 				okResults.sort(function(a, b){
 					return getRowPriceValue(a) - getRowPriceValue(b);
-				});
-				var topRows = okResults.slice(0, bookingEstimatorTopCount);
-				if (!topRows.length) {
-					var failedCount = results.length - okResults.length;
-					bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Ingen vellykkede estimater å anbefale' + (failedCount ? ' (' + failedCount + ' feilet).' : '.') + '</span>';
-					return;
-				}
-				var cards = topRows.map(function(row, idx){
-					var methodKey = methodKeyForRow(row);
-					var deliveryMode = formatDeliveryTypeText(row);
-					var priceText = formatRecommendationPrice(row);
-					var colliText = getRecommendationColliSummary(row);
+					});
+					var topRows = okResults.slice(0, bookingEstimatorTopCount);
+					if (!topRows.length) {
+						var failedCount = results.length - okResults.length;
+						bookingRecommendationsReady = false;
+						setShippingOptionsVisibility();
+						bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Ingen vellykkede estimater å anbefale' + (failedCount ? ' (' + failedCount + ' feilet).' : '.') + '</span>';
+						return;
+					}
+					var otherRows = okResults.slice(bookingEstimatorTopCount);
+					var failedResults = results.filter(function(row){
+						return !row || String(row.status || '').toLowerCase() !== 'ok' || isNaN(getRowPriceValue(row));
+					});
+					var cards = topRows.map(function(row, idx){
+						var methodKey = methodKeyForRow(row);
+						var deliveryMode = formatDeliveryTypeText(row);
+						var priceText = formatRecommendationPrice(row);
+						var colliText = getRecommendationColliSummary(row);
 					var fees = [];
 					if (row.discount_percent !== undefined && row.discount_percent !== '') { fees.push('Rabatt ' + row.discount_percent + '%'); }
-					if (row.fuel_surcharge !== undefined && row.fuel_surcharge !== '') { fees.push('Drivstoff ' + row.fuel_surcharge + '%'); }
-					if (row.toll_surcharge !== undefined && row.toll_surcharge !== '') { fees.push('Bom ' + row.toll_surcharge + ' kr'); }
-					if (row.total_handling_fee !== undefined && row.total_handling_fee !== '') { fees.push('Håndtering ' + row.total_handling_fee + ' kr'); }
-					var pickupText = '';
-					if (methodLikelyNeedsServicepartner(row)) {
-						var selectedOption = findServicepartnerOption(row, row.selected_servicepartner || '');
-						var selectedLabel = row.selected_servicepartner ? formatServicepartnerOptionLabel(selectedOption, row.selected_servicepartner) : 'Hentested må velges';
-						pickupText = '<div style="margin-top:6px;color:' + (row.selected_servicepartner ? '#125228' : '#8a4b00') + ';">' + esc(selectedLabel) + '</div>';
+						if (row.fuel_surcharge !== undefined && row.fuel_surcharge !== '') { fees.push('Drivstoff ' + row.fuel_surcharge + '%'); }
+						if (row.toll_surcharge !== undefined && row.toll_surcharge !== '') { fees.push('Bom ' + row.toll_surcharge + ' kr'); }
+						if (row.total_handling_fee !== undefined && row.total_handling_fee !== '') { fees.push('Håndtering ' + row.total_handling_fee + ' kr'); }
+						var pickupControlHtml = renderRecommendationPickupControl(row, methodKey);
+						return '<div style="background:#fff;border:1px solid #b9d7f0;border-left:4px solid ' + (idx === 0 ? '#1d7f45' : '#2271b1') + ';padding:10px 12px;border-radius:6px;display:flex;flex-direction:column;gap:7px;min-height:170px;">' +
+							'<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">' +
+								'<div><strong>' + esc(row.method_name || row.product_name || 'Ukjent metode') + '</strong><div style="color:#646970;">' + esc(row.carrier_name || '—') + ' / ' + esc(row.product_id || '—') + '</div></div>' +
+								'<div style="font-weight:700;color:#125228;font-size:18px;white-space:nowrap;">' + esc(priceText) + '</div>' +
+							'</div>' +
+							'<div style="color:#1d2327;">' + esc(deliveryMode) + '</div>' +
+							'<div style="color:#646970;">' + esc(colliText) + '</div>' +
+							'<div style="color:#646970;font-size:12px;">' + esc(fees.length ? fees.join(' | ') : 'Ingen tillegg i beregning') + '</div>' +
+							pickupControlHtml +
+							'<button type="button" class="button button-primary lp-booking-recommendation-select" data-method-key="' + esc(methodKey) + '" style="margin-top:auto;">Velg dette fraktvalget</button>' +
+						'</div>';
+					}).join('');
+					var otherHtml = '';
+					if (otherRows.length || failedResults.length) {
+						var otherRowsHtml = otherRows.map(renderCalculatedOptionRow).join('');
+						var failedHtml = '';
+						if (failedResults.length) {
+							failedHtml = '<div style="margin-top:8px;color:#646970;">' + esc(failedResults.length + ' fraktvalg feilet eller mangler pris i beregningen.') + '</div>';
+						}
+						otherHtml = '<details style="margin-top:12px;">' +
+							'<summary style="cursor:pointer;font-weight:600;">Vis andre beregnede fraktvalg (' + esc(otherRows.length) + ')</summary>' +
+							'<div style="margin-top:8px;">' +
+								(otherRows.length ? '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Levering</th><th>Pris</th><th>Hentested</th><th></th></tr></thead><tbody>' + otherRowsHtml + '</tbody></table>' : '<em>Ingen andre vellykkede beregninger.</em>') +
+								failedHtml +
+							'</div>' +
+						'</details>';
 					}
-					return '<div style="background:#fff;border:1px solid #b9d7f0;border-left:4px solid ' + (idx === 0 ? '#1d7f45' : '#2271b1') + ';padding:10px 12px;border-radius:6px;display:flex;flex-direction:column;gap:7px;min-height:170px;">' +
-						'<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">' +
-							'<div><strong>' + esc(row.method_name || row.product_name || 'Ukjent metode') + '</strong><div style="color:#646970;">' + esc(row.carrier_name || '—') + ' / ' + esc(row.product_id || '—') + '</div></div>' +
-							'<div style="font-weight:700;color:#125228;font-size:18px;white-space:nowrap;">' + esc(priceText) + '</div>' +
-						'</div>' +
-						'<div style="color:#1d2327;">' + esc(deliveryMode) + '</div>' +
-						'<div style="color:#646970;">' + esc(colliText) + '</div>' +
-						'<div style="color:#646970;font-size:12px;">' + esc(fees.length ? fees.join(' | ') : 'Ingen tillegg i beregning') + '</div>' +
-						pickupText +
-						'<button type="button" class="button button-primary lp-booking-recommendation-select" data-method-key="' + esc(methodKey) + '" style="margin-top:auto;">Velg dette fraktvalget</button>' +
-					'</div>';
-				}).join('');
-				bookingRecommendationsContent.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;">' + cards + '</div>';
-			}
+					bookingRecommendationsReady = true;
+					setShippingOptionsVisibility();
+					bookingRecommendationsContent.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;">' + cards + '</div>' + otherHtml;
+				}
 
 			function selectRecommendationMethod(methodKey){
 				if (!methodKey || !shippingOptionsList) { return; }
@@ -1969,13 +2096,14 @@
 				if (runEstimateBtn) {
 					runEstimateBtn.style.display = currentMode === 'booking' ? 'none' : '';
 				}
-				if (runBookingBtn) {
-					runBookingBtn.style.display = currentMode === 'booking' ? '' : 'none';
+					if (runBookingBtn) {
+						runBookingBtn.style.display = currentMode === 'booking' ? '' : 'none';
+					}
+					setShippingOptionsVisibility();
+					updateBookingServicesSelector();
+					updateProactiveBookingServicepartner();
+					refreshColliPrinterControls();
 				}
-				updateBookingServicesSelector();
-				updateProactiveBookingServicepartner();
-				refreshColliPrinterControls();
-			}
 
 			function fetchPrinters(){
 				if (!bookingPrinterChoice) { return Promise.resolve(null); }
@@ -2299,32 +2427,41 @@
 					});
 			}
 
-			function runBookingEstimator(){
-				if (currentMode !== 'booking') { return; }
-				var colli = collectColliData();
-				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
-					if (bookingRecommendationsContent) {
-						bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før estimering.</span>';
+				function runBookingEstimator(){
+					if (currentMode !== 'booking') { return; }
+					hideBookingConfirmation();
+					var colli = collectColliData();
+					if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
+						bookingRecommendationsReady = false;
+						setShippingOptionsVisibility();
+						if (bookingRecommendationsContent) {
+							bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før estimering.</span>';
+						}
+						return;
 					}
-					return;
-				}
-				if (!Array.isArray(currentShippingOptions) || !currentShippingOptions.length) {
-					if (bookingRecommendationsContent) {
-						bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Ingen fraktvalg tilgjengelig for estimering.</span>';
+					if (!Array.isArray(currentShippingOptions) || !currentShippingOptions.length) {
+						bookingRecommendationsReady = false;
+						setShippingOptionsVisibility();
+						if (bookingRecommendationsContent) {
+							bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Ingen fraktvalg tilgjengelig for estimering.</span>';
+						}
+						return;
 					}
-					return;
-				}
-				var methods = currentShippingOptions.map(methodPayloadFromOption).map(applyServicepartnerCacheToMethod);
-				if (!methods.length) {
-					if (bookingRecommendationsContent) {
-						bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Ingen fraktvalg tilgjengelig for estimering.</span>';
+					var methods = currentShippingOptions.map(methodPayloadFromOption).map(applyServicepartnerCacheToMethod);
+					if (!methods.length) {
+						bookingRecommendationsReady = false;
+						setShippingOptionsVisibility();
+						if (bookingRecommendationsContent) {
+							bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Ingen fraktvalg tilgjengelig for estimering.</span>';
+						}
+						return;
 					}
-					return;
-				}
-				if (runBookingEstimatorBtn) {
-					runBookingEstimatorBtn.disabled = true;
-					runBookingEstimatorBtn.textContent = 'Estimerer...';
-				}
+					bookingRecommendationsReady = false;
+					setShippingOptionsVisibility();
+					if (runBookingEstimatorBtn) {
+						runBookingEstimatorBtn.disabled = true;
+						runBookingEstimatorBtn.textContent = 'Estimerer...';
+					}
 				if (bookingRecommendationsContent) {
 					bookingRecommendationsContent.innerHTML = '<em>Henter anbefalinger...</em>';
 				}
@@ -2337,12 +2474,14 @@
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
-						if (!res || !res.success || !res.data) {
-							if (bookingRecommendationsContent) {
-								bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Estimering feilet.</span>';
+							if (!res || !res.success || !res.data) {
+								bookingRecommendationsReady = false;
+								setShippingOptionsVisibility();
+								if (bookingRecommendationsContent) {
+									bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Estimering feilet.</span>';
+								}
+								return;
 							}
-							return;
-						}
 						latestEstimateResults = (res.data.results || []).slice();
 						renderEstimateResults(latestEstimateResults);
 						renderBookingRecommendations(latestEstimateResults);
@@ -2356,12 +2495,14 @@
 								}
 							}
 						});
-					})
-					.catch(function(){
-						if (bookingRecommendationsContent) {
-							bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved estimering.</span>';
-						}
-					})
+						})
+						.catch(function(){
+							bookingRecommendationsReady = false;
+							setShippingOptionsVisibility();
+							if (bookingRecommendationsContent) {
+								bookingRecommendationsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved estimering.</span>';
+							}
+						})
 					.finally(function(){
 						if (runBookingEstimatorBtn) {
 							runBookingEstimatorBtn.disabled = false;
@@ -2423,18 +2564,93 @@
 				runBooking(methodData);
 			}
 
-			function getProactiveSelectedServicepartner(methodKey){
-				if (!bookingServicepartnerSection || !bookingServicepartnerSelect) { return ''; }
-				if (bookingServicepartnerSection.style.display === 'none') { return ''; }
-				if ((bookingServicepartnerSelect.getAttribute('data-method-key') || '') !== methodKey) { return ''; }
-				return bookingServicepartnerSelect.value || '';
-			}
+				function getProactiveSelectedServicepartner(methodKey){
+					if (!bookingServicepartnerSection || !bookingServicepartnerSelect) { return ''; }
+					if (bookingServicepartnerSection.style.display === 'none') { return ''; }
+					if ((bookingServicepartnerSelect.getAttribute('data-method-key') || '') !== methodKey) { return ''; }
+					return bookingServicepartnerSelect.value || '';
+				}
 
-			function runBooking(preselectedMethod){
-				if (currentMode !== 'booking') { return; }
-				var colli = collectColliData();
-				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
-					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før booking.</span>';
+				function getBookingMethodLabel(method){
+					if (!method) { return '—'; }
+					var parts = [method.agreement_name || '', method.product_name || ''].filter(function(value){ return !!value; });
+					if (parts.length) { return parts.join(' - '); }
+					return ((method.agreement_id || '') + '|' + (method.product_id || '')) || '—';
+				}
+
+				function getBookingConfirmationPriceText(methodKey){
+					var row = getResultRowByMethodKey(methodKey);
+					if (row && String(row.status || '').toLowerCase() === 'ok' && !isNaN(getRowPriceValue(row))) {
+						return formatRecommendationPrice(row);
+					}
+					var shipping = currentCheckoutSelection && currentCheckoutSelection.shipping ? currentCheckoutSelection.shipping : {};
+					var checkoutMethodKey = getCheckoutSelectionMethodKey();
+					if (checkoutMethodKey === methodKey) {
+						var checkoutPrice = shipping.price || shipping.rate_price || shipping.cost || shipping.total || '';
+						if (checkoutPrice !== '') {
+							return String(checkoutPrice) + ' kr';
+						}
+					}
+					return 'Ikke estimert';
+				}
+
+				function showBookingConfirmation(preselectedMethod){
+					if (currentMode !== 'booking') { return; }
+					var colli = collectColliData();
+					if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
+						if (bookingResultsContent) {
+							bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før booking.</span>';
+						}
+						hideBookingConfirmation();
+						return;
+					}
+					var selectedResult = preselectedMethod ? { method: preselectedMethod } : getSelectedSingleMethodForBooking();
+					if (!selectedResult.method) {
+						if (bookingResultsContent) {
+							bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">' + esc(selectedResult.error || 'Valideringsfeil ved valg av fraktmetode.') + '</span>';
+						}
+						hideBookingConfirmation();
+						return;
+					}
+					var notifyEmailToConsignee = bookingNotifyCheckbox ? !!bookingNotifyCheckbox.checked : false;
+					if (notifyEmailToConsignee && (!currentRecipient || !currentRecipient.email)) {
+						if (bookingResultsContent) {
+							bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.</span>';
+						}
+						hideBookingConfirmation();
+						return;
+					}
+					var method = selectedResult.method;
+					var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+					var receiverName = currentRecipient && currentRecipient.name ? currentRecipient.name : '—';
+					var receiverPostcode = currentRecipient && currentRecipient.postcode ? currentRecipient.postcode : '—';
+					pendingBookingPreselectedMethod = preselectedMethod ? method : null;
+					if (bookingConfirmationContent) {
+						bookingConfirmationContent.innerHTML = '<div style="display:grid;grid-template-columns:minmax(140px,max-content) 1fr;gap:6px 12px;align-items:start;">' +
+							'<strong>Antall kolli</strong><span>' + esc(colli.payload.packages.length) + '</span>' +
+							'<strong>Mottaker</strong><span>' + esc(receiverName) + '</span>' +
+							'<strong>Postnummer</strong><span>' + esc(receiverPostcode) + '</span>' +
+							'<strong>Pris</strong><span>' + esc(getBookingConfirmationPriceText(methodKey)) + '</span>' +
+							'<strong>Fraktmetode</strong><span>' + esc(getBookingMethodLabel(method)) + '</span>' +
+						'</div>';
+					}
+					if (bookingConfirmationSection) {
+						bookingConfirmationSection.style.display = 'block';
+						if (bookingConfirmationSection.scrollIntoView) {
+							bookingConfirmationSection.scrollIntoView({ block: 'nearest' });
+						}
+					}
+				}
+
+				function runBooking(preselectedMethod){
+					showBookingConfirmation(preselectedMethod);
+				}
+
+				function executeBooking(preselectedMethod){
+					if (currentMode !== 'booking') { return; }
+					var colli = collectColliData();
+					if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) {
+						bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Du må legge til minst ett gyldig kolli før booking.</span>';
 					return;
 				}
 				var selectedResult = preselectedMethod ? { method: preselectedMethod } : getSelectedSingleMethodForBooking();
@@ -2498,20 +2714,21 @@
 				if (notifyEmailToConsignee && (!currentRecipient || !currentRecipient.email)) {
 					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.</span>';
 					return;
-				}
-				var printerChoice = bookingPrinterChoice ? (bookingPrinterChoice.value || '') : '';
-				var packagePrinterAssignments = collectPackagePrinterAssignments();
-				runBookingBtn.disabled = true;
-				runBookingBtn.textContent = 'Booker...';
-				bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
+					}
+					var printerChoice = bookingPrinterChoice ? (bookingPrinterChoice.value || '') : '';
+					var packagePrinterAssignments = collectPackagePrinterAssignments();
+					setBookingActionLoading(true);
+					if (bookingConfirmationSection) {
+						bookingConfirmationSection.style.display = 'none';
+					}
+					bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
 
-				var bookingNonce = (config.nonces && config.nonces.book ? config.nonces.book : '');
-				if (!bookingNonce) {
-					bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Booking nonce mangler i frontend-konfigurasjonen.</span>';
-					runBookingBtn.disabled = false;
-					runBookingBtn.textContent = 'Book shipment';
-					return;
-				}
+					var bookingNonce = (config.nonces && config.nonces.book ? config.nonces.book : '');
+					if (!bookingNonce) {
+						bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Booking nonce mangler i frontend-konfigurasjonen.</span>';
+						setBookingActionLoading(false);
+						return;
+					}
 
 				var form = new FormData();
 				form.append('action', 'lp_cargonizer_book_shipment');
@@ -2522,15 +2739,9 @@
 						form.append('packages['+idx+']['+key+']', pkg[key]);
 					});
 				});
-				Object.keys(method).forEach(function(key){
-					if (Array.isArray(method[key])) {
-						method[key].forEach(function(value, idx){
-							form.append('methods[0]['+key+']['+idx+']', value);
-						});
-						return;
-					}
-					form.append('methods[0]['+key+']', method[key]);
-				});
+					Object.keys(method).forEach(function(key){
+						appendFormValue(form, 'methods[0]['+key+']', method[key]);
+					});
 				form.append('printer_choice', printerChoice);
 				Object.keys(packagePrinterAssignments).forEach(function(packageIndex){
 					form.append('package_printer_assignments[' + packageIndex + ']', packagePrinterAssignments[packageIndex]);
@@ -2541,25 +2752,22 @@
 					.then(function(res){ return res.json(); })
 					.then(function(res){
 						if (res && res.success && res.data && res.data.booking) {
-							currentBookingState = res.data.booking;
-							var history = Array.isArray(res.data.booking.history) ? res.data.booking.history : [];
-							var warning = history.length ? '<div style="margin-bottom:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;font-weight:600;">Ordren har tidligere booking(er). Du kan fortsatt opprette en ny booking. Tidligere bookinghistorikk beholdes.</div>' : '';
-							bookingResultsContent.innerHTML = warning + renderBookingSuccess(res.data.booking, method);
-							runBookingBtn.disabled = false;
-							runBookingBtn.textContent = 'Book shipment';
-							return;
-						}
-						var errorData = (res && res.data) ? res.data : { message: 'Booking feilet.' };
-						renderBookingError(errorData, method);
-						runBookingBtn.disabled = false;
-						runBookingBtn.textContent = 'Book shipment';
-					})
-					.catch(function(){
-						bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved booking.</span>';
-						runBookingBtn.disabled = false;
-						runBookingBtn.textContent = 'Book shipment';
-					});
-			}
+								currentBookingState = res.data.booking;
+								var history = Array.isArray(res.data.booking.history) ? res.data.booking.history : [];
+								var warning = history.length ? '<div style="margin-bottom:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;font-weight:600;">Ordren har tidligere booking(er). Du kan fortsatt opprette en ny booking. Tidligere bookinghistorikk beholdes.</div>' : '';
+								bookingResultsContent.innerHTML = warning + renderBookingSuccess(res.data.booking, method);
+								setBookingActionLoading(false);
+								return;
+							}
+							var errorData = (res && res.data) ? res.data : { message: 'Booking feilet.' };
+							renderBookingError(errorData, method);
+							setBookingActionLoading(false);
+						})
+						.catch(function(){
+							bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved booking.</span>';
+							setBookingActionLoading(false);
+						});
+				}
 
 			function openModal(){ modal.style.display = 'block'; }
 			function closeModal(){ modal.style.display = 'none'; }
@@ -2572,33 +2780,91 @@
 				closeBottomBtn.addEventListener('click', closeModal);
 			}
 
-			addBtn.addEventListener('click', function(){ createColli({}); });
+				addBtn.addEventListener('click', function(){ hideBookingConfirmation(); createColli({}); });
 			runEstimateBtn.addEventListener('click', runEstimate);
 			if (runBookingEstimatorBtn) {
 				runBookingEstimatorBtn.addEventListener('click', runBookingEstimator);
 			}
-			if (bookingRecommendationsContent) {
-				bookingRecommendationsContent.addEventListener('click', function(e){
-					var selectBtn = e.target.closest('.lp-booking-recommendation-select');
-					if (!selectBtn) { return; }
-					e.preventDefault();
-					selectRecommendationMethod(selectBtn.getAttribute('data-method-key') || '');
-				});
-			}
-			if (runBookingBtn) {
-				runBookingBtn.addEventListener('click', function(){ runBooking(); });
-			}
+				if (bookingRecommendationsContent) {
+					bookingRecommendationsContent.addEventListener('click', function(e){
+						var refreshBtn = e.target.closest('.lp-recommendation-servicepartner-refresh');
+						if (refreshBtn) {
+							e.preventDefault();
+							hideBookingConfirmation();
+							var refreshMethodKey = refreshBtn.getAttribute('data-method-key') || '';
+							fetchServicepartnersForMethod(refreshMethodKey).then(function(){
+								renderBookingRecommendations(latestEstimateResults);
+								updateProactiveBookingServicepartner();
+							});
+							return;
+						}
+						var retryBtn = e.target.closest('.lp-recommendation-method-retry');
+						if (retryBtn) {
+							e.preventDefault();
+							hideBookingConfirmation();
+							var retryMethodKey = retryBtn.getAttribute('data-method-key') || '';
+							var recommendationSelect = bookingRecommendationsContent.querySelector('.lp-recommendation-servicepartner-select[data-method-key="'+retryMethodKey+'"]');
+							var selectedServicepartner = recommendationSelect ? (recommendationSelect.value || '') : '';
+							updateRowServicepartnerSelection(retryMethodKey, selectedServicepartner, recommendationSelect, selectedServicepartner ? 'manual' : 'none');
+							syncServicepartnerSelectors(retryMethodKey, selectedServicepartner, 'recommendation');
+							selectRecommendationMethod(retryMethodKey);
+							runEstimateForSingleMethod(retryMethodKey, selectedServicepartner, false);
+							return;
+						}
+						var selectBtn = e.target.closest('.lp-booking-recommendation-select');
+						if (!selectBtn) { return; }
+						e.preventDefault();
+						hideBookingConfirmation();
+						selectRecommendationMethod(selectBtn.getAttribute('data-method-key') || '');
+					});
+					bookingRecommendationsContent.addEventListener('change', function(e){
+						var target = e.target && e.target.closest ? e.target.closest('.lp-recommendation-servicepartner-select') : null;
+						if (!target) { return; }
+						hideBookingConfirmation();
+						var methodKey = target.getAttribute('data-method-key') || '';
+						var value = target.value || '';
+						updateRowServicepartnerSelection(methodKey, value, target, value ? 'manual' : 'none');
+						syncServicepartnerSelectors(methodKey, value, 'recommendation');
+						selectRecommendationMethod(methodKey);
+						renderBookingRecommendations(latestEstimateResults);
+					});
+				}
+				if (runBookingBtn) {
+					runBookingBtn.addEventListener('click', function(){ runBooking(); });
+				}
+				if (confirmBookingBtn) {
+					confirmBookingBtn.addEventListener('click', function(e){
+						e.preventDefault();
+						executeBooking(pendingBookingPreselectedMethod || null);
+					});
+				}
+				if (cancelBookingConfirmationBtn) {
+					cancelBookingConfirmationBtn.addEventListener('click', function(e){
+						e.preventDefault();
+						hideBookingConfirmation();
+					});
+				}
 			if (selectAllShippingBtn) {
 				selectAllShippingBtn.addEventListener('click', toggleSelectAllShippingOptions);
 			}
-			if (shippingOptionsList) {
-				shippingOptionsList.addEventListener('change', function(e){
-					if (e.target && e.target.classList && e.target.classList.contains('lp-shipping-option')) {
-						updateBookingServicesSelector();
-						updateProactiveBookingServicepartner();
-					}
-				});
-			}
+				if (shippingOptionsList) {
+					shippingOptionsList.addEventListener('change', function(e){
+						if (e.target && e.target.classList && e.target.classList.contains('lp-shipping-option')) {
+							hideBookingConfirmation();
+							updateBookingServicesSelector();
+							updateProactiveBookingServicepartner();
+						}
+					});
+				}
+				if (bookingServicesChoice) {
+					bookingServicesChoice.addEventListener('change', hideBookingConfirmation);
+				}
+				if (bookingPrinterChoice) {
+					bookingPrinterChoice.addEventListener('change', hideBookingConfirmation);
+				}
+				if (bookingNotifyCheckbox) {
+					bookingNotifyCheckbox.addEventListener('change', hideBookingConfirmation);
+				}
 			if (bookingServicepartnerRefreshBtn) {
 				bookingServicepartnerRefreshBtn.addEventListener('click', function(e){
 					e.preventDefault();
@@ -2608,28 +2874,19 @@
 					fetchServicepartnersForMethod(methodKey);
 				});
 			}
-			if (bookingServicepartnerSelect) {
-				bookingServicepartnerSelect.addEventListener('change', function(){
-					var methodKey = bookingServicepartnerSelect.getAttribute('data-method-key') || '';
-					var value = bookingServicepartnerSelect.value || '';
-					latestEstimateResults = latestEstimateResults.map(function(row){
-						if (methodKeyForRow(row) === methodKey) {
-							row.selected_servicepartner = value;
-							row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(bookingServicepartnerSelect);
-							row.selected_servicepartner_option = resolveServicepartnerSelectedOption(methodKey, value) || {};
-							row.servicepartner_selection_source = value ? 'manual' : 'none';
-							row.servicepartner_user_selected = !!value;
-							row.servicepartner_auto_selected = false;
-							row.auto_selection_reason = value ? 'manual_selection_changed_by_user' : '';
+				if (bookingServicepartnerSelect) {
+					bookingServicepartnerSelect.addEventListener('change', function(){
+						hideBookingConfirmation();
+						var methodKey = bookingServicepartnerSelect.getAttribute('data-method-key') || '';
+						var value = bookingServicepartnerSelect.value || '';
+						updateRowServicepartnerSelection(methodKey, value, bookingServicepartnerSelect, value ? 'manual' : 'none');
+						syncServicepartnerSelectors(methodKey, value, 'proactive');
+						renderBookingRecommendations(latestEstimateResults);
+						if (value) {
+							setProactiveServicepartnerHelp('Servicepartner valgt.', '#125228');
 						}
-						return row;
 					});
-					syncServicepartnerSelectors(methodKey, value, 'proactive');
-					if (value) {
-						setProactiveServicepartnerHelp('Servicepartner valgt.', '#125228');
-					}
-				});
-			}
+				}
 
 
 			resultsContent.addEventListener('click', function(e){
@@ -2664,9 +2921,10 @@
 					return;
 				}
 
-				var select = e.target.closest('.lp-servicepartner-select');
-				if (!select) { return; }
-				var methodKey = select.getAttribute('data-method-key') || '';
+					var select = e.target.closest('.lp-servicepartner-select');
+					if (!select) { return; }
+					hideBookingConfirmation();
+					var methodKey = select.getAttribute('data-method-key') || '';
 				latestEstimateResults = latestEstimateResults.map(function(row){
 					if (methodKeyForRow(row) === methodKey) {
 						row.selected_servicepartner = select.value || '';
@@ -2683,9 +2941,10 @@
 
 			if (bookingResultsContent) {
 				bookingResultsContent.addEventListener('change', function(e){
-					var select = e.target.closest('.lp-servicepartner-select');
-					if (select) {
-						var methodKey = select.getAttribute('data-method-key') || '';
+						var select = e.target.closest('.lp-servicepartner-select');
+						if (select) {
+							hideBookingConfirmation();
+							var methodKey = select.getAttribute('data-method-key') || '';
 						var value = select.value || '';
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
@@ -2812,15 +3071,16 @@
 				printerLoadWarningMessage = '';
 				currentPrinters = [];
 				currentDefaultPrinterId = '';
-				currentShippingOptions = [];
-				servicepartnerLookupCache = {};
-				servicepartnerPrefetchInFlight = {};
-				servicepartnerLookupGeneration++;
-				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
-				if (bookingRecommendationsContent) {
-					bookingRecommendationsContent.innerHTML = 'Ingen anbefalinger hentet enda.';
-				}
-				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
+					currentShippingOptions = [];
+					servicepartnerLookupCache = {};
+					servicepartnerPrefetchInFlight = {};
+					servicepartnerLookupGeneration++;
+					bookingRecommendationsReady = false;
+					resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
+					if (bookingRecommendationsContent) {
+						bookingRecommendationsContent.innerHTML = 'Ingen anbefalinger hentet enda.';
+					}
+					shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
 				if (bookingResultsContent) {
 					bookingResultsContent.innerHTML = 'Ingen booking kjørt enda.';
 				}
@@ -2839,16 +3099,15 @@
 				if (bookingServicesChoice) {
 					bookingServicesChoice.innerHTML = '';
 				}
-				if (bookingServicesHelp) {
-					bookingServicesHelp.textContent = '';
+					if (bookingServicesHelp) {
+						bookingServicesHelp.textContent = '';
+					}
+					clearProactiveServicepartnerState();
+					hideBookingConfirmation();
+					setBookingActionLoading(false);
+					setShippingOptionsVisibility();
+					loadOrderData();
 				}
-				clearProactiveServicepartnerState();
-				if (runBookingBtn) {
-					runBookingBtn.disabled = false;
-					runBookingBtn.textContent = 'Book shipment';
-				}
-				loadOrderData();
-			}
 
 			document.addEventListener('click', function(e){
 				var btn = e.target.closest('.lp-cargonizer-estimate-open');
