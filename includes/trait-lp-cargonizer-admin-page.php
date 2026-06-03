@@ -20,6 +20,29 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		register_setting('lp_cargonizer_group', self::OPTION_KEY, array($this, 'sanitize_settings'));
 	}
 
+	public function enqueue_admin_settings_assets($hook_suffix) {
+		if (!current_user_can('manage_woocommerce')) {
+			return;
+		}
+
+		if ((string) $hook_suffix !== 'woocommerce_page_lp-cargonizer') {
+			return;
+		}
+
+		$script_path = dirname(__DIR__) . '/assets/js/admin-settings.js';
+		$script_url = plugins_url('assets/js/admin-settings.js', dirname(__DIR__) . '/lilleprinsen-cargonizer-connector.php');
+		$script_version = file_exists($script_path) ? (string) filemtime($script_path) : '1.0.0';
+
+		wp_enqueue_script('lp-cargonizer-admin-settings', $script_url, array(), $script_version, true);
+		wp_localize_script('lp-cargonizer-admin-settings', 'lpCargonizerAdminSettingsConfig', array(
+			'ajaxUrl' => admin_url('admin-ajax.php'),
+			'actions' => array(
+				'saveSettings' => 'lp_cargonizer_save_settings',
+				'directPrintUpload' => 'lp_cargonizer_direct_print_upload',
+			),
+		));
+	}
+
 	private function is_single_order_edit_screen() {
 		global $pagenow;
 
@@ -741,6 +764,111 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return isset($mime_map[$client_type]) ? $mime_map[$client_type] : '';
 	}
 
+	private function save_settings_from_request($settings, $current_user_id) {
+		$posted_enabled_methods = isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods'])
+			? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods']))
+			: null;
+
+		$new_settings = array(
+			'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
+			'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
+			'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
+			'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
+			'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
+			'enabled_methods' => is_array($posted_enabled_methods)
+				? $posted_enabled_methods
+				: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array()),
+			'method_discounts' => isset($_POST['lp_cargonizer_method_discounts']) && is_array($_POST['lp_cargonizer_method_discounts']) ? wp_unslash($_POST['lp_cargonizer_method_discounts']) : array(),
+			'method_pricing' => isset($_POST['lp_cargonizer_method_pricing']) && is_array($_POST['lp_cargonizer_method_pricing']) ? wp_unslash($_POST['lp_cargonizer_method_pricing']) : array(),
+			'live_checkout' => isset($_POST['lp_cargonizer_live_checkout']) && is_array($_POST['lp_cargonizer_live_checkout']) ? wp_unslash($_POST['lp_cargonizer_live_checkout']) : array(),
+			'shipping_profiles' => array(
+				'default_profile_slug' => isset($_POST['lp_cargonizer_shipping_profiles_default_slug']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_shipping_profiles_default_slug'])) : '',
+				'profiles' => $this->parse_profile_rows_editor_input(isset($_POST['lp_cargonizer_shipping_profiles']) && is_array($_POST['lp_cargonizer_shipping_profiles']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles']) : array()),
+				'shipping_class_map' => $this->parse_profile_map_rows_editor_input(isset($_POST['lp_cargonizer_shipping_class_profile_map']) && is_array($_POST['lp_cargonizer_shipping_class_profile_map']) ? wp_unslash($_POST['lp_cargonizer_shipping_class_profile_map']) : array()),
+				'category_map' => $this->parse_profile_map_rows_editor_input(isset($_POST['lp_cargonizer_category_profile_map']) && is_array($_POST['lp_cargonizer_category_profile_map']) ? wp_unslash($_POST['lp_cargonizer_category_profile_map']) : array()),
+				'value_rules' => $this->parse_value_rules_editor_input(isset($_POST['lp_cargonizer_value_profile_rules']) && is_array($_POST['lp_cargonizer_value_profile_rules']) ? wp_unslash($_POST['lp_cargonizer_value_profile_rules']) : array()),
+			),
+			'package_resolution' => array(
+				'package_build_mode' => isset($_POST['lp_cargonizer_package_build_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_package_build_mode'])) : 'combined_single',
+				'separate_package_strategy' => isset($_POST['lp_cargonizer_separate_package_strategy']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_separate_package_strategy'])) : 'keep_separate_colli',
+				'fallback_sources' => $this->parse_live_checkout_lines_to_list(isset($_POST['lp_cargonizer_package_resolution_fallback_sources']) ? wp_unslash($_POST['lp_cargonizer_package_resolution_fallback_sources']) : ''),
+			),
+			'checkout_method_rules' => array(
+				'rules' => $this->parse_checkout_method_rules_editor_input(isset($_POST['lp_cargonizer_checkout_method_rules']) && is_array($_POST['lp_cargonizer_checkout_method_rules']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules']) : array()),
+			),
+			'warehouse_profiles' => isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array(),
+			'checkout_fallback' => array(
+				'on_quote_failure' => isset($_POST['lp_cargonizer_checkout_fallback_on_quote_failure']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_on_quote_failure'])) : '',
+				'allow_checkout_with_fallback' => isset($_POST['lp_cargonizer_checkout_fallback_allow_checkout']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_allow_checkout'])) : '0',
+				'safe_fallback_rates' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_fallback_rates_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_fallback_rates_json']) : ''),
+			),
+		);
+
+		$new_settings = $this->sanitize_settings($new_settings);
+		$profiles_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : '');
+		if (!empty($profiles_json) && empty($new_settings['shipping_profiles']['profiles'])) {
+			$new_settings['shipping_profiles']['profiles'] = $profiles_json;
+			$new_settings = $this->sanitize_settings($new_settings);
+		}
+		$method_rules_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_method_rules_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules_json']) : '');
+		if (!empty($method_rules_json) && empty($new_settings['checkout_method_rules']['rules'])) {
+			$new_settings['checkout_method_rules']['rules'] = $method_rules_json;
+			$new_settings = $this->sanitize_settings($new_settings);
+		}
+		update_option(self::OPTION_KEY, $new_settings);
+
+		$posted_default_printer_id = isset($_POST['lp_cargonizer_default_printer_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_default_printer_id'])) : '';
+		update_user_meta($current_user_id, 'lp_cargonizer_default_printer_id', $posted_default_printer_id);
+
+		return array(
+			'settings' => $this->get_settings(),
+			'default_printer_id' => $posted_default_printer_id,
+		);
+	}
+
+	public function ajax_save_settings() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Mangler tilgang til å lagre innstillinger.'), 403);
+		}
+
+		if (!isset($_POST['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)) {
+			wp_send_json_error(array('message' => 'Ugyldig sikkerhetsnøkkel. Last siden på nytt og prøv igjen.'), 400);
+		}
+
+		$result = $this->save_settings_from_request($this->get_settings(), get_current_user_id());
+		$saved_settings = isset($result['settings']) && is_array($result['settings']) ? $result['settings'] : $this->get_settings();
+		$default_printer_id = isset($result['default_printer_id']) ? sanitize_text_field((string) $result['default_printer_id']) : '';
+
+		wp_send_json_success(array(
+			'message' => 'Innstillinger lagret.',
+			'apiKeyMasked' => !empty($saved_settings['api_key']) ? $this->mask_value($saved_settings['api_key']) : 'Ikke lagret',
+			'senderId' => !empty($saved_settings['sender_id']) ? sanitize_text_field((string) $saved_settings['sender_id']) : 'Ikke lagret',
+			'defaultPrinterId' => $default_printer_id,
+		));
+	}
+
+	public function ajax_direct_print_upload() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Mangler tilgang til å bruke DirectPrint.'), 403);
+		}
+
+		if (!isset($_POST['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_DIRECT_PRINT_UPLOAD)) {
+			wp_send_json_error(array('message' => 'Ugyldig sikkerhetsnøkkel. Last siden på nytt og prøv igjen.'), 400);
+		}
+
+		$result = $this->handle_direct_print_upload($this->get_settings());
+		$response = array(
+			'message' => isset($result['message']) && (string) $result['message'] !== '' ? (string) $result['message'] : 'DirectPrint request fullført.',
+			'httpStatus' => isset($result['http_status']) ? (int) $result['http_status'] : 0,
+		);
+
+		if (empty($result['success'])) {
+			wp_send_json_error($response, 400);
+		}
+
+		wp_send_json_success($response);
+	}
+
 	public function render_admin_page() {
 		if (!current_user_can('manage_woocommerce')) {
 			return;
@@ -762,63 +890,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			&& isset($_POST['_wpnonce'])
 			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)
 		) {
-			$posted_enabled_methods = isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods'])
-				? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods']))
-				: null;
-
-			$new_settings = array(
-				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
-				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
-				'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
-				'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
-				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
-				'enabled_methods' => is_array($posted_enabled_methods)
-					? $posted_enabled_methods
-					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array()),
-				'method_discounts' => isset($_POST['lp_cargonizer_method_discounts']) && is_array($_POST['lp_cargonizer_method_discounts']) ? wp_unslash($_POST['lp_cargonizer_method_discounts']) : array(),
-				'method_pricing' => isset($_POST['lp_cargonizer_method_pricing']) && is_array($_POST['lp_cargonizer_method_pricing']) ? wp_unslash($_POST['lp_cargonizer_method_pricing']) : array(),
-				'live_checkout' => isset($_POST['lp_cargonizer_live_checkout']) && is_array($_POST['lp_cargonizer_live_checkout']) ? wp_unslash($_POST['lp_cargonizer_live_checkout']) : array(),
-				'shipping_profiles' => array(
-					'default_profile_slug' => isset($_POST['lp_cargonizer_shipping_profiles_default_slug']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_shipping_profiles_default_slug'])) : '',
-					'profiles' => $this->parse_profile_rows_editor_input(isset($_POST['lp_cargonizer_shipping_profiles']) && is_array($_POST['lp_cargonizer_shipping_profiles']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles']) : array()),
-					'shipping_class_map' => $this->parse_profile_map_rows_editor_input(isset($_POST['lp_cargonizer_shipping_class_profile_map']) && is_array($_POST['lp_cargonizer_shipping_class_profile_map']) ? wp_unslash($_POST['lp_cargonizer_shipping_class_profile_map']) : array()),
-					'category_map' => $this->parse_profile_map_rows_editor_input(isset($_POST['lp_cargonizer_category_profile_map']) && is_array($_POST['lp_cargonizer_category_profile_map']) ? wp_unslash($_POST['lp_cargonizer_category_profile_map']) : array()),
-					'value_rules' => $this->parse_value_rules_editor_input(isset($_POST['lp_cargonizer_value_profile_rules']) && is_array($_POST['lp_cargonizer_value_profile_rules']) ? wp_unslash($_POST['lp_cargonizer_value_profile_rules']) : array()),
-				),
-				'package_resolution' => array(
-					'package_build_mode' => isset($_POST['lp_cargonizer_package_build_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_package_build_mode'])) : 'combined_single',
-					'separate_package_strategy' => isset($_POST['lp_cargonizer_separate_package_strategy']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_separate_package_strategy'])) : 'keep_separate_colli',
-					'fallback_sources' => $this->parse_live_checkout_lines_to_list(isset($_POST['lp_cargonizer_package_resolution_fallback_sources']) ? wp_unslash($_POST['lp_cargonizer_package_resolution_fallback_sources']) : ''),
-				),
-				'checkout_method_rules' => array(
-					'rules' => $this->parse_checkout_method_rules_editor_input(isset($_POST['lp_cargonizer_checkout_method_rules']) && is_array($_POST['lp_cargonizer_checkout_method_rules']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules']) : array()),
-				),
-				'warehouse_profiles' => isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array(),
-				'checkout_fallback' => array(
-					'on_quote_failure' => isset($_POST['lp_cargonizer_checkout_fallback_on_quote_failure']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_on_quote_failure'])) : '',
-					'allow_checkout_with_fallback' => isset($_POST['lp_cargonizer_checkout_fallback_allow_checkout']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_checkout_fallback_allow_checkout'])) : '0',
-					'safe_fallback_rates' => $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_fallback_rates_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_fallback_rates_json']) : ''),
-				),
-			);
-
-			$new_settings = $this->sanitize_settings($new_settings);
-			$profiles_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : '');
-			if (!empty($profiles_json) && empty($new_settings['shipping_profiles']['profiles'])) {
-				$new_settings['shipping_profiles']['profiles'] = $profiles_json;
-				$new_settings = $this->sanitize_settings($new_settings);
-			}
-			$method_rules_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_checkout_method_rules_json']) ? wp_unslash($_POST['lp_cargonizer_checkout_method_rules_json']) : '');
-			if (!empty($method_rules_json) && empty($new_settings['checkout_method_rules']['rules'])) {
-				$new_settings['checkout_method_rules']['rules'] = $method_rules_json;
-				$new_settings = $this->sanitize_settings($new_settings);
-			}
-			update_option(self::OPTION_KEY, $new_settings);
-
-			$posted_default_printer_id = isset($_POST['lp_cargonizer_default_printer_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_default_printer_id'])) : '';
-			update_user_meta($current_user_id, 'lp_cargonizer_default_printer_id', $posted_default_printer_id);
-
-			$settings = $this->get_settings();
-			$current_user_default_printer_id = $posted_default_printer_id;
+			$save_result = $this->save_settings_from_request($settings, $current_user_id);
+			$settings = isset($save_result['settings']) && is_array($save_result['settings']) ? $save_result['settings'] : $this->get_settings();
+			$current_user_default_printer_id = isset($save_result['default_printer_id']) ? sanitize_text_field((string) $save_result['default_printer_id']) : '';
 
 			echo '<div class="notice notice-success"><p>Innstillinger lagret.</p></div>';
 		}
@@ -1085,6 +1159,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		?>
 		<div class="wrap">
 			<h1>Cargonizer for WooCommerce</h1>
+			<div id="lp-cargonizer-admin-ajax-notices" aria-live="polite"></div>
 
 			<p>
 				Enklere oppsett for butikk: start i <strong>Enkelt oppsett</strong>, og bruk <strong>Avansert</strong> ved behov.
@@ -1325,7 +1400,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			<div style="background:#fff;border:1px solid #ddd;padding:20px;margin:20px 0;max-width:900px;">
 				<h2>Tilkobling</h2>
 				<p class="description">Legg inn API-nøkkel og sender-ID for å hente metoder og priser fra Cargonizer.</p>
-				<form method="post">
+				<form method="post" class="lp-cargonizer-settings-form">
 					<?php wp_nonce_field(self::NONCE_ACTION_SAVE); ?>
 
 					<table class="form-table" role="presentation">
@@ -2225,7 +2300,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					: $current_user_default_printer_id;
 				$direct_print_disabled = empty($settings['api_key']) || empty($available_printers);
 				?>
-				<form method="post" enctype="multipart/form-data">
+				<form method="post" enctype="multipart/form-data" class="lp-cargonizer-direct-print-form">
 					<?php wp_nonce_field(self::NONCE_ACTION_DIRECT_PRINT_UPLOAD); ?>
 					<table class="form-table" role="presentation">
 						<tbody>
@@ -2288,8 +2363,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				</p>
 
 				<ul style="list-style:disc;padding-left:20px;">
-					<li><strong>API key:</strong> <?php echo esc_html($settings['api_key'] ? $this->mask_value($settings['api_key']) : 'Ikke lagret'); ?></li>
-					<li><strong>Sender ID:</strong> <?php echo esc_html($settings['sender_id'] ? $settings['sender_id'] : 'Ikke lagret'); ?></li>
+					<li><strong>API key:</strong> <span data-lp-cargonizer-api-key-summary><?php echo esc_html($settings['api_key'] ? $this->mask_value($settings['api_key']) : 'Ikke lagret'); ?></span></li>
+					<li><strong>Sender ID:</strong> <span data-lp-cargonizer-sender-id-summary><?php echo esc_html($settings['sender_id'] ? $settings['sender_id'] : 'Ikke lagret'); ?></span></li>
 				</ul>
 
 				<form method="post">
