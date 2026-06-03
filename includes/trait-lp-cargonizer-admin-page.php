@@ -853,6 +853,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$settings = is_array($settings) ? $settings : $this->get_settings();
 		$summaries = array();
 		$profiles = $this->get_sender_profiles_from_settings($settings);
+		$default_sender_profile_id = $this->get_default_sender_profile_id($settings);
 		foreach ($profiles as $profile) {
 			if (!is_array($profile)) {
 				continue;
@@ -900,6 +901,13 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
 			if ($sender_profile_id === '' && $sender_id !== '') {
 				$sender_profile_id = $this->build_sender_profile_id($sender_id);
+			}
+			if ($sender_profile_id === '' && !empty($method['key']) && strpos((string) $method['key'], '::') !== false) {
+				$key_parts = explode('::', (string) $method['key'], 2);
+				$sender_profile_id = sanitize_key((string) $key_parts[0]);
+			}
+			if ($sender_profile_id === '' && $default_sender_profile_id !== '') {
+				$sender_profile_id = $default_sender_profile_id;
 			}
 			if ($sender_profile_id === '') {
 				$sender_profile_id = 'default_sender';
@@ -1082,6 +1090,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				$method_fetch_settings['warehouse_profiles'] = wp_unslash($_POST['lp_cargonizer_warehouse_profiles']);
 			}
 			$result = $this->fetch_transport_agreements_for_sender_profiles($method_fetch_settings);
+			if (!empty($result['success'])) {
+				$settings['available_methods'] = isset($result['methods']) && is_array($result['methods']) ? $result['methods'] : array();
+				$settings['enabled_methods'] = isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array();
+				if (isset($method_fetch_settings['warehouse_profiles']) && is_array($method_fetch_settings['warehouse_profiles'])) {
+					$settings['warehouse_profiles'] = $method_fetch_settings['warehouse_profiles'];
+				}
+				update_option(self::OPTION_KEY, $this->sanitize_settings($settings));
+				$settings = $this->get_settings();
+				$result['message'] = (isset($result['message']) ? (string) $result['message'] : 'Fraktmetoder ble hentet.') . ' Metodene ble lagret i innstillingene.';
+			}
 		}
 
 
@@ -2037,6 +2055,24 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							$sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
 							$sender_profile_name = isset($method['sender_profile_name']) ? trim((string) $method['sender_profile_name']) : '';
 							$sender_id = isset($method['sender_id']) ? trim((string) $method['sender_id']) : '';
+							if ($sender_profile_id === '' && $sender_id !== '') {
+								$sender_profile_id = $this->build_sender_profile_id($sender_id);
+							}
+							if ($sender_profile_id === '' && !empty($method['key']) && strpos((string) $method['key'], '::') !== false) {
+								$key_parts = explode('::', (string) $method['key'], 2);
+								$sender_profile_id = sanitize_key((string) $key_parts[0]);
+							}
+							if ($sender_profile_id === '' && $default_sender_profile_id !== '') {
+								$sender_profile_id = $default_sender_profile_id;
+							}
+							if ($sender_profile_id !== '' && isset($sender_method_summary[$sender_profile_id])) {
+								if ($sender_profile_name === '' && !empty($sender_method_summary[$sender_profile_id]['sender_label'])) {
+									$sender_profile_name = preg_replace('/\s*\([^)]*\)\s*$/', '', (string) $sender_method_summary[$sender_profile_id]['sender_label']);
+								}
+								if ($sender_id === '' && !empty($sender_method_summary[$sender_profile_id]['sender_id'])) {
+									$sender_id = (string) $sender_method_summary[$sender_profile_id]['sender_id'];
+								}
+							}
 							$sender_group_key = $sender_profile_id !== '' ? $sender_profile_id : 'sender_default';
 							if ($is_manual_norgespakke_method) {
 								$group_key = 'manual_norgespakke';
@@ -2135,6 +2171,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 											$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
 											$method_services = isset($method['services']) && is_array($method['services']) ? $method['services'] : array();
 											$method_sender_label = trim((isset($method['sender_profile_name']) ? (string) $method['sender_profile_name'] : '') . (!empty($method['sender_id']) ? ' (' . (string) $method['sender_id'] . ')' : ''));
+											if ($method_sender_label === '' && !empty($group['sender_label'])) {
+												$method_sender_label = (string) $group['sender_label'];
+											}
 											$all_method_service_ids = array();
 											foreach ($method_services as $method_service) {
 												if (!is_array($method_service)) {
@@ -2861,7 +2900,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<?php wp_nonce_field(self::NONCE_ACTION_FETCH); ?>
 					<p>
 						<button type="submit" name="lp_cargonizer_fetch_methods" class="button button-secondary">
-							Test autentisering og hent fraktmetoder
+							Test autentisering, hent og lagre fraktmetoder
 						</button>
 					</p>
 				</form>

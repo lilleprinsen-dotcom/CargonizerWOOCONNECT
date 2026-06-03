@@ -1496,6 +1496,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		if ($method_profile_id === '' && isset($method['warehouse_profile_id'])) {
 			$method_profile_id = sanitize_key((string) $method['warehouse_profile_id']);
 		}
+		if ($method_profile_id === '' && !empty($method['sender_id'])) {
+			$method_profile_id = $this->build_sender_profile_id($method['sender_id']);
+		}
 		if ($method_profile_id === '' && isset($method['key']) && strpos((string) $method['key'], '::') !== false) {
 			$key_parts = explode('::', (string) $method['key'], 2);
 			$method_profile_id = sanitize_key((string) $key_parts[0]);
@@ -1520,7 +1523,11 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
 		$legacy_key = implode('|', array($agreement_id, $product_id));
 		$key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
+		$method_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
 		if ($key !== '' && ($profile_id === '' || $key !== $legacy_key)) {
+			return $key;
+		}
+		if ($key !== '' && $method_profile_id === '' && empty($method['sender_id'])) {
 			return $key;
 		}
 		return $this->build_sender_method_key($agreement_id, $product_id, $profile_id);
