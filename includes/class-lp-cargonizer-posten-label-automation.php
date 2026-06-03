@@ -1967,6 +1967,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 				$print_result['error'] = $file_context->get_error_message();
 				$file_context = array();
 			} else {
+				$stamp_warning = !empty($file_context['stamp_error']) ? 'Stempling hoppet over: ' . sanitize_text_field((string) $file_context['stamp_error']) : '';
 				if (!empty($file_context['stamped_label_file_path'])) {
 					$stamped_label_files = $this->upsert_indexed_row($stamped_label_files, $selected_index, array(
 						'package_index' => $selected_index,
@@ -1982,6 +1983,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 					$print_result['http_status'] = isset($api_result['http_status']) ? (int) $api_result['http_status'] : 0;
 					if (!empty($api_result['success'])) {
 						$print_result['printed'] = 1;
+						if ($stamp_warning !== '') {
+							$print_result['error'] = $stamp_warning;
+						}
 						$printed_count++;
 					} else {
 						$api_error = isset($api_result['error']) ? sanitize_text_field((string) $api_result['error']) : '';
@@ -2077,6 +2081,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$stamped_path = '';
 			$stamped_filename = '';
 			$stamp_error = '';
+			$stamp_error_is_recoverable = false;
 
 			if ($stamp_enabled && $original_path !== '' && $this->is_file_inside_label_dir($original_path) && is_readable($original_path)) {
 				$stamp_text = $this->build_package_stamp_text($package_index, isset($package_map[$package_index]) ? $package_map[$package_index] : array(), $robot_settings);
@@ -2084,7 +2089,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 					$stamped_path = $this->build_stamped_label_path($original_path, $package_index);
 					$stamp_result = $this->stamp_pdf_file($original_path, $stamped_path, $stamp_text, $robot_settings);
 					if (is_wp_error($stamp_result)) {
-						$stamp_error = $stamp_result->get_error_message();
+						$stamp_error_is_recoverable = $this->is_recoverable_pdf_stamp_error($stamp_result);
+						$stamp_error = $stamp_error_is_recoverable ? $this->get_pdf_stamp_fallback_message($stamp_result) : $stamp_result->get_error_message();
 						$stamped_path = '';
 					} else {
 						$stamped_filename = basename($stamped_path);
@@ -2112,7 +2118,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 				$print_result['error'] = 'DirectPrint disabled';
 			} elseif ($printer_id === '') {
 				$print_result['error'] = 'DirectPrint printer mangler.';
-			} elseif ($stamp_error !== '' && $stamp_required_for_print) {
+			} elseif ($stamp_error !== '' && $stamp_required_for_print && !$stamp_error_is_recoverable) {
 				$print_result['error'] = 'Stempling feilet: ' . $stamp_error;
 			} elseif ($print_path === '' || !$this->is_file_inside_label_dir($print_path) || !is_readable($print_path)) {
 				$print_result['error'] = 'PDF for DirectPrint mangler eller kan ikke leses.';
@@ -2132,7 +2138,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 				}
 			}
 			if ($stamp_error !== '' && empty($print_result['error'])) {
-				$print_result['error'] = 'Stempling feilet: ' . $stamp_error;
+				$print_result['error'] = ($stamp_error_is_recoverable ? 'Stempling hoppet over: ' : 'Stempling feilet: ') . $stamp_error;
 			}
 
 			$result['printed'] = (int) $print_result['printed'];
@@ -2212,9 +2218,23 @@ class LP_Cargonizer_Posten_Label_Automation {
 						'stamped_label_file_path' => $new_stamped_path,
 					);
 				}
+				if (is_wp_error($stamp_result) && $this->is_recoverable_pdf_stamp_error($stamp_result)) {
+					return array(
+						'print_file_path' => $original_path,
+						'stamped_label_file_path' => '',
+						'stamp_error' => $this->get_pdf_stamp_fallback_message($stamp_result),
+					);
+				}
 				if ($stamp_required_for_print) {
 					$message = is_wp_error($stamp_result) ? $stamp_result->get_error_message() : 'Stemplet PDF ble ikke opprettet.';
 					return new WP_Error('posten_reprint_stamp_failed', 'Stempling feilet: ' . $message);
+				}
+				if (is_wp_error($stamp_result)) {
+					return array(
+						'print_file_path' => $original_path,
+						'stamped_label_file_path' => '',
+						'stamp_error' => $stamp_result->get_error_message(),
+					);
 				}
 			}
 		}
@@ -2252,6 +2272,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$stamped_path = $this->build_stamped_label_path($original_path, $package_index);
 		$stamp_result = $this->stamp_pdf_file($original_path, $stamped_path, $stamp_text, $settings);
 		if (is_wp_error($stamp_result)) {
+			if ($this->is_recoverable_pdf_stamp_error($stamp_result)) {
+				return $original_path;
+			}
 			return $stamp_result;
 		}
 		if (!$this->is_file_inside_label_dir($stamped_path) || !is_readable($stamped_path)) {
@@ -2520,6 +2543,30 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return is_readable($output_path) ? $output_path : new WP_Error('posten_pdf_stamp_output_missing', 'Stemplet PDF ble ikke opprettet.');
+	}
+
+	private function is_recoverable_pdf_stamp_error($error) {
+		if (!is_wp_error($error)) {
+			return false;
+		}
+		if ($error->get_error_code() !== 'posten_pdf_stamp_failed') {
+			return false;
+		}
+
+		$message = strtolower($error->get_error_message());
+		return strpos($message, 'compression technique') !== false
+			|| strpos($message, 'not supported by the free parser') !== false
+			|| strpos($message, 'free parser shipped with fpdi') !== false;
+	}
+
+	private function get_pdf_stamp_fallback_message($error) {
+		$message = is_wp_error($error) ? $error->get_error_message() : (string) $error;
+		$message = trim($message);
+		if ($message === '') {
+			return 'PDF-stempling støttes ikke for denne Posten-PDF-en. Bruker original PDF.';
+		}
+
+		return 'PDF-stempling støttes ikke for denne Posten-PDF-en. Bruker original PDF. Teknisk detalj: ' . $message;
 	}
 
 	private function load_pdf_stamping_library() {
