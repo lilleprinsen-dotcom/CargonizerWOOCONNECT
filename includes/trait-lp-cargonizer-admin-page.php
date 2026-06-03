@@ -520,7 +520,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 		$reason_code = isset($last_no_rates_status['reason_code']) ? sanitize_key((string) $last_no_rates_status['reason_code']) : '';
 		if ($reason_code === 'rules_filtered_all') {
-			$warnings[] = 'Siste checkout-forsøk ble filtrert bort av regler (ingen metoder vist). Gå gjennom «Når metoder skal vises/skjules».';
+			$warnings[] = 'Siste checkout-forsøk ble filtrert bort av regler (ingen metoder vist). Gå gjennom «Fraktmetoder per senderadresse».';
 		}
 
 		return $warnings;
@@ -847,6 +847,108 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		);
 
 		return isset($mime_map[$client_type]) ? $mime_map[$client_type] : '';
+	}
+
+	private function build_sender_transport_agreement_summary($settings) {
+		$settings = is_array($settings) ? $settings : $this->get_settings();
+		$summaries = array();
+		$profiles = $this->get_sender_profiles_from_settings($settings);
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) {
+				continue;
+			}
+			$profile_id = isset($profile['profile_id']) ? sanitize_key((string) $profile['profile_id']) : '';
+			$sender_id = isset($profile['sender_id']) ? sanitize_text_field((string) $profile['sender_id']) : '';
+			if ($profile_id === '' && $sender_id !== '') {
+				$profile_id = $this->build_sender_profile_id($sender_id);
+			}
+			if ($profile_id === '') {
+				continue;
+			}
+			$sender_label = isset($profile['label']) ? sanitize_text_field((string) $profile['label']) : '';
+			if ($sender_label === '') {
+				$profile_name = isset($profile['name']) ? sanitize_text_field((string) $profile['name']) : '';
+				$sender_label = trim($profile_name . ($sender_id !== '' ? ' (' . $sender_id . ')' : ''));
+			}
+			if ($sender_label === '') {
+				$sender_label = $profile_id;
+			}
+			$summaries[$profile_id] = array(
+				'profile_id' => $profile_id,
+				'sender_id' => $sender_id,
+				'sender_label' => $sender_label,
+				'total_methods' => 0,
+				'enabled_methods' => 0,
+				'agreements' => array(),
+				'agreement_count' => 0,
+				'carrier_names' => array(),
+			);
+		}
+
+		$enabled_methods = isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array();
+		$enabled_methods = array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $enabled_methods)), 'strlen'));
+		$enabled_map = array_fill_keys($enabled_methods, true);
+		$available_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+
+		foreach ($available_methods as $method) {
+			if (!is_array($method) || $this->is_manual_norgespakke_method($method)) {
+				continue;
+			}
+
+			$method_key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
+			$sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+			$sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+			if ($sender_profile_id === '' && $sender_id !== '') {
+				$sender_profile_id = $this->build_sender_profile_id($sender_id);
+			}
+			if ($sender_profile_id === '') {
+				$sender_profile_id = 'default_sender';
+			}
+
+			if (!isset($summaries[$sender_profile_id])) {
+				$sender_profile_name = isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '';
+				$sender_label = trim($sender_profile_name . ($sender_id !== '' ? ' (' . $sender_id . ')' : ''));
+				$summaries[$sender_profile_id] = array(
+					'profile_id' => $sender_profile_id,
+					'sender_id' => $sender_id,
+					'sender_label' => $sender_label !== '' ? $sender_label : $sender_profile_id,
+					'total_methods' => 0,
+					'enabled_methods' => 0,
+					'agreements' => array(),
+					'agreement_count' => 0,
+					'carrier_names' => array(),
+				);
+			}
+
+			$summaries[$sender_profile_id]['total_methods']++;
+			if ($method_key !== '' && isset($enabled_map[$method_key])) {
+				$summaries[$sender_profile_id]['enabled_methods']++;
+			}
+
+			$agreement_id = isset($method['agreement_id']) ? trim((string) $method['agreement_id']) : '';
+			$agreement_name = isset($method['agreement_name']) ? trim((string) $method['agreement_name']) : '';
+			$agreement_description = isset($method['agreement_description']) ? trim((string) $method['agreement_description']) : '';
+			$agreement_key = $agreement_id !== '' ? 'id:' . $agreement_id : ($agreement_name !== '' ? 'name:' . $agreement_name : 'method:' . $method_key);
+			$agreement_label = $agreement_description !== '' ? $agreement_description : ($agreement_name !== '' ? $agreement_name : ($agreement_id !== '' ? $agreement_id : 'Ukjent fraktavtale'));
+			if ($agreement_key !== '') {
+				$summaries[$sender_profile_id]['agreements'][$agreement_key] = $agreement_label;
+			}
+
+			$carrier_name = isset($method['carrier_name']) ? trim((string) $method['carrier_name']) : '';
+			if ($carrier_name !== '') {
+				$summaries[$sender_profile_id]['carrier_names'][$carrier_name] = true;
+			}
+		}
+
+		foreach ($summaries as &$summary) {
+			ksort($summary['agreements']);
+			ksort($summary['carrier_names']);
+			$summary['agreement_count'] = count($summary['agreements']);
+			$summary['carrier_names'] = array_keys($summary['carrier_names']);
+		}
+		unset($summary);
+
+		return $summaries;
 	}
 
 	public function render_admin_page() {
@@ -1627,8 +1729,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</tbody>
 					</table>
 
-					<h2>Sender-adresser (read-only)</h2>
-					<p>Hentes fra Cargonizer API for valgt API key + sender-ID. Ingen data lagres eller brukes videre enn visning i admin.</p>
+					<h2>Senderadresser og fraktavtaler</h2>
+					<p class="description">Senderadressene hentes fra Cargonizer og lagres som valg for booking. Fraktavtaler hentes per Sender ID fordi Logistra/Cargonizer kan ha egne transport agreements per senderadresse.</p>
 					<?php
 					$sender_addresses_fetch_result = array(
 						'success' => false,
@@ -1646,9 +1748,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					$default_sender_profile_id = $this->get_default_sender_profile_id($settings);
 					$current_default_sender_profile = $this->resolve_selected_warehouse_profile($default_sender_profile_id);
 					$current_default_sender_id = isset($current_default_sender_profile['sender_id']) ? sanitize_text_field((string) $current_default_sender_profile['sender_id']) : '';
+					$sender_method_summary = $this->build_sender_transport_agreement_summary($settings);
 					?>
 					<?php if (!empty($sender_addresses_fetch_result['success']) && !empty($sender_addresses)) : ?>
-						<p class="description">Velg hvilken senderadresse som skal være standard i Book shipment-popupen. Lageret kan fortsatt bytte senderadresse før estimering og booking.</p>
+						<p class="description">Velg standard senderadresse. Denne brukes som forhåndsvalg i Book shipment-popupen og som standard for checkout, men lageret kan bytte sender før estimering og booking.</p>
 						<table class="widefat striped" style="max-width:1000px;">
 							<thead>
 								<tr>
@@ -1658,6 +1761,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<th>Adresse</th>
 									<th>Postnr/Sted</th>
 									<th>Land</th>
+									<th>Fraktavtaler</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -1674,6 +1778,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									$sender_postal_line = trim($sender_postcode . ' ' . $sender_city);
 									$sender_profile_id = $this->build_sender_profile_id($sender_id);
 									$sender_profile_name = $sender_name !== '' ? $sender_name : ($sender_id !== '' ? 'Sender ' . $sender_id : 'Sender');
+									$sender_summary = isset($sender_method_summary[$sender_profile_id]) ? $sender_method_summary[$sender_profile_id] : array();
+									$sender_total_methods = isset($sender_summary['total_methods']) ? (int) $sender_summary['total_methods'] : 0;
+									$sender_enabled_methods = isset($sender_summary['enabled_methods']) ? (int) $sender_summary['enabled_methods'] : 0;
+									$sender_agreement_count = isset($sender_summary['agreement_count']) ? (int) $sender_summary['agreement_count'] : 0;
 									?>
 									<tr>
 										<td>
@@ -1701,6 +1809,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										<td><?php echo esc_html($sender_address_line !== '' ? $sender_address_line : '—'); ?></td>
 										<td><?php echo esc_html($sender_postal_line !== '' ? $sender_postal_line : '—'); ?></td>
 										<td><?php echo esc_html($sender_country !== '' ? $sender_country : '—'); ?></td>
+										<td>
+											<?php if ($sender_total_methods > 0) : ?>
+												<strong><?php echo esc_html($sender_enabled_methods . '/' . $sender_total_methods . ' aktive produkter'); ?></strong><br>
+												<small><?php echo esc_html($sender_agreement_count . ' fraktavtale(r) hentet'); ?></small><br>
+												<a href="#lp-cargonizer-section-methods">Vis/velg fraktmetoder</a>
+											<?php else : ?>
+												<span style="color:#8a4b00;">Ikke hentet ennå</span><br>
+												<small>Klikk hent/oppdater under for å laste avtaler for denne senderen.</small>
+											<?php endif; ?>
+										</td>
 									</tr>
 								<?php endforeach; ?>
 							</tbody>
@@ -1709,6 +1827,15 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<p class="description">Legg inn både API key og sender-ID for å hente sender-adresser fra Cargonizer.</p>
 					<?php else : ?>
 						<p class="description" style="color:#b32d2e;"><?php echo esc_html($sender_addresses_fetch_result['message'] !== '' ? $sender_addresses_fetch_result['message'] : 'Kunne ikke hente sender-adresser.'); ?></p>
+					<?php endif; ?>
+					<?php if (!empty($settings['api_key']) && !empty($settings['sender_id'])) : ?>
+						<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+							<button type="submit" name="lp_cargonizer_refresh_method_choices" class="button button-secondary">
+								Hent/oppdater fraktavtaler for alle senderadresser
+							</button>
+							<a class="button button-secondary" href="#lp-cargonizer-section-methods">Vis fraktmetoder</a>
+						</p>
+						<p class="description">Knappen henter transport agreements og produkter for alle senderadressene som vises over. Hvis én sender feiler, beholdes eksisterende metodevalg slik at booking ikke mister fungerende avtaler.</p>
 					<?php endif; ?>
 
 					<h2 id="lp-cargonizer-section-booking">Booking-standardvalg</h2>
@@ -1877,8 +2004,28 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					</table>
 
 
-					<h2 id="lp-cargonizer-section-methods">Når metoder skal vises/skjules</h2>
-					<p class="description">Velg hvilke metoder som skal være aktive. Prisfeltene under hver metode bruker samme beregningslogikk som før.</p>
+					<h2 id="lp-cargonizer-section-methods">Fraktmetoder per senderadresse</h2>
+					<p class="description">Velg hvilke Cargonizer-produkter som skal være aktive for hver senderadresse. Prisfeltene under hver metode bruker samme beregningslogikk som før.</p>
+
+					<?php if (!empty($sender_method_summary)) : ?>
+						<div style="margin:10px 0 12px;padding:10px 12px;border:1px solid #dcdcde;background:#f6f7f7;max-width:1000px;">
+							<strong>Hentede fraktavtaler per senderadresse</strong>
+							<ul style="margin:8px 0 0 18px;">
+								<?php foreach ($sender_method_summary as $sender_summary) : ?>
+									<?php
+									$summary_sender_label = isset($sender_summary['sender_label']) ? (string) $sender_summary['sender_label'] : 'Sender';
+									$summary_total_methods = isset($sender_summary['total_methods']) ? (int) $sender_summary['total_methods'] : 0;
+									$summary_enabled_methods = isset($sender_summary['enabled_methods']) ? (int) $sender_summary['enabled_methods'] : 0;
+									$summary_agreement_count = isset($sender_summary['agreement_count']) ? (int) $sender_summary['agreement_count'] : 0;
+									$summary_text = $summary_total_methods > 0
+										? $summary_enabled_methods . '/' . $summary_total_methods . ' aktive produkter, ' . $summary_agreement_count . ' fraktavtale(r)'
+										: 'Ingen fraktavtaler hentet ennå';
+									?>
+									<li><strong><?php echo esc_html($summary_sender_label); ?>:</strong> <?php echo esc_html($summary_text); ?></li>
+								<?php endforeach; ?>
+							</ul>
+						</div>
+					<?php endif; ?>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<?php
@@ -2127,7 +2274,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							<?php endforeach; ?>
 						</div>
 					<?php else : ?>
-						<p><em>Ingen fraktmetoder hentet ennå. Klikk "Oppdater liste over fraktmetoder" først.</em></p>
+						<p><em>Ingen fraktmetoder hentet ennå. Klikk "Hent/oppdater fraktavtaler for alle senderadresser" først.</em></p>
 					<?php endif; ?>
 					<script>
 					(function(){
@@ -2193,7 +2340,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 					<p>
 						<button type="submit" name="lp_cargonizer_refresh_method_choices" class="button button-secondary">
-							Oppdater liste over fraktmetoder
+							Hent/oppdater fraktavtaler for alle senderadresser
 						</button>
 					</p>
 
@@ -2523,7 +2670,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<p class="description">Fallback-kilder i prioritert rekkefølge, én per linje. Tillatte verdier: product_dimensions, product_override, shipping_class_profile, category_profile, value_rule, default_profile.</p>
 					<textarea name="lp_cargonizer_package_resolution_fallback_sources" rows="6" class="large-text code"><?php echo esc_textarea(implode("\n", isset($package_resolution['fallback_sources']) && is_array($package_resolution['fallback_sources']) ? $package_resolution['fallback_sources'] : array())); ?></textarea>
 
-					<h2>Når metoder skal vises/skjules (avansert regler)</h2>
+					<h2>Fraktmetoder og visningsregler (avansert)</h2>
 					<p class="description">Regelredigering per metode (allow/deny/decorate). Hver rad er én regelgruppe; metoden tillates når minst én allow-regel matcher (med mindre en deny-regel matcher).</p>
 					<?php
 					$method_rule_rows = isset($checkout_method_rules['rules']) && is_array($checkout_method_rules['rules']) ? $checkout_method_rules['rules'] : array();
