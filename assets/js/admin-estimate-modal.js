@@ -2231,6 +2231,14 @@
 				var selectedServiceIds = Array.isArray(bookingData.selected_service_ids) ? bookingData.selected_service_ids.filter(function(v){ return v !== null && v !== undefined && v !== ''; }) : [];
 				var createdByUser = bookingData.created_by_display_name || bookingData.created_by_user_login || '—';
 				var estimatedPrice = bookingData.estimated_shipping_price || 'ikke tilgjengelig';
+				var statusChange = bookingData.status_change || {};
+				var statusChangeHtml = '';
+				if (statusChange && statusChange.enabled) {
+					var statusChangeStatus = statusChange.verified ? 'OK' : 'Feilet';
+					var statusChangeTarget = statusChange.target_status_label || statusChange.target_status || '—';
+					var statusChangeMessage = statusChange.message ? ' - ' + statusChange.message : '';
+					statusChangeHtml = '<div><strong>Ordrestatus etter booking:</strong> ' + esc(statusChangeStatus + ' - ' + statusChangeTarget + statusChangeMessage) + '</div>';
+				}
 				return '' +
 					'<div style="color:#125228;font-weight:600;">Booking fullført.</div>' +
 					'<div><strong>Consignment number:</strong> ' + esc(bookingData.consignment_number || '—') + '</div>' +
@@ -2241,6 +2249,7 @@
 					'<div><strong>Estimert fraktpris:</strong> ' + esc(estimatedPrice) + '</div>' +
 					'<div><strong>Valgte tilleggstjenester:</strong> ' + esc(selectedServiceIds.length ? selectedServiceIds.join(', ') : 'Ingen') + '</div>' +
 					'<div><strong>E-postvarsling til mottaker:</strong> ' + esc(bookingData.notify_email_to_consignee ? 'Ja' : 'Nei') + '</div>' +
+					statusChangeHtml +
 					printHtml;
 			}
 

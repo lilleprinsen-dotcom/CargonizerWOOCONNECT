@@ -480,6 +480,58 @@ class LP_Cargonizer_Api_Service {
 		return '';
 	}
 
+	private function collect_piece_values_from_booking_response($consignment, $value_keys, $text_node_names = array()) {
+		$values = array();
+		if (!is_object($consignment) || !method_exists($consignment, 'xpath')) {
+			return $values;
+		}
+
+		$piece_paths = array(
+			'./bundles//pieces',
+			'./bundles//piece',
+			'.//pieces/piece',
+			'.//piece',
+		);
+		foreach ($piece_paths as $piece_path) {
+			$piece_nodes = $consignment->xpath($piece_path);
+			if (empty($piece_nodes)) {
+				continue;
+			}
+			foreach ($piece_nodes as $piece_node) {
+				$value = $this->xml_value($piece_node, $value_keys);
+				if ($value !== '') {
+					$values[] = $value;
+				}
+			}
+		}
+
+		foreach ((array) $text_node_names as $text_node_name) {
+			$text_node_name = (string) $text_node_name;
+			if ($text_node_name === '') {
+				continue;
+			}
+			$text_node_paths = array(
+				'./bundles//pieces/' . $text_node_name,
+				'./bundles//piece/' . $text_node_name,
+				'.//pieces/piece/' . $text_node_name,
+			);
+			foreach ($text_node_paths as $text_node_path) {
+				$text_nodes = $consignment->xpath($text_node_path);
+				if (empty($text_nodes)) {
+					continue;
+				}
+				foreach ($text_nodes as $text_node) {
+					$value = trim((string) $text_node);
+					if ($value !== '') {
+						$values[] = $value;
+					}
+				}
+			}
+		}
+
+		return array_values(array_unique(array_filter(array_map('strval', $values), 'strlen')));
+	}
+
 	public function parse_printers_response($body, $http_status = 200) {
 		$result = array(
 			'success' => false,
@@ -1901,25 +1953,16 @@ class LP_Cargonizer_Api_Service {
 			$result['gross_cost'] = $this->xml_value($consignment->{'cost-estimate'}, array('gross', 'gross-amount'));
 		}
 
-		$piece_number_nodes = $consignment->xpath('./bundles//pieces/number-with-checksum');
-		if (!empty($piece_number_nodes)) {
-			foreach ($piece_number_nodes as $piece_number_node) {
-				$value = trim((string) $piece_number_node);
-				if ($value !== '') {
-					$result['piece_numbers'][] = $value;
-				}
-			}
-		}
-
-		$piece_id_nodes = $consignment->xpath('./bundles//pieces/id');
-		if (!empty($piece_id_nodes)) {
-			foreach ($piece_id_nodes as $piece_id_node) {
-				$value = trim((string) $piece_id_node);
-				if ($value !== '') {
-					$result['piece_ids'][] = $value;
-				}
-			}
-		}
+		$result['piece_numbers'] = $this->collect_piece_values_from_booking_response(
+			$consignment,
+			array('number-with-checksum', 'number', 'barcode', 'piece-number', 'piece_number'),
+			array('number-with-checksum', 'piece-number', 'piece_number', 'barcode')
+		);
+		$result['piece_ids'] = $this->collect_piece_values_from_booking_response(
+			$consignment,
+			array('id', 'piece-id', 'piece_id', 'identifier'),
+			array('id', 'piece-id', 'piece_id')
+		);
 
 		$result['piece_numbers'] = array_values(array_unique($result['piece_numbers']));
 		$result['piece_ids'] = array_values(array_unique($result['piece_ids']));

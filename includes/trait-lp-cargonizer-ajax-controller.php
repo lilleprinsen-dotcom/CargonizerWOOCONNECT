@@ -70,6 +70,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'notify_email_to_consignee' => isset($settings['booking_email_notification_default']) ? (int) $this->sanitize_checkbox_value($settings['booking_email_notification_default']) : 1,
 				'estimator_top_count' => isset($settings['booking_estimator_top_count']) ? max(3, min(5, absint($settings['booking_estimator_top_count']))) : 3,
 				'pickup_autoselect_mode' => isset($settings['booking_pickup_autoselect_mode']) && in_array((string) $settings['booking_pickup_autoselect_mode'], array('nearest', 'none'), true) ? (string) $settings['booking_pickup_autoselect_mode'] : 'nearest',
+				'order_status_after_created' => isset($settings['booking_order_status_after_created']) ? $this->normalize_wc_order_status_slug($settings['booking_order_status_after_created']) : '',
 			),
 		);
 
@@ -156,6 +157,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'agreement_id' => '',
 			'product_id' => '',
 			'servicepartner' => '',
+			'servicepartner_customer_number' => '',
+			'servicepartner_selection_source' => '',
+			'servicepartner_auto_selected' => false,
+			'auto_selection_reason' => '',
 			'sms_service_id' => '',
 			'selected_service_ids' => array(),
 			'notify_email_to_consignee' => false,
@@ -175,6 +180,23 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'raw_response' => '',
 				'groups' => array(),
 				'pieces' => array(),
+			),
+			'status_change' => array(
+				'enabled' => false,
+				'success' => false,
+				'verified' => false,
+				'retry_scheduled' => false,
+				'retry_attempt' => 0,
+				'target_status' => '',
+				'target_status_label' => '',
+				'previous_status' => '',
+				'previous_status_label' => '',
+				'final_status' => '',
+				'final_status_label' => '',
+				'message' => '',
+				'attempted_at_gmt' => '',
+				'retry_at_gmt' => '',
+				'attempts' => array(),
 			),
 		);
 	}
@@ -197,6 +219,24 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 							$normalized['print'][$print_key] = $this->sanitize_booking_print_array(isset($print[$print_key]) && is_array($print[$print_key]) ? $print[$print_key] : array());
 						} else {
 							$normalized['print'][$print_key] = sanitize_text_field((string) $print[$print_key]);
+						}
+					}
+				}
+				continue;
+			}
+
+			if ($key === 'status_change') {
+				$status_change = isset($state['status_change']) && is_array($state['status_change']) ? $state['status_change'] : array();
+				foreach ($default['status_change'] as $status_key => $status_default) {
+					if (array_key_exists($status_key, $status_change)) {
+						if (is_bool($status_default)) {
+							$normalized['status_change'][$status_key] = (bool) $status_change[$status_key];
+						} elseif (is_int($status_default)) {
+							$normalized['status_change'][$status_key] = absint($status_change[$status_key]);
+						} elseif (is_array($status_default)) {
+							$normalized['status_change'][$status_key] = $this->sanitize_booking_print_array(isset($status_change[$status_key]) && is_array($status_change[$status_key]) ? $status_change[$status_key] : array());
+						} else {
+							$normalized['status_change'][$status_key] = sanitize_text_field((string) $status_change[$status_key]);
 						}
 					}
 				}
@@ -281,6 +321,218 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$order->update_meta_data($this->get_booking_state_meta_key(), $this->normalize_booking_state($state));
 		$order->save();
+	}
+
+	private function normalize_wc_order_status_slug($status) {
+		$status = sanitize_key((string) $status);
+		if (strpos($status, 'wc-') === 0) {
+			$status = substr($status, 3);
+		}
+		return $status;
+	}
+
+	private function get_wc_order_status_label($status) {
+		$status = $this->normalize_wc_order_status_slug($status);
+		if ($status === '') {
+			return '';
+		}
+		if (function_exists('wc_get_order_statuses')) {
+			$statuses = wc_get_order_statuses();
+			$status_key = 'wc-' . $status;
+			if (isset($statuses[$status_key])) {
+				return sanitize_text_field((string) $statuses[$status_key]);
+			}
+		}
+		return ucwords(str_replace('-', ' ', $status));
+	}
+
+	private function get_booking_order_status_after_created_setting() {
+		$settings = $this->get_settings();
+		return isset($settings['booking_order_status_after_created'])
+			? $this->normalize_wc_order_status_slug($settings['booking_order_status_after_created'])
+			: '';
+	}
+
+	private function schedule_booking_order_status_change_retry($order_id, $target_status, $next_attempt) {
+		$order_id = absint($order_id);
+		$target_status = $this->normalize_wc_order_status_slug($target_status);
+		$next_attempt = absint($next_attempt);
+		if ($order_id < 1 || $target_status === '' || $next_attempt < 1 || !function_exists('wp_schedule_single_event')) {
+			return array(
+				'scheduled' => false,
+				'retry_at_gmt' => '',
+			);
+		}
+
+		$delays = array(
+			1 => 60,
+			2 => 300,
+			3 => 900,
+			4 => 1800,
+			5 => 3600,
+		);
+		$delay = isset($delays[$next_attempt]) ? $delays[$next_attempt] : 3600;
+		$args = array($order_id, $target_status, $next_attempt);
+		if (!wp_next_scheduled('lp_cargonizer_retry_booking_order_status_change', $args)) {
+			wp_schedule_single_event(time() + $delay, 'lp_cargonizer_retry_booking_order_status_change', $args);
+		}
+
+		return array(
+			'scheduled' => true,
+			'retry_at_gmt' => gmdate('Y-m-d H:i:s', time() + $delay),
+		);
+	}
+
+	private function apply_booking_order_status_after_created($order, $target_status = '', $retry_attempt = 0) {
+		$default_status_change = $this->get_default_booking_state();
+		$result = $default_status_change['status_change'];
+		$target_status = $this->normalize_wc_order_status_slug($target_status);
+		$retry_attempt = absint($retry_attempt);
+
+		if ($target_status === '') {
+			$result['message'] = 'Ingen automatisk statusendring er konfigurert.';
+			return $result;
+		}
+		if (function_exists('wc_get_order_statuses')) {
+			$runtime_statuses = wc_get_order_statuses();
+			if (!isset($runtime_statuses['wc-' . $target_status])) {
+				$result['enabled'] = true;
+				$result['target_status'] = $target_status;
+				$result['target_status_label'] = $this->get_wc_order_status_label($target_status);
+				$result['message'] = 'Kunne ikke endre status: valgt ordrestatus finnes ikke lenger.';
+				return $result;
+			}
+		}
+		if (!$order || !is_a($order, 'WC_Order')) {
+			$result['enabled'] = true;
+			$result['target_status'] = $target_status;
+			$result['target_status_label'] = $this->get_wc_order_status_label($target_status);
+			$result['message'] = 'Kunne ikke endre status: ordreobjekt mangler.';
+			return $result;
+		}
+
+		$order_id = $order->get_id();
+		$current_status = $this->normalize_wc_order_status_slug($order->get_status());
+		$result['enabled'] = true;
+		$result['retry_attempt'] = $retry_attempt;
+		$result['target_status'] = $target_status;
+		$result['target_status_label'] = $this->get_wc_order_status_label($target_status);
+		$result['previous_status'] = $current_status;
+		$result['previous_status_label'] = $this->get_wc_order_status_label($current_status);
+		$result['attempted_at_gmt'] = gmdate('Y-m-d H:i:s');
+
+		if ($current_status === $target_status) {
+			$result['success'] = true;
+			$result['verified'] = true;
+			$result['final_status'] = $current_status;
+			$result['final_status_label'] = $this->get_wc_order_status_label($current_status);
+			$result['message'] = 'Ordrestatus var allerede ' . $result['target_status_label'] . '.';
+			$order->delete_meta_data('_lp_cargonizer_pending_status_after_booking');
+			$order->update_meta_data('_lp_cargonizer_last_booking_status_change_verified_gmt', $result['attempted_at_gmt']);
+			$order->save_meta_data();
+			return $result;
+		}
+
+		$order->update_meta_data('_lp_cargonizer_pending_status_after_booking', $target_status);
+		$order->update_meta_data('_lp_cargonizer_pending_status_after_booking_gmt', $result['attempted_at_gmt']);
+		$order->save_meta_data();
+
+		$status_note = 'Cargonizer booking opprettet: endrer ordrestatus automatisk til ' . $result['target_status_label'] . '.';
+		try {
+			$order->update_status($target_status, $status_note, true);
+			$result['attempts'][] = array(
+				'method' => 'update_status',
+				'success' => true,
+				'message' => 'update_status fullført.',
+			);
+		} catch (Exception $e) {
+			$result['attempts'][] = array(
+				'method' => 'update_status',
+				'success' => false,
+				'message' => $e->getMessage(),
+			);
+		}
+
+		$fresh_order = function_exists('wc_get_order') ? wc_get_order($order_id) : false;
+		$final_status = $fresh_order ? $this->normalize_wc_order_status_slug($fresh_order->get_status()) : '';
+
+		if ($final_status !== $target_status && $fresh_order && is_a($fresh_order, 'WC_Order')) {
+			try {
+				$fresh_order->set_status($target_status);
+				$fresh_order->save();
+				$result['attempts'][] = array(
+					'method' => 'set_status_save',
+					'success' => true,
+					'message' => 'set_status + save fullført.',
+				);
+			} catch (Exception $e) {
+				$result['attempts'][] = array(
+					'method' => 'set_status_save',
+					'success' => false,
+					'message' => $e->getMessage(),
+				);
+			}
+			$fresh_order = function_exists('wc_get_order') ? wc_get_order($order_id) : false;
+			$final_status = $fresh_order ? $this->normalize_wc_order_status_slug($fresh_order->get_status()) : '';
+		}
+
+		$result['final_status'] = $final_status;
+		$result['final_status_label'] = $this->get_wc_order_status_label($final_status);
+		$result['success'] = $final_status === $target_status;
+		$result['verified'] = $result['success'];
+
+		if (!empty($result['verified'])) {
+			$result['message'] = 'Ordrestatus endret fra ' . $result['previous_status_label'] . ' til ' . $result['target_status_label'] . ' og verifisert.';
+			if ($fresh_order && is_a($fresh_order, 'WC_Order')) {
+				$fresh_order->delete_meta_data('_lp_cargonizer_pending_status_after_booking');
+				$fresh_order->update_meta_data('_lp_cargonizer_last_booking_status_change_verified_gmt', gmdate('Y-m-d H:i:s'));
+				$fresh_order->save_meta_data();
+			}
+			return $result;
+		}
+
+		$result['message'] = 'Ordrestatus ble ikke verifisert som ' . $result['target_status_label'] . '. Nåværende status: ' . ($result['final_status_label'] !== '' ? $result['final_status_label'] : 'ukjent') . '.';
+		if ($retry_attempt < 5) {
+			$retry = $this->schedule_booking_order_status_change_retry($order_id, $target_status, $retry_attempt + 1);
+			$result['retry_scheduled'] = !empty($retry['scheduled']);
+			$result['retry_at_gmt'] = isset($retry['retry_at_gmt']) ? $retry['retry_at_gmt'] : '';
+			if (!empty($result['retry_scheduled'])) {
+				$result['message'] .= ' Automatisk retry er planlagt.';
+			}
+		}
+
+		return $result;
+	}
+
+	public function retry_booking_order_status_change($order_id, $target_status, $retry_attempt = 1) {
+		$order_id = absint($order_id);
+		if ($order_id < 1 || !function_exists('wc_get_order')) {
+			return;
+		}
+
+		$order = wc_get_order($order_id);
+		if (!$order || !is_a($order, 'WC_Order')) {
+			return;
+		}
+
+		$status_change = $this->apply_booking_order_status_after_created($order, $target_status, $retry_attempt);
+		$refreshed_order = wc_get_order($order_id);
+		if (!$refreshed_order || !is_a($refreshed_order, 'WC_Order')) {
+			return;
+		}
+
+		$booking_state = $this->load_order_booking_state($refreshed_order);
+		if (!empty($booking_state['booked'])) {
+			$booking_state['status_change'] = $status_change;
+			$this->save_order_booking_state($refreshed_order, $booking_state);
+			$refreshed_order = wc_get_order($order_id);
+			if (!$refreshed_order || !is_a($refreshed_order, 'WC_Order')) {
+				return;
+			}
+		}
+
+		$retry_status = !empty($status_change['verified']) ? 'OK' : 'Feilet';
+		$refreshed_order->add_order_note('Cargonizer ordrestatus retry: ' . $retry_status . ' - ' . (isset($status_change['message']) ? $status_change['message'] : 'ukjent resultat'));
 	}
 
 	private function get_current_user_default_printer_id() {
@@ -385,6 +637,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$groups = array();
 		$pieces = array();
 		$missing_piece_count = 0;
+		$target_printer_ids = array();
+		$consignment_id = isset($booking_state['consignment_id']) ? sanitize_text_field((string) $booking_state['consignment_id']) : '';
+		$used_consignment_fallback = false;
 
 		for ($index = 0; $index < $package_count; $index++) {
 			$override_printer_id = isset($assignments[$index]) ? sanitize_text_field((string) $assignments[$index]) : '';
@@ -392,6 +647,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			if ($printer_id === '') {
 				continue;
 			}
+			$target_printer_ids[$printer_id] = true;
 
 			$piece_id = isset($piece_ids[$index]) ? sanitize_text_field((string) $piece_ids[$index]) : '';
 			$piece_number = isset($piece_numbers[$index]) ? sanitize_text_field((string) $piece_numbers[$index]) : '';
@@ -419,7 +675,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					'printer_id' => $printer_id,
 					'printer_label' => isset($printer_labels[$printer_id]) ? $printer_labels[$printer_id] : $printer_id,
 					'piece_ids' => array(),
+					'consignment_ids' => array(),
 					'package_indexes' => array(),
+					'print_scope' => 'pieces',
 					'success' => false,
 					'message' => '',
 					'http_status' => 0,
@@ -431,12 +689,45 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$pieces[] = $piece_row;
 		}
 
+		$unique_target_printer_ids = array_keys($target_printer_ids);
+		if (empty($groups) && $missing_piece_count > 0 && count($unique_target_printer_ids) === 1 && $consignment_id !== '') {
+			$fallback_printer_id = (string) $unique_target_printer_ids[0];
+			$fallback_package_indexes = array();
+			foreach ($pieces as $piece_row) {
+				if (isset($piece_row['package_index'])) {
+					$fallback_package_indexes[] = (int) $piece_row['package_index'];
+				}
+			}
+			$groups[$fallback_printer_id] = array(
+				'printer_id' => $fallback_printer_id,
+				'printer_label' => isset($printer_labels[$fallback_printer_id]) ? $printer_labels[$fallback_printer_id] : $fallback_printer_id,
+				'piece_ids' => array(),
+				'consignment_ids' => array($consignment_id),
+				'package_indexes' => $fallback_package_indexes,
+				'print_scope' => 'consignment',
+				'success' => false,
+				'message' => '',
+				'http_status' => 0,
+				'raw_response' => '',
+			);
+			foreach ($pieces as &$piece_row) {
+				$piece_row['message'] = 'Printer hele sendingen fordi bookingresponsen manglet piece-id per kolli.';
+			}
+			unset($piece_row);
+			$missing_piece_count = 0;
+			$used_consignment_fallback = true;
+		}
+
 		$all_groups_success = true;
 		$raw_responses = array();
 		foreach ($groups as $printer_id => &$group) {
-			$print_result = $this->print_labels_direct($printer_id, array(), $group['piece_ids'], $sender_id_override);
+			$group_piece_ids = isset($group['piece_ids']) && is_array($group['piece_ids']) ? $group['piece_ids'] : array();
+			$group_consignment_ids = isset($group['consignment_ids']) && is_array($group['consignment_ids']) ? $group['consignment_ids'] : array();
+			$print_result = $this->print_labels_direct($printer_id, $group_consignment_ids, $group_piece_ids, $sender_id_override);
 			$group['success'] = !empty($print_result['success']);
-			$group['message'] = !empty($print_result['success']) ? 'Label print queued.' : (isset($print_result['error']) ? (string) $print_result['error'] : 'Label print feilet.');
+			$group['message'] = !empty($print_result['success'])
+				? (!empty($group_consignment_ids) ? 'Labeler sendt til printer for hele sendingen.' : 'Label print queued.')
+				: (isset($print_result['error']) ? (string) $print_result['error'] : 'Label print feilet.');
 			$group['http_status'] = isset($print_result['http_status']) ? (int) $print_result['http_status'] : 0;
 			$group['raw_response'] = isset($print_result['raw_response']) ? (string) $print_result['raw_response'] : '';
 			if ($group['raw_response'] !== '') {
@@ -445,8 +736,17 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			if (empty($group['success'])) {
 				$all_groups_success = false;
 			}
+			$group_package_indexes = array();
+			$raw_group_package_indexes = isset($group['package_indexes']) && is_array($group['package_indexes']) ? $group['package_indexes'] : array();
+			foreach ($raw_group_package_indexes as $group_package_index) {
+				$group_package_indexes[] = (int) $group_package_index;
+			}
 			foreach ($pieces as &$piece_row) {
-				if ((string) $piece_row['printer_id'] === (string) $printer_id && $piece_row['piece_id'] !== '') {
+				$piece_printed_by_group = (string) $piece_row['printer_id'] === (string) $printer_id && (
+					$piece_row['piece_id'] !== ''
+					|| (!empty($group_consignment_ids) && in_array((int) $piece_row['package_index'], $group_package_indexes, true))
+				);
+				if ($piece_printed_by_group) {
 					$piece_row['success'] = $group['success'];
 					$piece_row['message'] = $group['message'];
 				}
@@ -467,10 +767,15 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$print_state['pieces'] = array_values($pieces);
 		$print_state['success'] = $group_count > 0 && $all_groups_success && $missing_piece_count === 0;
 		$print_state['message'] = $print_state['success']
-			? ($group_count > 1 ? 'Labeler sendt til ' . $group_count . ' printere.' : 'Labeler sendt til printer.')
+			? ($used_consignment_fallback ? 'Labeler sendt til printer for hele sendingen.' : ($group_count > 1 ? 'Labeler sendt til ' . $group_count . ' printere.' : 'Labeler sendt til printer.'))
 			: ($group_count === 0 ? 'Ingen labeler kunne sendes til printer.' : 'Én eller flere label-utskrifter feilet.');
 		if ($missing_piece_count > 0) {
 			$print_state['message'] .= ' Mangler piece-id for ' . $missing_piece_count . ' kolli.';
+			if (count($unique_target_printer_ids) > 1) {
+				$print_state['message'] .= ' Splittet utskrift til flere printere krever piece-id fra bookingresponsen.';
+			} elseif ($consignment_id === '') {
+				$print_state['message'] .= ' Mangler også consignment-id for fallback-utskrift av hele sendingen.';
+			}
 		}
 		$print_state['raw_response'] = implode("\n---\n", array_map(function ($raw_response) {
 			return substr((string) $raw_response, 0, 500);
@@ -780,10 +1085,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
 		}
 
-		
 		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
 		$sender_id_override = isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '';
-$servicepartner_selection_debug = array(
+		$servicepartner_selection_debug = array(
 			'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 			'servicepartner_auto_selected' => false,
 			'selected_servicepartner' => $method_payload['servicepartner'],
@@ -853,7 +1157,7 @@ $servicepartner_selection_debug = array(
 				'error_details' => isset($booking_result['error_details']) ? $booking_result['error_details'] : '',
 				'parsed_error_message' => isset($booking_result['parsed_error_message']) ? $booking_result['parsed_error_message'] : '',
 				'requires_servicepartner' => $requires_servicepartner,
-			'requires_sms_service' => $requires_sms_service,
+				'requires_sms_service' => $requires_sms_service,
 				'servicepartner_options' => $servicepartner_options,
 				'servicepartner_fetch' => $servicepartner_fetch,
 				'servicepartner_selection_source' => $servicepartner_selection_debug['servicepartner_selection_source'],
@@ -896,6 +1200,12 @@ $servicepartner_selection_debug = array(
 		$posted_printer_choice = isset($_POST['printer_choice']) ? wp_unslash($_POST['printer_choice']) : '';
 		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
 		$booking_state['print'] = $this->run_booking_label_prints($booking_state, $clean_packages, $printer_id, $package_printer_assignments, $sender_id_override);
+		$booking_state['status_change'] = $this->apply_booking_order_status_after_created($order, $this->get_booking_order_status_after_created_setting());
+
+		$refreshed_order = function_exists('wc_get_order') ? wc_get_order($order->get_id()) : false;
+		if ($refreshed_order && is_a($refreshed_order, 'WC_Order')) {
+			$order = $refreshed_order;
+		}
 
 		$history = isset($existing_booking_state['history']) && is_array($existing_booking_state['history']) ? $existing_booking_state['history'] : array();
 		if (!empty($existing_booking_state['booked'])) {
@@ -918,21 +1228,91 @@ $servicepartner_selection_debug = array(
 		$tracking_link = $booking_state['tracking_url'] !== ''
 			? '<a href="' . esc_url($booking_state['tracking_url']) . '" target="_blank" rel="noopener noreferrer">' . esc_html($booking_state['tracking_url']) . '</a>'
 			: 'ikke tilgjengelig';
+		$piece_numbers = isset($booking_state['piece_numbers']) && is_array($booking_state['piece_numbers'])
+			? array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $booking_state['piece_numbers'])), 'strlen'))
+			: array();
+		$selected_service_ids = isset($booking_state['selected_service_ids']) && is_array($booking_state['selected_service_ids'])
+			? array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $booking_state['selected_service_ids'])), 'strlen'))
+			: array();
+		$service_labels_by_id = array();
+		if (isset($method_payload['services']) && is_array($method_payload['services'])) {
+			foreach ($method_payload['services'] as $service) {
+				if (!is_array($service)) {
+					continue;
+				}
+				$service_id = isset($service['service_id']) ? sanitize_text_field((string) $service['service_id']) : '';
+				if ($service_id === '') {
+					continue;
+				}
+				$service_name = isset($service['service_name']) ? sanitize_text_field((string) $service['service_name']) : '';
+				$service_labels_by_id[$service_id] = $service_name !== '' ? $service_name . ' (' . $service_id . ')' : $service_id;
+			}
+		}
+		$selected_service_labels = array();
+		foreach ($selected_service_ids as $selected_service_id) {
+			$selected_service_labels[] = isset($service_labels_by_id[$selected_service_id]) ? $service_labels_by_id[$selected_service_id] : $selected_service_id;
+		}
 		$order_note_lines = array(
 			'Cargonizer booking opprettet',
 			'Opprettet av: ' . ($creator_name !== '' ? $creator_name : 'ukjent bruker'),
 			'Consignment: ' . ($booking_state['consignment_number'] !== '' ? $booking_state['consignment_number'] : 'ukjent'),
+			'Antall kolli: ' . count($clean_packages),
+			'Piece numbers: ' . (!empty($piece_numbers) ? implode(', ', array_map('esc_html', $piece_numbers)) : '—'),
 			'Fraktmetode: ' . $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
 			'Estimert fraktpris: ' . $booking_state['estimated_shipping_price'],
+			'Tilleggstjenester: ' . (!empty($selected_service_labels) ? implode(', ', array_map('esc_html', $selected_service_labels)) : 'Ingen'),
+			'E-postvarsling til mottaker: ' . (!empty($booking_state['notify_email_to_consignee']) ? 'Ja' : 'Nei'),
 			'Tracking: ' . $tracking_link,
 		);
+		if (!empty($booking_state['servicepartner'])) {
+			$servicepartner_line = 'Servicepartner: ' . esc_html($booking_state['servicepartner']);
+			if (!empty($booking_state['servicepartner_customer_number'])) {
+				$servicepartner_line .= ' / kundenummer: ' . esc_html($booking_state['servicepartner_customer_number']);
+			}
+			if (!empty($booking_state['servicepartner_selection_source'])) {
+				$servicepartner_line .= ' (' . esc_html($booking_state['servicepartner_selection_source']) . ')';
+			}
+			$order_note_lines[] = $servicepartner_line;
+		}
+		if (!empty($booking_state['status_change']['enabled'])) {
+			$status_change_status = !empty($booking_state['status_change']['verified']) ? 'OK' : 'Feilet';
+			$status_change_message = isset($booking_state['status_change']['message']) ? trim((string) $booking_state['status_change']['message']) : '';
+			if (!empty($booking_state['status_change']['retry_scheduled']) && !empty($booking_state['status_change']['retry_at_gmt'])) {
+				$status_change_message .= ' Retry: ' . $booking_state['status_change']['retry_at_gmt'] . ' GMT.';
+			}
+			$order_note_lines[] = 'Ordrestatus etter booking: ' . $status_change_status . ($status_change_message !== '' ? ' - ' . esc_html($status_change_message) : '');
+		}
 		if (!empty($booking_state['print']['attempted'])) {
 			$print_status = !empty($booking_state['print']['success']) ? 'OK' : 'Feilet';
 			$print_message = isset($booking_state['print']['message']) ? trim((string) $booking_state['print']['message']) : '';
 			if ($print_message !== '') {
 				$print_status .= ' - ' . $print_message;
 			}
-			$order_note_lines[] = 'Utskrift: ' . $print_status;
+			$order_note_lines[] = 'Utskrift: ' . esc_html($print_status);
+			if (!empty($booking_state['print']['groups']) && is_array($booking_state['print']['groups'])) {
+				foreach ($booking_state['print']['groups'] as $print_group) {
+					if (!is_array($print_group)) {
+						continue;
+					}
+					$group_status = !empty($print_group['success']) ? 'OK' : 'Feilet';
+					$group_label = isset($print_group['printer_label']) && $print_group['printer_label'] !== '' ? $print_group['printer_label'] : (isset($print_group['printer_id']) ? $print_group['printer_id'] : 'ukjent printer');
+					$group_scope = isset($print_group['print_scope']) && $print_group['print_scope'] === 'consignment' ? 'hele sendingen' : 'piece labels';
+					$group_message = isset($print_group['message']) ? trim((string) $print_group['message']) : '';
+					$order_note_lines[] = 'Printergruppe: ' . esc_html($group_label) . ' (' . esc_html($group_scope) . ') - ' . esc_html($group_status . ($group_message !== '' ? ' - ' . $group_message : ''));
+				}
+			}
+			if (!empty($booking_state['print']['pieces']) && is_array($booking_state['print']['pieces'])) {
+				foreach ($booking_state['print']['pieces'] as $print_piece) {
+					if (!is_array($print_piece)) {
+						continue;
+					}
+					$piece_status = !empty($print_piece['success']) ? 'OK' : 'Feilet';
+					$piece_label = isset($print_piece['piece_number']) && $print_piece['piece_number'] !== '' ? $print_piece['piece_number'] : (isset($print_piece['piece_id']) && $print_piece['piece_id'] !== '' ? $print_piece['piece_id'] : '—');
+					$piece_printer_label = isset($print_piece['printer_label']) && $print_piece['printer_label'] !== '' ? $print_piece['printer_label'] : (isset($print_piece['printer_id']) ? $print_piece['printer_id'] : 'ukjent printer');
+					$piece_message = isset($print_piece['message']) ? trim((string) $print_piece['message']) : '';
+					$order_note_lines[] = 'Kolli ' . esc_html(isset($print_piece['colli']) ? (string) $print_piece['colli'] : '?') . ': ' . esc_html($piece_label) . ' til ' . esc_html($piece_printer_label) . ' (' . esc_html($piece_status . ($piece_message !== '' ? ' - ' . $piece_message : '')) . ')';
+				}
+			}
 		}
 		$order->add_order_note(implode("\n", $order_note_lines));
 		$booking_count = $this->get_booking_count_from_state($booking_state);
