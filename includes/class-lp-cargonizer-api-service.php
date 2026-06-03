@@ -1273,21 +1273,12 @@ class LP_Cargonizer_Api_Service {
 				$name = trim(preg_replace('/\s+[\x{2013}\x{2014}-]\s+.*/u', '', $label_fallback));
 			}
 		}
-		if ($name === '' && $selection_value !== '') {
-			$name = $selection_value;
-		}
 		$address1 = $resolve_selection_field('address1', array('address_1', 'servicepartner_address1', 'servicepartner_address_1'));
 		$address2 = $resolve_selection_field('address2', array('address_2', 'servicepartner_address2', 'servicepartner_address_2'));
 		$postcode = $resolve_selection_field('postcode', array('postal_code', 'postalCode', 'zip', 'postnummer', 'servicepartner_postcode'));
 		$city = $resolve_selection_field('city', array('servicepartner_city'));
 		$country = $resolve_selection_field('country', array('country_code', 'servicepartner_country'));
 		$country = $this->sanitize_country_code($country);
-		if ($country === '') {
-			$country = $this->sanitize_country_code(isset($payload['recipient']['country']) ? $payload['recipient']['country'] : '');
-		}
-		if ($country === '') {
-			$country = $this->sanitize_country_code(isset($method['country']) ? $method['country'] : '');
-		}
 
 		return array(
 			'number' => $selection_value,
@@ -1322,22 +1313,13 @@ class LP_Cargonizer_Api_Service {
 			return true;
 		}
 
-		$required_fields = array('name', 'address1', 'postcode', 'city', 'country');
-		foreach ($required_fields as $required_field) {
-			$value = isset($servicepartner_selection[$required_field]) ? trim((string) $servicepartner_selection[$required_field]) : '';
-			if ($value !== '') {
-				continue;
-			}
-
-			$context = $this->build_servicepartner_validation_context($servicepartner_selection, $method, $payload);
-			$this->set_last_xml_build_error(
-				'Ugyldig service_partner for Cargonizer: mangler felt "' . $required_field . '".',
-				$context
-			);
-			error_log('LP Cargonizer: invalid service_partner payload - missing "' . $required_field . '" | context=' . wp_json_encode($context));
-			return false;
-		}
-
+		/*
+		 * Cargonizer documents only service_partner/number as required for domestic
+		 * pickup-point consignments. Name/address fields from service_partners are
+		 * useful metadata and are included below when available, but must not block
+		 * estimation when an embedded checkout or carrier response only provides the
+		 * exact required pickup-point number.
+		 */
 		return true;
 	}
 
