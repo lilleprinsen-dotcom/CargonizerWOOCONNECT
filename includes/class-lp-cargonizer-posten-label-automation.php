@@ -2530,14 +2530,14 @@ class LP_Cargonizer_Posten_Label_Automation {
 			}
 			require_once $fpdf_path;
 		}
-		if (!class_exists('\setasign\Fpdi\Fpdi', false)) {
+		if (!class_exists('setasign\\Fpdi\\Fpdi', false)) {
 			$fpdi_autoload = __DIR__ . '/vendor/setasign/fpdi/src/autoload.php';
 			if (!is_readable($fpdi_autoload)) {
 				return false;
 			}
 			require_once $fpdi_autoload;
 		}
-		return class_exists('FPDF', false) && class_exists('\setasign\Fpdi\Fpdi', false);
+		return class_exists('FPDF', false) && class_exists('setasign\\Fpdi\\Fpdi', true);
 	}
 
 	private function draw_pdf_stamp_text($pdf, $stamp_text, $settings) {
