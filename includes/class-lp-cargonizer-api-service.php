@@ -44,13 +44,14 @@ class LP_Cargonizer_Api_Service {
 		return self::get_api_base_url() . $normalized_path;
 	}
 
-	public function get_auth_headers($sender_id_override = '') {
+	public function get_auth_headers($sender_id_override = '', $api_key_override = '') {
 		$settings = call_user_func($this->settings_provider);
 		if (!is_array($settings)) {
 			$settings = array();
 		}
 
 		$api_key = isset($settings['api_key']) ? (string) $settings['api_key'] : '';
+		if ((string) $api_key_override !== '') { $api_key = (string) $api_key_override; }
 		$sender_id = isset($settings['sender_id']) ? (string) $settings['sender_id'] : '';
 		if ((string)$sender_id_override !== '') { $sender_id = (string) $sender_id_override; }
 
@@ -61,13 +62,13 @@ class LP_Cargonizer_Api_Service {
 		);
 	}
 
-	public function fetch_transport_agreements($sender_id_override = '') {
+	public function fetch_transport_agreements($sender_id_override = '', $api_key_override = '') {
 		try {
 			$url = self::build_endpoint_url('/transport_agreements.xml');
 
 			$response = wp_remote_get($url, array(
 				'timeout' => 30,
-				'headers' => $this->get_auth_headers($sender_id_override),
+				'headers' => $this->get_auth_headers($sender_id_override, $api_key_override),
 			));
 
 			if (is_wp_error($response)) {
@@ -196,9 +197,11 @@ class LP_Cargonizer_Api_Service {
 
 		try {
 			$url = self::build_endpoint_url('/profile.xml');
+			$headers = $this->get_auth_headers();
+			unset($headers['X-Cargonizer-Sender']);
 			$response = wp_remote_get($url, array(
 				'timeout' => 30,
-				'headers' => $this->get_auth_headers(''),
+				'headers' => $headers,
 			));
 
 			if (is_wp_error($response)) {
@@ -239,7 +242,9 @@ class LP_Cargonizer_Api_Service {
 		);
 
 		$profile_url = self::build_endpoint_url('/profile.xml');
-		$response = wp_remote_get($profile_url, array('timeout' => 30, 'headers' => $this->get_auth_headers('')));
+		$headers = $this->get_auth_headers();
+		unset($headers['X-Cargonizer-Sender']);
+		$response = wp_remote_get($profile_url, array('timeout' => 30, 'headers' => $headers));
 		if (is_wp_error($response)) {
 			$result['message'] = 'WP Error: ' . $response->get_error_message();
 			return $result;
@@ -274,50 +279,91 @@ class LP_Cargonizer_Api_Service {
 			return $result;
 		}
 
-		$candidate_nodes = array();
-		$paths = array('//sender', '//senders/sender', '//profile/senders/sender', '//user_sender', '//user_senders/user_sender');
-		foreach ($paths as $path) {
+		$addresses = array();
+		$seen_ids = array();
+		$managership_nodes = array();
+		$managership_paths = array('//managerships/managership', '//profile/managerships/managership', '//user/managerships/managership', '//managership');
+		foreach ($managership_paths as $path) {
 			$found = $xml->xpath($path);
 			if (!empty($found)) {
-				$candidate_nodes = $found;
+				$managership_nodes = $found;
 				break;
 			}
 		}
 
-		if (empty($candidate_nodes)) {
-			if (isset($xml->sender)) {
-				foreach ($xml->sender as $sender) {
-					$candidate_nodes[] = $sender;
-				}
-			} elseif (isset($xml->senders) && isset($xml->senders->sender)) {
-				foreach ($xml->senders->sender as $sender) {
-					$candidate_nodes[] = $sender;
-				}
-			}
-		}
+		foreach ($managership_nodes as $node) {
+			$api_sender_id = $this->xml_value($node, array('id', 'sender_id', 'user_sender_id', 'user-sender-id'));
+			$sender_node = isset($node->sender) ? $node->sender : $node;
+			$sender_entity_id = $this->xml_value($sender_node, array('id', 'sender_id', 'number', 'identifier'));
+			$name = $this->xml_value($sender_node, array('name', 'title', 'sender_name', 'company'));
+			$address_node = isset($sender_node->address) ? $sender_node->address : $sender_node;
+			$address1 = $this->xml_value($address_node, array('address1', 'address_1', 'street', 'street1'));
+			$address2 = $this->xml_value($address_node, array('address2', 'address_2', 'street2'));
+			$postcode = $this->xml_value($address_node, array('postcode', 'postal_code', 'zip'));
+			$city = $this->xml_value($address_node, array('city', 'post_place'));
+			$country = $this->xml_value($address_node, array('country', 'country_code'));
 
-		$addresses = array();
-		foreach ($candidate_nodes as $node) {
-			$id = $this->xml_value($node, array('id', 'sender_id', 'number', 'identifier', 'user_sender_id'));
-			$name = $this->xml_value($node, array('name', 'title', 'sender_name', 'company'));
-			$address1 = $this->xml_value($node, array('address1', 'address_1', 'street', 'street1'));
-			$address2 = $this->xml_value($node, array('address2', 'address_2', 'street2'));
-			$postcode = $this->xml_value($node, array('postcode', 'postal_code', 'zip'));
-			$city = $this->xml_value($node, array('city', 'post_place'));
-			$country = $this->xml_value($node, array('country', 'country_code'));
-
-			if ($id === '' && $name === '' && $address1 === '' && $postcode === '' && $city === '' && $country === '') {
+			if ($api_sender_id === '' || isset($seen_ids[$api_sender_id])) {
 				continue;
 			}
-
+			$seen_ids[$api_sender_id] = true;
 			$addresses[] = array(
-				'id' => (string) $id,
+				'id' => (string) $api_sender_id,
+				'sender_entity_id' => (string) $sender_entity_id,
 				'name' => (string) $name,
 				'address1' => (string) $address1,
 				'address2' => (string) $address2,
 				'postcode' => (string) $postcode,
 				'city' => (string) $city,
 				'country' => (string) $country,
+				'source' => 'profile_managership',
+			);
+		}
+
+		$candidate_nodes = array();
+		if (empty($addresses)) {
+			$paths = array('//user_sender', '//user_senders/user_sender', '//sender', '//senders/sender', '//profile/senders/sender');
+			foreach ($paths as $path) {
+				$found = $xml->xpath($path);
+				if (!empty($found)) {
+					$candidate_nodes = $found;
+					break;
+				}
+			}
+		}
+
+		foreach ($candidate_nodes as $node) {
+			$id = $this->xml_value($node, array('user_sender_id', 'user-sender-id', 'sender_id', 'id', 'number', 'identifier'));
+			$sender_node = isset($node->sender) ? $node->sender : $node;
+			$sender_entity_id = isset($node->sender) ? $this->xml_value($sender_node, array('id', 'sender_id', 'number', 'identifier')) : '';
+			$name = $this->xml_value($sender_node, array('name', 'title', 'sender_name', 'company'));
+			$address_node = isset($sender_node->address) ? $sender_node->address : $sender_node;
+			$address1 = $this->xml_value($address_node, array('address1', 'address_1', 'street', 'street1'));
+			$address2 = $this->xml_value($address_node, array('address2', 'address_2', 'street2'));
+			$postcode = $this->xml_value($address_node, array('postcode', 'postal_code', 'zip'));
+			$city = $this->xml_value($address_node, array('city', 'post_place'));
+			$country = $this->xml_value($address_node, array('country', 'country_code'));
+
+			if ($id === '' && $name === '' && $address1 === '' && $postcode === '' && $city === '' && $country === '') {
+				continue;
+			}
+			if ($id !== '' && isset($seen_ids[$id])) {
+				continue;
+			}
+			if ($id !== '') {
+				$seen_ids[$id] = true;
+			}
+
+			$addresses[] = array(
+				'id' => (string) $id,
+				'sender_entity_id' => (string) $sender_entity_id,
+				'name' => (string) $name,
+				'address1' => (string) $address1,
+				'address2' => (string) $address2,
+				'postcode' => (string) $postcode,
+				'city' => (string) $city,
+				'country' => (string) $country,
+				'source' => 'profile_sender',
 			);
 		}
 

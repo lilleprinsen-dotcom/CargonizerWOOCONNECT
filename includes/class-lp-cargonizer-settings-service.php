@@ -31,6 +31,7 @@ class LP_Cargonizer_Settings_Service {
 			'method_discounts' => array(),
 			'method_pricing' => array(),
 			'method_extra_services' => array(),
+			'transport_agreement_fetch_results' => array(),
 			'live_checkout' => $this->get_live_checkout_defaults(),
 			'shipping_profiles' => $this->get_shipping_profiles_defaults(),
 			'package_resolution' => $this->get_package_resolution_defaults(),
@@ -81,6 +82,7 @@ class LP_Cargonizer_Settings_Service {
 			'method_discounts' => array(),
 			'method_pricing' => array(),
 			'method_extra_services' => array(),
+			'transport_agreement_fetch_results' => array(),
 			'live_checkout' => $this->sanitize_live_checkout_settings(
 				isset($input['live_checkout']) && is_array($input['live_checkout']) ? $input['live_checkout'] : array(),
 				isset($current['live_checkout']) && is_array($current['live_checkout']) ? $current['live_checkout'] : array()
@@ -232,6 +234,32 @@ class LP_Cargonizer_Settings_Service {
 				}
 			}
 			$output['method_extra_services'][$method_key] = array_values(array_unique($output['method_extra_services'][$method_key]));
+		}
+
+		$fetch_results_input = isset($input['transport_agreement_fetch_results']) && is_array($input['transport_agreement_fetch_results'])
+			? $input['transport_agreement_fetch_results']
+			: (isset($current['transport_agreement_fetch_results']) && is_array($current['transport_agreement_fetch_results']) ? $current['transport_agreement_fetch_results'] : array());
+		foreach ($fetch_results_input as $fetch_result) {
+			if (!is_array($fetch_result)) {
+				continue;
+			}
+			$profile_id = isset($fetch_result['profile_id']) ? sanitize_key((string) $fetch_result['profile_id']) : '';
+			$sender_id = isset($fetch_result['sender_id']) ? sanitize_text_field((string) $fetch_result['sender_id']) : '';
+			if ($profile_id === '' && $sender_id === '') {
+				continue;
+			}
+			$output['transport_agreement_fetch_results'][] = array(
+				'profile_id' => $profile_id,
+				'profile_name' => isset($fetch_result['profile_name']) ? sanitize_text_field((string) $fetch_result['profile_name']) : '',
+				'sender_id' => $sender_id,
+				'sender_entity_id' => isset($fetch_result['sender_entity_id']) ? sanitize_text_field((string) $fetch_result['sender_entity_id']) : '',
+				'success' => !empty($fetch_result['success']) ? 1 : 0,
+				'message' => isset($fetch_result['message']) ? sanitize_text_field((string) $fetch_result['message']) : '',
+				'status' => isset($fetch_result['status']) ? absint($fetch_result['status']) : 0,
+				'agreement_count' => isset($fetch_result['agreement_count']) ? absint($fetch_result['agreement_count']) : 0,
+				'method_count' => isset($fetch_result['method_count']) ? absint($fetch_result['method_count']) : 0,
+				'fetched_at_gmt' => isset($fetch_result['fetched_at_gmt']) ? sanitize_text_field((string) $fetch_result['fetched_at_gmt']) : '',
+			);
 		}
 
 		if (isset($input['enabled_methods']) && is_array($input['enabled_methods'])) {
@@ -1159,6 +1187,7 @@ class LP_Cargonizer_Settings_Service {
 			if ($sender_id==='') { continue; }
 			$output['profiles'][] = array(
 				'profile_id'=>$profile_id,'name'=>isset($profile['name'])?sanitize_text_field((string)$profile['name']):$sender_id,'sender_id'=>$sender_id,
+				'sender_entity_id'=>isset($profile['sender_entity_id'])?sanitize_text_field((string)$profile['sender_entity_id']):'',
 				'company'=>isset($profile['company'])?sanitize_text_field((string)$profile['company']):'', 'address1'=>isset($profile['address1'])?sanitize_text_field((string)$profile['address1']):'',
 				'address2'=>isset($profile['address2'])?sanitize_text_field((string)$profile['address2']):'', 'postcode'=>isset($profile['postcode'])?sanitize_text_field((string)$profile['postcode']):'',
 				'city'=>isset($profile['city'])?sanitize_text_field((string)$profile['city']):'', 'country'=>isset($profile['country'])?sanitize_text_field((string)$profile['country']):'',
@@ -1172,7 +1201,7 @@ class LP_Cargonizer_Settings_Service {
 		if (empty($output['profiles'])) {
 			$legacy_sender = $fallback_sender_id !== '' ? $fallback_sender_id : (isset($current['sender_id']) ? sanitize_text_field((string)$current['sender_id']) : '');
 			if ($legacy_sender!=='') {
-				$output['profiles'][] = array('profile_id'=>'default_sender','name'=>'Default sender','sender_id'=>$legacy_sender,'company'=>'','address1'=>'','address2'=>'','postcode'=>'','city'=>'','country'=>'','email'=>'','phone'=>'','default_printer_id'=>'','active'=>1,'use_as_pickup_address'=>0,'use_as_return_address'=>0);
+				$output['profiles'][] = array('profile_id'=>'default_sender','name'=>'Default sender','sender_id'=>$legacy_sender,'sender_entity_id'=>'','company'=>'','address1'=>'','address2'=>'','postcode'=>'','city'=>'','country'=>'','email'=>'','phone'=>'','default_printer_id'=>'','active'=>1,'use_as_pickup_address'=>0,'use_as_return_address'=>0);
 				$output['default_profile_id'] = 'default_sender';
 			}
 		}
