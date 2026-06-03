@@ -67,6 +67,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			),
 			'bookingDefaults' => array(
 				'notifyEmailToConsignee' => isset($settings['booking_email_notification_default']) ? (int) $this->sanitize_checkbox_value($settings['booking_email_notification_default']) : 1,
+				'estimatorTopCount' => isset($settings['booking_estimator_top_count']) ? max(3, min(5, absint($settings['booking_estimator_top_count']))) : 3,
+				'pickupAutoselectMode' => isset($settings['booking_pickup_autoselect_mode']) && in_array((string) $settings['booking_pickup_autoselect_mode'], array('nearest', 'none'), true) ? (string) $settings['booking_pickup_autoselect_mode'] : 'nearest',
 			),
 		));
 	}
@@ -171,12 +173,40 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<div id="lp-cargonizer-estimate-overview" style="background:#f6f7f7;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;"></div>
 					<div id="lp-cargonizer-estimate-recipient" style="background:#f6f7f7;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;"></div>
 					<div id="lp-cargonizer-estimate-lines" style="margin-bottom:16px;"></div>
+					<div id="lp-cargonizer-booking-setup-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<h3 style="margin:0 0 10px 0;">Booking-oppsett</h3>
+						<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;align-items:start;">
+							<div id="lp-cargonizer-booking-printer-section">
+								<label style="display:flex;flex-direction:column;gap:4px;">
+									<span>Standardprinter for sendingen</span>
+									<select id="lp-cargonizer-booking-printer-choice" style="max-width:420px;">
+										<option value="">Ingen utskrift</option>
+									</select>
+								</label>
+								<div id="lp-cargonizer-booking-printer-help" style="margin-top:6px;color:#646970;"></div>
+							</div>
+							<div id="lp-cargonizer-booking-notify-section">
+								<label style="display:flex;gap:6px;align-items:center;margin-top:2px;">
+									<input type="checkbox" id="lp-cargonizer-booking-notify-email">
+									<span>Notify customer by e-mail via Cargonizer</span>
+								</label>
+								<div style="margin-top:6px;color:#646970;">Sender track &amp; trace-link til mottaker når sendingen er overført til transportør.</div>
+							</div>
+						</div>
+					</div>
 					<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border:1px solid #dcdcde;background:#f6f7f7;">
 						<h3 style="margin:0;">Kolli</h3>
 						<button type="button" class="button button-primary" id="lp-cargonizer-add-colli">+ Legg til kolli</button>
 					</div>
 					<div id="lp-cargonizer-colli-validation" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;"></div>
 					<div id="lp-cargonizer-colli-list" style="margin-top:10px;"></div>
+					<div id="lp-cargonizer-booking-recommendations" style="display:none;margin-top:16px;padding:12px;border:1px solid #2271b1;background:#f0f6fc;">
+						<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+							<h3 style="margin:0;">Anbefalte fraktvalg</h3>
+							<button type="button" class="button button-primary" id="lp-cargonizer-run-booking-estimator">Estimer og vis billigste</button>
+						</div>
+						<div id="lp-cargonizer-booking-recommendations-content" style="color:#646970;">Ingen anbefalinger hentet enda.</div>
+					</div>
 					<div id="lp-cargonizer-estimate-shipping-options" style="margin-top:16px;padding:12px;border:1px solid #dcdcde;background:#f6f7f7;">
 						<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
 							<h3 style="margin:0;">Fraktvalg</h3>
@@ -187,23 +217,6 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<div id="lp-cargonizer-estimate-price-results" style="margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
 						<h3 style="margin:0 0 8px 0;">Prisresultater</h3>
 						<div id="lp-cargonizer-results-content" style="color:#646970;">Ingen estimater kjørt enda.</div>
-					</div>
-					<div id="lp-cargonizer-booking-printer-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
-						<h3 style="margin:0 0 8px 0;">Utskrift</h3>
-						<label style="display:flex;flex-direction:column;gap:4px;">
-							<span>Printer</span>
-							<select id="lp-cargonizer-booking-printer-choice" style="max-width:420px;">
-								<option value="">Ingen utskrift</option>
-							</select>
-						</label>
-						<div id="lp-cargonizer-booking-printer-help" style="margin-top:6px;color:#646970;"></div>
-					</div>
-					<div id="lp-cargonizer-booking-notify-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
-						<label style="display:flex;gap:6px;align-items:center;">
-							<input type="checkbox" id="lp-cargonizer-booking-notify-email">
-							<span>Notify customer by e-mail via Cargonizer</span>
-						</label>
-						<div style="margin-top:6px;color:#646970;">Sender track &amp; trace-link til mottaker når sendingen er overført til transportør.</div>
 					</div>
 					<div id="lp-cargonizer-booking-services-section" style="display:none;margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
 						<h3 style="margin:0 0 8px 0;">Tjenester</h3>
@@ -770,6 +783,8 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
 				'booking_email_notification_default' => isset($_POST['lp_cargonizer_booking_email_notification_default']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_email_notification_default'])) : '0',
+				'booking_estimator_top_count' => isset($_POST['lp_cargonizer_booking_estimator_top_count']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_estimator_top_count'])) : (isset($settings['booking_estimator_top_count']) ? $settings['booking_estimator_top_count'] : 3),
+				'booking_pickup_autoselect_mode' => isset($_POST['lp_cargonizer_booking_pickup_autoselect_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_pickup_autoselect_mode'])) : (isset($settings['booking_pickup_autoselect_mode']) ? $settings['booking_pickup_autoselect_mode'] : 'nearest'),
 				'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => is_array($posted_enabled_methods)
@@ -1427,6 +1442,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<?php endif; ?>
 
 					<h2>Booking-standardvalg</h2>
+					<?php
+					$booking_estimator_top_count = isset($settings['booking_estimator_top_count']) ? max(3, min(5, absint($settings['booking_estimator_top_count']))) : 3;
+					$booking_pickup_autoselect_mode = isset($settings['booking_pickup_autoselect_mode']) && in_array((string) $settings['booking_pickup_autoselect_mode'], array('nearest', 'none'), true)
+						? (string) $settings['booking_pickup_autoselect_mode']
+						: 'nearest';
+					?>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>
@@ -1438,6 +1459,31 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										<span>Notify customer by e-mail from Cargonizer by default</span>
 									</label>
 									<p class="description">Bruker Cargonizers e-postvarsling til mottaker når sendingen overføres til transportør.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">
+									<label for="lp_cargonizer_booking_estimator_top_count">Estimator-anbefalinger</label>
+								</th>
+								<td>
+									<select name="lp_cargonizer_booking_estimator_top_count" id="lp_cargonizer_booking_estimator_top_count">
+										<option value="3" <?php selected($booking_estimator_top_count, 3); ?>>Vis topp 3</option>
+										<option value="4" <?php selected($booking_estimator_top_count, 4); ?>>Vis topp 4</option>
+										<option value="5" <?php selected($booking_estimator_top_count, 5); ?>>Vis topp 5</option>
+									</select>
+									<p class="description">Brukes i Book shipment-popupen for å vise de billigste anbefalte fraktvalgene over Fraktvalg.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">
+									<label for="lp_cargonizer_booking_pickup_autoselect_mode">Hentested ved booking</label>
+								</th>
+								<td>
+									<select name="lp_cargonizer_booking_pickup_autoselect_mode" id="lp_cargonizer_booking_pickup_autoselect_mode">
+										<option value="nearest" <?php selected($booking_pickup_autoselect_mode, 'nearest'); ?>>Velg nærmeste automatisk</option>
+										<option value="none" <?php selected($booking_pickup_autoselect_mode, 'none'); ?>>Ikke forhåndsvelg</option>
+									</select>
+									<p class="description">Admin kan fortsatt overstyre hentested/servicepartner i booking-popupen før sendingen bookes.</p>
 								</td>
 							</tr>
 						</tbody>

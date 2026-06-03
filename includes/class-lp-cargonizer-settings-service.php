@@ -22,6 +22,8 @@ class LP_Cargonizer_Settings_Service {
 			'sender_id' => '',
 			'warehouse_profiles' => $this->get_warehouse_profiles_defaults(),
 			'booking_email_notification_default' => 1,
+			'booking_estimator_top_count' => 3,
+			'booking_pickup_autoselect_mode' => 'nearest',
 			'printer_aliases' => array(),
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
@@ -62,6 +64,12 @@ class LP_Cargonizer_Settings_Service {
 			'booking_email_notification_default' => array_key_exists('booking_email_notification_default', $input)
 				? $this->sanitize_checkbox_value($input['booking_email_notification_default'])
 				: (isset($current['booking_email_notification_default']) ? $this->sanitize_checkbox_value($current['booking_email_notification_default']) : 1),
+			'booking_estimator_top_count' => isset($input['booking_estimator_top_count'])
+				? $this->sanitize_booking_estimator_top_count($input['booking_estimator_top_count'])
+				: $this->sanitize_booking_estimator_top_count(isset($current['booking_estimator_top_count']) ? $current['booking_estimator_top_count'] : 3),
+			'booking_pickup_autoselect_mode' => isset($input['booking_pickup_autoselect_mode'])
+				? $this->sanitize_booking_pickup_autoselect_mode($input['booking_pickup_autoselect_mode'])
+				: $this->sanitize_booking_pickup_autoselect_mode(isset($current['booking_pickup_autoselect_mode']) ? $current['booking_pickup_autoselect_mode'] : 'nearest'),
 			'printer_aliases' => array(),
 			'available_methods' => array(),
 			'enabled_methods' => array(),
@@ -424,6 +432,22 @@ class LP_Cargonizer_Settings_Service {
 		}
 
 		return $output;
+	}
+
+	private function sanitize_booking_estimator_top_count($value) {
+		$count = absint($value);
+		if ($count < 3) {
+			$count = 3;
+		}
+		if ($count > 5) {
+			$count = 5;
+		}
+		return $count;
+	}
+
+	private function sanitize_booking_pickup_autoselect_mode($value) {
+		$mode = sanitize_key((string) $value);
+		return in_array($mode, array('nearest', 'none'), true) ? $mode : 'nearest';
 	}
 
 	private function sanitize_shipping_profiles_settings($input, $current) {

@@ -413,6 +413,10 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->print_document_to_printer($printer_id, $document_binary, $content_type);
 	}
 
+	private function print_labels_direct($printer_id, $consignment_ids, $piece_ids, $sender_id_override = '') {
+		return $this->api_service->print_labels_direct($printer_id, $consignment_ids, $piece_ids, $sender_id_override);
+	}
+
 	private function normalize_positive_decimal_for_xml($value) {
 		return $this->api_service->normalize_positive_decimal_for_xml($value);
 	}
