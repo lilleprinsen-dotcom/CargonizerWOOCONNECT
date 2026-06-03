@@ -285,8 +285,8 @@
 					var productText = option.product_name || option.product_id || '—';
 					var isManualNorgespakke = !!option.is_manual_norgespakke || (((option.agreement_id || '') + '|' + (option.product_id || '')) === 'manual|norgespakke');
 					var isManual = !!option.is_manual;
-					var deliveryToPickupPoint = !!option.delivery_to_pickup_point;
-					var deliveryToHome = !!option.delivery_to_home;
+					var deliveryToPickupPoint = isMethodExplicitlyPickupPoint(option);
+					var deliveryToHome = isMethodExplicitlyHomeDelivery(option);
 					var deliveryTypes = [];
 					if (deliveryToPickupPoint) { deliveryTypes.push('HENTESTED'); }
 					if (deliveryToHome) { deliveryTypes.push('HJEMLEVERING'); }
@@ -501,9 +501,12 @@
 					'postnord_mypack_small_home'
 				];
 				var explicitHomePhrases = ['home attended', 'home groupage', 'mypack home', 'home small', 'home'];
+				var productMatchesHomeId = methodMatchesExactProductId(method, strictHomeIds);
+				var productMatchesHomePhrase = methodHasAnyTextMatch(method, explicitHomePhrases);
+				if (isMethodExplicitlyPickupPoint(method) && !productMatchesHomeId && !productMatchesHomePhrase) { return false; }
 				if (method.delivery_to_home === true) { return true; }
-				if (methodMatchesExactProductId(method, strictHomeIds)) { return true; }
-				return methodHasAnyTextMatch(method, explicitHomePhrases);
+				if (productMatchesHomeId) { return true; }
+				return productMatchesHomePhrase;
 			}
 
 			function isMethodExplicitlyPickupPoint(method){
@@ -519,16 +522,20 @@
 					'postnord_mypack_collect',
 					'postnord_mypack_service_point',
 					'postnord_mypack_small',
+					'bring_servicepakke',
+					'bring2_servicepakke',
+					'bring_parcel_pickup_point',
+					'bring2_parcel_pickup_point',
 					'bring_pickup_point_9000',
 					'bring_pickup_point_9300',
 					'pickuppoint_9000',
 					'pickuppoint_9300',
 					'parcel_pickup_point'
 				];
-				var explicitPickupPhrases = ['service point', 'pickup point', 'parcel locker', 'pakkeboks', 'hentested'];
+				var explicitPickupPhrases = ['service_point', 'service point', 'pickup_point', 'pickup point', 'pickuppoint', 'parcel_locker', 'parcel locker', 'locker', 'pakkeboks', 'pakkeautomat', 'hentested', 'utleveringssted'];
 				var productMatchesPickupId = methodMatchesExactProductId(method, strictPickupIds);
 				if (method.delivery_to_pickup_point === true && method.delivery_to_home === true) {
-					return productMatchesPickupId;
+					return productMatchesPickupId || methodHasAnyTextMatch(method, explicitPickupPhrases);
 				}
 				if (method.delivery_to_pickup_point === true) { return true; }
 				if (productMatchesPickupId) { return true; }
@@ -1253,11 +1260,19 @@
 				Object.keys(methodData).forEach(function(key){ form.append('methods[0]['+key+']', methodData[key]); });
 				if (selectedServicepartner) {
 					var selectedCustomerNumber = '';
+					var selectedOption = resolveServicepartnerSelectedOption(methodKey, selectedServicepartner);
 					if (resultsContent) {
 						var selectedServicepartnerSelect = resultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 						selectedCustomerNumber = getSelectedServicepartnerCustomerNumber(selectedServicepartnerSelect);
 					}
 					form.append('methods[0][servicepartner]', selectedServicepartner);
+					if (selectedOption) {
+						['value', 'label', 'customer_number', 'postcode', 'city', 'country', 'address1', 'address2', 'name'].forEach(function(key){
+							if (selectedOption[key] !== undefined && selectedOption[key] !== null && selectedOption[key] !== '') {
+								form.append('methods[0][servicepartner_selected_option]['+key+']', selectedOption[key]);
+							}
+						});
+					}
 					if (selectedCustomerNumber) {
 						form.append('methods[0][servicepartner_customer_number]', selectedCustomerNumber);
 						methodData.servicepartner_customer_number = selectedCustomerNumber;

@@ -1154,6 +1154,10 @@ class LP_Cargonizer_Api_Service {
 			'postnord_mypack_collect',
 			'postnord_mypack_service_point',
 			'postnord_mypack_small',
+			'bring_servicepakke',
+			'bring2_servicepakke',
+			'bring_parcel_pickup_point',
+			'bring2_parcel_pickup_point',
 			'bring_pickup_point_9000',
 			'bring_pickup_point_9300',
 			'pickuppoint_9000',
@@ -1161,9 +1165,10 @@ class LP_Cargonizer_Api_Service {
 			'parcel_pickup_point',
 		);
 		$has_strict_pickup_id = in_array($product_id, $strict_pickup_product_ids, true);
-		$has_pickup_phrase = strpos($product_name, 'service point') !== false || strpos($product_name, 'pickup point') !== false || strpos($product_name, 'parcel locker') !== false || strpos($product_name, 'locker') !== false || strpos($product_name, 'pakkeboks') !== false || strpos($product_name, 'pakkeautomat') !== false || strpos($product_name, 'hentested') !== false || strpos($product_name, 'utleveringssted') !== false;
+		$pickup_haystack = trim($product_id . ' ' . $product_name);
+		$has_pickup_phrase = strpos($pickup_haystack, 'service_point') !== false || strpos($pickup_haystack, 'service point') !== false || strpos($pickup_haystack, 'pickup_point') !== false || strpos($pickup_haystack, 'pickup point') !== false || strpos($pickup_haystack, 'pickuppoint') !== false || strpos($pickup_haystack, 'parcel_locker') !== false || strpos($pickup_haystack, 'parcel locker') !== false || strpos($pickup_haystack, 'locker') !== false || strpos($pickup_haystack, 'pakkeboks') !== false || strpos($pickup_haystack, 'pakkeautomat') !== false || strpos($pickup_haystack, 'hentested') !== false || strpos($pickup_haystack, 'utleveringssted') !== false;
 		if ($delivery_to_pickup_point && $delivery_to_home) {
-			return $has_strict_pickup_id;
+			return $has_strict_pickup_id || $has_pickup_phrase;
 		}
 		return $delivery_to_pickup_point || $has_strict_pickup_id || $has_pickup_phrase;
 	}
@@ -1179,6 +1184,9 @@ class LP_Cargonizer_Api_Service {
 			'postnord_mypack_small_home',
 		);
 		$has_home_phrase = strpos($product_name, 'home attended') !== false || strpos($product_name, 'home groupage') !== false || strpos($product_name, 'mypack home') !== false || strpos($product_name, 'home small') !== false || strpos($product_name, 'home') !== false;
+		if ($this->is_method_explicitly_pickup_point($method) && !in_array($product_id, $strict_home_product_ids, true) && !$has_home_phrase) {
+			return false;
+		}
 		return $delivery_to_home || in_array($product_id, $strict_home_product_ids, true) || $has_home_phrase;
 	}
 
@@ -1279,6 +1287,12 @@ class LP_Cargonizer_Api_Service {
 		$city = $resolve_selection_field('city', array('servicepartner_city'));
 		$country = $resolve_selection_field('country', array('country_code', 'servicepartner_country'));
 		$country = $this->sanitize_country_code($country);
+		if ($country === '') {
+			$country = $this->sanitize_country_code(isset($payload['recipient']['country']) ? $payload['recipient']['country'] : '');
+		}
+		if ($country === '') {
+			$country = $this->sanitize_country_code(isset($method['country']) ? $method['country'] : '');
+		}
 
 		return array(
 			'number' => $selection_value,
@@ -1314,10 +1328,9 @@ class LP_Cargonizer_Api_Service {
 		}
 
 		/*
-		 * Cargonizer documents only service_partner/number as required for domestic
-		 * pickup-point consignments. Name/address fields from service_partners are
-		 * useful metadata for non-domestic service point flows, but must not block
-		 * domestic estimation when only the exact pickup-point number is needed.
+		 * Logistra documents service_partner as the pickup/service-point party in
+		 * the same consignment XML used for cost estimation. The number identifies
+		 * the point; address fields are emitted when service_partners provides them.
 		 */
 		return true;
 	}
@@ -1552,7 +1565,7 @@ class LP_Cargonizer_Api_Service {
 				'country' => isset($servicepartner_selection['country']) ? (string) $servicepartner_selection['country'] : '',
 			),
 		)));
-		$this->add_servicepartner_xml_node($parts, $servicepartner_selection, $country_resolution['normalized'] !== 'NO');
+		$this->add_servicepartner_xml_node($parts, $servicepartner_selection);
 
 		$all_service_ids = array();
 		foreach ($selected_service_ids as $selected_service_id) {
@@ -1697,7 +1710,7 @@ class LP_Cargonizer_Api_Service {
 			$consignee->addChild('mobile', $mobile);
 		}
 
-		$this->add_servicepartner_xml_node($parts, $servicepartner_selection, $country_resolution['normalized'] !== 'NO');
+		$this->add_servicepartner_xml_node($parts, $servicepartner_selection);
 
 		$items = $consignment->addChild('items');
 		if (empty($packages)) {

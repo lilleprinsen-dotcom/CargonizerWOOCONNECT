@@ -363,6 +363,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
 			'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 			'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+			'delivery_to_pickup_point' => !empty($method['delivery_to_pickup_point']),
+			'delivery_to_home' => !empty($method['delivery_to_home']),
 			'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
 			'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
 			'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? sanitize_text_field($method['servicepartner_selection_source']) : '',
@@ -402,6 +404,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$method_payload['servicepartner_customer_number'] = isset($selection['servicepartner_customer_number']) ? sanitize_text_field((string) $selection['servicepartner_customer_number']) : '';
 		$method_payload['servicepartner_selection_source'] = isset($selection['servicepartner_selection_source']) ? sanitize_text_field((string) $selection['servicepartner_selection_source']) : 'none';
 		$method_payload['servicepartner_auto_selected'] = !empty($selection['servicepartner_auto_selected']);
+		$method_payload['servicepartner_selected_option'] = isset($selection['selected_option']) && is_array($selection['selected_option']) ? $selection['selected_option'] : array();
+		$method_payload['servicepartner_options'] = isset($selection['servicepartner_options']) && is_array($selection['servicepartner_options']) ? $selection['servicepartner_options'] : array();
 		return $method_payload;
 	}
 
@@ -1021,6 +1025,7 @@ $servicepartner_selection_debug = array(
 					}
 				}
 			}
+			$sanitized_method_payload = $this->sanitize_posted_method_payload($method);
 			$method_payload = array(
 				'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
@@ -1031,16 +1036,20 @@ $servicepartner_selection_debug = array(
 				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+				'delivery_to_pickup_point' => !empty($method['delivery_to_pickup_point']),
+				'delivery_to_home' => !empty($method['delivery_to_home']),
 				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
 				'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
 				'servicepartner_selection_source' => isset($method['servicepartner_selection_source']) ? sanitize_text_field($method['servicepartner_selection_source']) : '',
 				'servicepartner_user_selected' => !empty($method['servicepartner_user_selected']),
+				'servicepartner_selected_option' => isset($sanitized_method_payload['servicepartner_selected_option']) && is_array($sanitized_method_payload['servicepartner_selected_option']) ? $sanitized_method_payload['servicepartner_selected_option'] : array(),
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
 				'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 				'is_manual' => !empty($method['is_manual']),
 				'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
+				'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
 			);
 			if ($method_payload['key'] === '') {
 				$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
@@ -1087,6 +1096,8 @@ $servicepartner_selection_debug = array(
 			$pricing_config['bring_manual_handling_triggered'] = $bring_manual_handling_triggered;
 			$pricing_config['bring_manual_handling_package_count'] = isset($bring_manual_handling['package_count']) ? (int) $bring_manual_handling['package_count'] : 0;
 			$pricing_config['handling_fee'] = $total_handling_fee;
+			$delivery_to_pickup_point = $this->is_method_explicitly_pickup_point($method_payload);
+			$delivery_to_home = $this->is_method_explicitly_home_delivery($method_payload);
 
 			$item = array(
 				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
@@ -1097,8 +1108,8 @@ $servicepartner_selection_debug = array(
 				'carrier_id' => $method_payload['carrier_id'],
 				'carrier_name' => $method_payload['carrier_name'],
 				'product_id' => $method_payload['product_id'],
-				'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
-				'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
+				'delivery_to_pickup_point' => $delivery_to_pickup_point,
+				'delivery_to_home' => $delivery_to_home,
 				'selected_servicepartner' => $method_payload['servicepartner'],
 				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
 				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
@@ -1180,8 +1191,8 @@ $servicepartner_selection_debug = array(
 					'recipient_country_normalized' => isset($recipient['country']) ? $recipient['country'] : '',
 					'postcode' => isset($recipient['postcode']) ? $recipient['postcode'] : '',
 					'number_of_packages' => count($clean_packages),
-					'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
-					'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
+					'delivery_to_pickup_point' => $delivery_to_pickup_point,
+					'delivery_to_home' => $delivery_to_home,
 					'packages' => $clean_packages,
 					'selected_servicepartner' => $method_payload['servicepartner'],
 					'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
@@ -1554,6 +1565,7 @@ $servicepartner_selection_debug = array(
 					}
 				}
 			}
+			$sanitized_method_payload = $this->sanitize_posted_method_payload($method);
 			$method_payload = array(
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
@@ -1563,13 +1575,17 @@ $servicepartner_selection_debug = array(
 				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+				'delivery_to_pickup_point' => !empty($method['delivery_to_pickup_point']),
+				'delivery_to_home' => !empty($method['delivery_to_home']),
 				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
 				'servicepartner_customer_number' => isset($method['servicepartner_customer_number']) ? sanitize_text_field($method['servicepartner_customer_number']) : '',
+				'servicepartner_selected_option' => isset($sanitized_method_payload['servicepartner_selected_option']) && is_array($sanitized_method_payload['servicepartner_selected_option']) ? $sanitized_method_payload['servicepartner_selected_option'] : array(),
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
 				'selected_service_ids' => array_values(array_unique($selected_service_ids)),
 				'is_manual' => !empty($method['is_manual']),
+				'services' => isset($method['services']) && is_array($method['services']) ? $method['services'] : array(),
 			);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
