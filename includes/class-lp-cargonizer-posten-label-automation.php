@@ -93,6 +93,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_label_status_panel'), 20);
 		add_action('woocommerce_payment_complete', array($this, 'maybe_auto_queue_for_order'), 20, 1);
 		add_action('woocommerce_order_status_processing', array($this, 'maybe_auto_queue_for_order'), 20, 1);
+		add_action('woocommerce_order_status_changed', array($this, 'handle_order_status_changed'), 20, 4);
 		add_action('woocommerce_order_status_cancelled', array($this, 'cancel_active_jobs_for_order'), 20, 2);
 	}
 
@@ -344,12 +345,23 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$table = $this->get_table_name();
 		try {
 			$existing = $this->get_active_job_for_order($order_id, $method_key);
+			if ($existing && $this->maybe_cancel_job_for_non_waiting_order($existing)) {
+				$existing = $this->get_active_job_for_order($order_id, $method_key);
+			}
 			if ($existing) {
 				return array(
 					'job' => $existing,
 					'payload' => $this->format_job_response($existing, true),
 					'created' => false,
 				);
+			}
+
+			if (!$this->ensure_order_waiting_for_label($order)) {
+				return new WP_Error('posten_job_status_not_waiting', 'Posten etikettjobb kan ikke opprettes fordi ordrestatus ikke kunne settes til Venter på etikett.');
+			}
+			$refreshed_order = wc_get_order($order_id);
+			if ($refreshed_order) {
+				$order = $refreshed_order;
 			}
 
 			$now = gmdate('Y-m-d H:i:s');
@@ -410,7 +422,6 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$this->write_order_queue_metadata($order, $job, $recipient, $sender, $clean_packages, $shipping);
-		$this->set_order_status_verified($order, self::ORDER_STATUS_WAITING, 'Posten Norgespakke etikettjobb opprettet.');
 		$this->add_private_order_note($order, $this->build_queue_order_note($job, $recipient, $sender, $clean_packages, $shipping));
 
 		return array(
@@ -479,7 +490,20 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 	}
 
-	public function cancel_active_jobs_for_order($order_id, $order = null) {
+	public function handle_order_status_changed($order_id, $old_status, $new_status, $order = null) {
+		$new_status = sanitize_key((string) $new_status);
+		if ($new_status === self::ORDER_STATUS_WAITING) {
+			return;
+		}
+
+		$status_text = $new_status !== '' ? $new_status : 'ukjent';
+		$message = $new_status === 'cancelled'
+			? 'WooCommerce-ordren ble kansellert.'
+			: 'WooCommerce-ordrestatus er ikke Venter på etikett. Status: ' . $status_text . '.';
+		$this->cancel_active_jobs_for_order($order_id, $order, $message);
+	}
+
+	public function cancel_active_jobs_for_order($order_id, $order = null, $message = '') {
 		$order_id = absint($order_id);
 		if ($order_id < 1) {
 			return 0;
@@ -489,7 +513,10 @@ class LP_Cargonizer_Posten_Label_Automation {
 		global $wpdb;
 		$table = $this->get_table_name();
 		$now = gmdate('Y-m-d H:i:s');
-		$message = 'WooCommerce-ordren ble kansellert.';
+		$message = trim((string) $message);
+		if ($message === '') {
+			$message = 'WooCommerce-ordren ble kansellert.';
+		}
 		$updated = $wpdb->query(
 			$wpdb->prepare(
 				"UPDATE {$table} SET status = %s, last_error = %s, failure_message = %s, updated_at_gmt = %s WHERE order_id = %d AND status IN (%s, %s)",
@@ -508,7 +535,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			if ($order) {
 				$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_CANCELLED);
 				$order->save();
-				$this->add_private_order_note($order, 'Posten Norgespakke etikettjobb kansellert fordi ordren ble kansellert. Antall jobber: ' . (int) $updated . '.');
+				$this->add_private_order_note($order, 'Posten Norgespakke etikettjobb kansellert. ' . $message . ' Antall jobber: ' . (int) $updated . '.');
 			}
 		}
 
@@ -658,10 +685,10 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$jobs = array();
-		$exclude_cancelled_orders = in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true);
+		$exclude_not_waiting_orders = in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true);
 		foreach ((array) $rows as $row) {
-			if ($this->maybe_cancel_job_for_cancelled_order($row)) {
-				if ($exclude_cancelled_orders) {
+			if ($this->maybe_cancel_job_for_non_waiting_order($row)) {
+				if ($exclude_not_waiting_orders) {
 					continue;
 				}
 				$refreshed = $this->get_job_by_id(isset($row->job_id) ? (string) $row->job_id : '');
@@ -698,9 +725,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 		if (!$job) {
 			return new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.', array('status' => 404));
 		}
-		if ($this->maybe_cancel_job_for_cancelled_order($job)) {
+		if ($this->maybe_cancel_job_for_non_waiting_order($job)) {
 			$cancelled_job = $this->get_job_by_id($job_id);
-			return new WP_Error('posten_job_order_cancelled', 'Posten labeljobb ble kansellert fordi WooCommerce-ordren er kansellert.', array(
+			return new WP_Error('posten_job_order_not_waiting', 'Posten labeljobb ble kansellert fordi WooCommerce-ordren ikke lenger venter på etikett.', array(
 				'status' => 409,
 				'job_status' => self::JOB_STATUS_CANCELLED,
 				'job' => $cancelled_job ? $this->format_job_response($cancelled_job, true) : array(),
@@ -751,9 +778,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 				'job' => $this->format_job_response($job, true),
 			));
 		}
-		if ($this->maybe_cancel_job_for_cancelled_order($job)) {
+		if ($this->maybe_cancel_job_for_non_waiting_order($job)) {
 			$cancelled_job = $this->get_job_by_id($job_id);
-			return new WP_Error('posten_job_order_cancelled', 'Posten labeljobb ble kansellert fordi WooCommerce-ordren er kansellert.', array(
+			return new WP_Error('posten_job_order_not_waiting', 'Posten labeljobb ble kansellert fordi WooCommerce-ordren ikke lenger venter på etikett.', array(
 				'status' => 409,
 				'job_status' => self::JOB_STATUS_CANCELLED,
 				'job' => $cancelled_job ? $this->format_job_response($cancelled_job, true) : array(),
@@ -1366,7 +1393,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return in_array(LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY, array_map('strval', $enabled_methods), true);
 	}
 
-	private function maybe_cancel_job_for_cancelled_order($job) {
+	private function maybe_cancel_job_for_non_waiting_order($job) {
 		if (!$job || !isset($job->order_id)) {
 			return false;
 		}
@@ -1374,11 +1401,13 @@ class LP_Cargonizer_Posten_Label_Automation {
 		if (!in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true)) {
 			return false;
 		}
-		if ($this->get_order_status_for_job($job) !== 'cancelled') {
+		$order_status = $this->get_order_status_for_job($job);
+		if ($order_status === self::ORDER_STATUS_WAITING) {
 			return false;
 		}
 
-		$this->cancel_active_jobs_for_order((int) $job->order_id);
+		$status_text = $order_status !== '' ? $order_status : 'ukjent';
+		$this->cancel_active_jobs_for_order((int) $job->order_id, null, 'WooCommerce-ordrestatus er ikke Venter på etikett. Status: ' . $status_text . '.');
 		return true;
 	}
 
@@ -1599,6 +1628,17 @@ class LP_Cargonizer_Posten_Label_Automation {
 			return 'Print feilet: ' . $error;
 		}
 		return 'Ikke printet';
+	}
+
+	private function ensure_order_waiting_for_label($order) {
+		if (!$order || !method_exists($order, 'get_status')) {
+			return false;
+		}
+		if ((string) $order->get_status() === self::ORDER_STATUS_WAITING) {
+			return true;
+		}
+
+		return $this->set_order_status_verified($order, self::ORDER_STATUS_WAITING, 'Posten Norgespakke etikettjobb opprettet.');
 	}
 
 	private function set_order_status_verified($order, $status, $note) {
