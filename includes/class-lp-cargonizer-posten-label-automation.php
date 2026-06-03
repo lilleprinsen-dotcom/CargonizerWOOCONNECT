@@ -279,16 +279,18 @@ class LP_Cargonizer_Posten_Label_Automation {
 			wp_die(esc_html__('Ingen tilgang.', 'lp-cargonizer'), '', array('response' => 403));
 		}
 
-		$job_id = isset($_POST['job_id']) && !is_array($_POST['job_id']) ? $this->sanitize_job_id((string) wp_unslash($_POST['job_id'])) : '';
-		$nonce = isset($_POST['_wpnonce']) && !is_array($_POST['_wpnonce']) ? sanitize_text_field((string) wp_unslash($_POST['_wpnonce'])) : '';
+		$job_id = isset($_REQUEST['job_id']) && !is_array($_REQUEST['job_id']) ? $this->sanitize_job_id((string) wp_unslash($_REQUEST['job_id'])) : '';
+		$nonce = isset($_REQUEST['_wpnonce']) && !is_array($_REQUEST['_wpnonce']) ? sanitize_text_field((string) wp_unslash($_REQUEST['_wpnonce'])) : '';
+		$posted_redirect = isset($_REQUEST['redirect_to']) && !is_array($_REQUEST['redirect_to']) ? esc_url_raw((string) wp_unslash($_REQUEST['redirect_to'])) : '';
 		if ($job_id === '' || !wp_verify_nonce($nonce, self::NONCE_ACTION_CANCEL_JOB . '_' . $job_id)) {
 			wp_die(esc_html__('Ugyldig forespørsel.', 'lp-cargonizer'), '', array('response' => 403));
 		}
 
 		$job = $this->get_job_by_id($job_id);
-		$order_id = $job && isset($job->order_id) ? absint($job->order_id) : (isset($_POST['order_id']) ? absint($_POST['order_id']) : 0);
+		$order_id = $job && isset($job->order_id) ? absint($job->order_id) : (isset($_REQUEST['order_id']) ? absint($_REQUEST['order_id']) : 0);
 		$result = $job ? $this->cancel_job_by_id($job_id, 'Kansellert manuelt av admin fra ordrevisningen.') : new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.');
-		$redirect_url = $this->get_order_edit_url($order_id);
+		$fallback_redirect_url = $this->get_order_edit_url($order_id);
+		$redirect_url = $posted_redirect !== '' ? wp_validate_redirect($posted_redirect, $fallback_redirect_url) : $fallback_redirect_url;
 		$redirect_url = add_query_arg(array(
 			'lp_posten_cancel_job' => is_wp_error($result) ? 'failed' : 'cancelled',
 			'lp_posten_job_id' => $job_id,
@@ -656,13 +658,16 @@ class LP_Cargonizer_Posten_Label_Automation {
 			echo '<div style="margin-top:6px;color:#125228;">Denne jobben kan bookes på nytt fra Book shipment.</div>';
 		}
 		if (in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true)) {
-			echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:10px;">';
-			echo '<input type="hidden" name="action" value="' . esc_attr(self::ADMIN_ACTION_CANCEL_JOB) . '">';
-			echo '<input type="hidden" name="job_id" value="' . esc_attr((string) $job->job_id) . '">';
-			echo '<input type="hidden" name="order_id" value="' . esc_attr((string) $order->get_id()) . '">';
-			wp_nonce_field(self::NONCE_ACTION_CANCEL_JOB . '_' . (string) $job->job_id);
-			echo '<button type="submit" class="button" onclick="return confirm(\'Kansellere Posten etikettjobb? Roboten vil ikke kunne fullføre denne jobben.\');">Kanseller etikettjobb</button>';
-			echo '</form>';
+			$cancel_url = add_query_arg(array(
+				'action' => self::ADMIN_ACTION_CANCEL_JOB,
+				'job_id' => (string) $job->job_id,
+				'order_id' => (int) $order->get_id(),
+				'redirect_to' => $this->get_order_edit_url((int) $order->get_id()),
+				'_wpnonce' => wp_create_nonce(self::NONCE_ACTION_CANCEL_JOB . '_' . (string) $job->job_id),
+			), admin_url('admin-post.php'));
+			echo '<div style="margin-top:10px;">';
+			echo '<a href="' . esc_url($cancel_url) . '" class="button" onclick="return confirm(\'Kansellere Posten etikettjobb? Roboten vil ikke kunne fullføre denne jobben.\');">Kanseller etikettjobb</a>';
+			echo '</div>';
 		}
 		if (!empty($package_results)) {
 			echo '<div style="margin-top:6px;"><strong>Kolli/etiketter:</strong></div>';
