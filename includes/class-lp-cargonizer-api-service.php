@@ -2006,6 +2006,75 @@ class LP_Cargonizer_Api_Service {
 		return $result;
 	}
 
+	public function print_document_to_printer($printer_id, $document_binary, $content_type) {
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error' => '',
+			'raw_response' => '',
+		);
+
+		$printer_id = sanitize_text_field((string) $printer_id);
+		if ($printer_id === '') {
+			$result['error'] = 'Mangler printer-id.';
+			return $result;
+		}
+
+		$content_type = sanitize_text_field((string) $content_type);
+		$allowed_content_types = array(
+			'application/pdf' => true,
+			'application/x.zpl' => true,
+			'application/x.epl' => true,
+		);
+		if ($content_type === '' || empty($allowed_content_types[$content_type])) {
+			$result['error'] = 'Filtypen støttes ikke for DirectPrint.';
+			return $result;
+		}
+
+		$document_binary = (string) $document_binary;
+		if ($document_binary === '') {
+			$result['error'] = 'Filen er tom.';
+			return $result;
+		}
+
+		// Logistra /prints accepts raw PDF/ZPL/EPL bodies and requires only X-Cargonizer-Key.
+		$headers = $this->get_auth_headers();
+		if (isset($headers['X-Cargonizer-Sender'])) {
+			unset($headers['X-Cargonizer-Sender']);
+		}
+		$headers['Content-Type'] = $content_type;
+		$headers['Accept'] = 'application/json';
+
+		$url = add_query_arg(array(
+			'print[printer][id]' => $printer_id,
+		), self::build_endpoint_url('/prints'));
+
+		$response = wp_remote_post($url, array(
+			'timeout' => 40,
+			'headers' => $headers,
+			'body' => $document_binary,
+		));
+
+		if (is_wp_error($response)) {
+			$result['error'] = $response->get_error_message();
+			return $result;
+		}
+
+		$result['http_status'] = wp_remote_retrieve_response_code($response);
+		$result['raw_response'] = wp_remote_retrieve_body($response);
+
+		if ($result['http_status'] < 200 || $result['http_status'] >= 300) {
+			$result['error'] = 'HTTP ' . $result['http_status'];
+			if ($result['raw_response'] !== '') {
+				$result['error'] .= ': ' . $result['raw_response'];
+			}
+			return $result;
+		}
+
+		$result['success'] = true;
+		return $result;
+	}
+
 	public function normalize_positive_decimal_for_xml($value) {
 		if (is_string($value)) {
 			$value = str_replace(',', '.', $value);
