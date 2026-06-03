@@ -409,6 +409,10 @@ class LP_Cargonizer_Connector {
 		return $this->api_service->print_pdf_to_printer($printer_id, $pdf_binary);
 	}
 
+	private function print_document_to_printer($printer_id, $document_binary, $content_type) {
+		return $this->api_service->print_document_to_printer($printer_id, $document_binary, $content_type);
+	}
+
 	private function normalize_positive_decimal_for_xml($value) {
 		return $this->api_service->normalize_positive_decimal_for_xml($value);
 	}
