@@ -379,7 +379,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 			), array('%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s'));
 
 			if (!$inserted) {
-				return new WP_Error('posten_job_insert_failed', 'Kunne ikke opprette Posten etikettjobb i databasen.');
+				$db_error = isset($wpdb->last_error) ? trim((string) $wpdb->last_error) : '';
+				return new WP_Error('posten_job_insert_failed', 'Kunne ikke opprette Posten etikettjobb i databasen.' . ($db_error !== '' ? ' Databasefeil: ' . $db_error : ''));
 			}
 
 			$job = $this->get_job_by_id($job_id);
@@ -492,6 +493,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 		if ($last_error !== '' && in_array($status, array(self::JOB_STATUS_FAILED, self::JOB_STATUS_PARTIAL_FAILED), true)) {
 			echo '<div style="color:#b32d2e;">Siste feil: ' . esc_html($last_error) . '</div>';
+		}
+		if ($this->is_retryable_terminal_job_status($status)) {
+			echo '<div style="margin-top:6px;color:#125228;">Denne jobben kan bookes på nytt fra Book shipment.</div>';
 		}
 		if (!empty($package_results)) {
 			echo '<div style="margin-top:6px;"><strong>Kolli/etiketter:</strong></div>';
@@ -1280,10 +1284,27 @@ class LP_Cargonizer_Posten_Label_Automation {
 	private function get_active_job_for_order($order_id, $method_key) {
 		global $wpdb;
 		$table = $this->get_table_name();
-		$statuses = array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING, self::JOB_STATUS_COMPLETED);
+		$order_id = absint($order_id);
+		$method_key = sanitize_text_field((string) $method_key);
+		$latest = $this->get_latest_job_for_order_method($order_id, $method_key);
+		if ($latest && $this->is_retryable_terminal_job_status(isset($latest->status) ? (string) $latest->status : '')) {
+			$statuses = array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING);
+		} else {
+			$statuses = array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING, self::JOB_STATUS_COMPLETED);
+		}
 		$placeholders = implode(',', array_fill(0, count($statuses), '%s'));
-		$args = array_merge(array(absint($order_id), sanitize_text_field((string) $method_key)), $statuses);
+		$args = array_merge(array($order_id, $method_key), $statuses);
 		return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE order_id = %d AND method_key = %s AND status IN ({$placeholders}) ORDER BY id DESC LIMIT 1", $args));
+	}
+
+	private function get_latest_job_for_order_method($order_id, $method_key) {
+		global $wpdb;
+		$table = $this->get_table_name();
+		return $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE order_id = %d AND method_key = %s ORDER BY id DESC LIMIT 1", absint($order_id), sanitize_text_field((string) $method_key)));
+	}
+
+	private function is_retryable_terminal_job_status($status) {
+		return in_array((string) $status, array(self::JOB_STATUS_FAILED, self::JOB_STATUS_PARTIAL_FAILED, self::JOB_STATUS_CANCELLED), true);
 	}
 
 	private function get_latest_job_for_order($order_id) {
@@ -1387,6 +1408,17 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$order->update_meta_data(self::META_JOB_ID, (string) $job->job_id);
 		$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_QUEUED);
 		$order->update_meta_data(self::META_REQUESTED_AT_GMT, $created_at_gmt);
+		$order->delete_meta_data(self::META_TRACKING_NUMBER);
+		$order->delete_meta_data(self::META_TRACKING_NUMBERS);
+		$order->delete_meta_data(self::META_TRACKING_URL);
+		$order->delete_meta_data(self::META_PACKAGE_RESULTS);
+		$order->delete_meta_data(self::META_LABEL_FILE_PATH);
+		$order->delete_meta_data(self::META_LABEL_FILES);
+		$order->delete_meta_data(self::META_STAMPED_LABEL_FILES);
+		$order->delete_meta_data(self::META_PRINT_RESULTS);
+		$order->delete_meta_data(self::META_LABEL_ATTACHMENT_ID);
+		$order->delete_meta_data(self::META_COMPLETED_AT_GMT);
+		$order->update_meta_data(self::META_LABEL_PRINTED, 0);
 		$order->update_meta_data('_lp_posten_label_method_key', LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY);
 		$order->update_meta_data('_lp_posten_label_recipient_snapshot', $recipient);
 		$order->update_meta_data('_lp_posten_label_sender_snapshot', $sender);
