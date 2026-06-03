@@ -618,6 +618,8 @@ class LP_Cargonizer_Connector {
 			'recipient' => $recipient,
 			'packages' => $packages,
 			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
+			'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+			'servicepartner_selected_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
 			'use_sms_service' => !empty($method_payload['use_sms_service']),
 			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
@@ -760,6 +762,8 @@ class LP_Cargonizer_Connector {
 			if ($is_pickup_related && isset($method_payload['servicepartner']) && $method_payload['servicepartner'] === '') {
 				$item['human_error'] .= ' Valgt produkt ser ut til å være pickup point-relatert, og servicepartner er ikke valgt.';
 			}
+		} elseif ((strpos($combined_error_text, 'mobiltelefon') !== false || strpos($combined_error_text, 'mobile') !== false) && (strpos($combined_error_text, 'mottaker') !== false || strpos($combined_error_text, 'recipient') !== false || strpos($combined_error_text, 'consignee') !== false)) {
+			$item['human_error'] = 'Denne metoden krever mobiltelefonnummer på mottaker. Estimatoren sender billing/shipping phone som <mobile>; legg inn telefonnummer på ordren hvis feltet mangler.';
 		} elseif (strpos($combined_error_text, 'servicepartner') !== false && (strpos($combined_error_text, 'må angis') !== false || strpos($combined_error_text, 'must be specified') !== false || strpos($combined_error_text, 'missing') !== false)) {
 			$item['human_error'] = 'Denne metoden krever servicepartner. Hent servicepartnere og velg en verdi før du prøver igjen.';
 		} elseif ((strpos($combined_error_text, 'kolli') !== false || strpos($combined_error_text, 'package') !== false) && (strpos($combined_error_text, 'max') !== false || strpos($combined_error_text, '1') !== false || strpos($combined_error_text, 'one') !== false)) {
