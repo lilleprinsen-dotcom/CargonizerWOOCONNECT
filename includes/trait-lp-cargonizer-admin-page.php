@@ -1273,6 +1273,16 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					'token_generated_at_gmt' => isset($settings['posten_robot']['token_generated_at_gmt']) ? sanitize_text_field((string) $settings['posten_robot']['token_generated_at_gmt']) : '',
 					'status_when_queued' => 'lp-waiting-label',
 					'status_after_label_created' => 'lp-label-created',
+					'direct_print_enabled' => isset($_POST['lp_cargonizer_posten_robot_direct_print_enabled']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_direct_print_enabled'])) : '0',
+					'direct_print_printer_id' => isset($_POST['lp_cargonizer_posten_robot_direct_print_printer_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_direct_print_printer_id'])) : '',
+					'stamp_enabled' => isset($_POST['lp_cargonizer_posten_robot_stamp_enabled']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_enabled'])) : '0',
+					'stamp_text_template' => isset($_POST['lp_cargonizer_posten_robot_stamp_text_template']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_text_template'])) : '',
+					'stamp_font_size' => isset($_POST['lp_cargonizer_posten_robot_stamp_font_size']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_font_size'])) : '',
+					'stamp_x_mm' => isset($_POST['lp_cargonizer_posten_robot_stamp_x_mm']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_x_mm'])) : '',
+					'stamp_y_mm' => isset($_POST['lp_cargonizer_posten_robot_stamp_y_mm']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_y_mm'])) : '',
+					'stamp_max_width_mm' => isset($_POST['lp_cargonizer_posten_robot_stamp_max_width_mm']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_max_width_mm'])) : '',
+					'stamp_max_lines' => isset($_POST['lp_cargonizer_posten_robot_stamp_max_lines']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_max_lines'])) : '',
+					'stamp_required_for_print' => isset($_POST['lp_cargonizer_posten_robot_stamp_required_for_print']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_stamp_required_for_print'])) : '0',
 				),
 				'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
@@ -2330,6 +2340,22 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						</tbody>
 					</table>
 
+					<?php
+					$printer_fetch_result = array(
+						'success' => false,
+						'http_status' => 0,
+						'message' => '',
+						'raw' => '',
+						'printers' => array(),
+					);
+					if (!empty($settings['api_key'])) {
+						$printer_fetch_result = $this->fetch_printers();
+					}
+					$available_printers = isset($printer_fetch_result['printers']) && is_array($printer_fetch_result['printers']) ? $printer_fetch_result['printers'] : array();
+					$available_printers = $this->apply_printer_aliases($available_printers);
+					$saved_printer_aliases = isset($settings['printer_aliases']) && is_array($settings['printer_aliases']) ? $settings['printer_aliases'] : array();
+					?>
+
 					<h2 id="lp-cargonizer-section-posten-robot">Posten Norgespakke robot</h2>
 					<?php
 					$posten_robot_settings = isset($settings['posten_robot']) && is_array($settings['posten_robot']) ? $settings['posten_robot'] : array();
@@ -2386,26 +2412,82 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<p class="description">Status settes og verifiseres av ko-tjenesten naar jobben opprettes og naar roboten fullfoerer jobben.</p>
 								</td>
 							</tr>
+							<tr>
+								<th scope="row">Posten DirectPrint</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_posten_robot_direct_print_enabled" value="0">
+									<label>
+										<input type="checkbox" name="lp_cargonizer_posten_robot_direct_print_enabled" value="1" <?php checked(!empty($posten_robot_settings['direct_print_enabled'])); ?>>
+										Print Posten labels with DirectPrint
+									</label>
+									<p class="description">Roboten sender PDF-er tilbake til WooCommerce. WooCommerce lagrer originalen, lager stemplet kopi og sender stemplet PDF til DirectPrint når dette er aktivert.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row"><label for="lp_cargonizer_posten_robot_direct_print_printer_id">DirectPrint printer for Posten labels</label></th>
+								<td>
+									<?php $posten_direct_print_printer_id = isset($posten_robot_settings['direct_print_printer_id']) ? sanitize_text_field((string) $posten_robot_settings['direct_print_printer_id']) : ''; ?>
+									<select name="lp_cargonizer_posten_robot_direct_print_printer_id" id="lp_cargonizer_posten_robot_direct_print_printer_id">
+										<option value=""><?php echo esc_html('Ingen Posten DirectPrint-printer'); ?></option>
+										<?php foreach ($available_printers as $printer) : ?>
+											<?php
+											$printer_id = isset($printer['id']) ? sanitize_text_field((string) $printer['id']) : '';
+											if ($printer_id === '') {
+												continue;
+											}
+											$printer_label = isset($printer['label']) ? sanitize_text_field((string) $printer['label']) : $printer_id;
+											?>
+											<option value="<?php echo esc_attr($printer_id); ?>" <?php selected($posten_direct_print_printer_id, $printer_id); ?>>
+												<?php echo esc_html($printer_label); ?>
+											</option>
+										<?php endforeach; ?>
+									</select>
+									<?php if ($posten_direct_print_printer_id === '' && $current_user_default_printer_id !== '') : ?>
+										<p class="description">Din brukerstandard er <?php echo esc_html($current_user_default_printer_id); ?>. Velg og lagre en egen printer her for Posten-roboten hvis den skal printe automatisk.</p>
+									<?php endif; ?>
+									<?php if (empty($settings['api_key'])) : ?>
+										<p class="description">Legg inn API key for å hente printerliste fra Cargonizer.</p>
+									<?php elseif (empty($printer_fetch_result['success'])) : ?>
+										<p class="description" style="color:#b32d2e;"><?php echo esc_html($printer_fetch_result['message'] !== '' ? $printer_fetch_result['message'] : 'Kunne ikke hente printerliste.'); ?></p>
+									<?php else : ?>
+										<p class="description">Printerlisten bruker samme DirectPrint-printere og aliaser som resten av pluginen. Innstillingen lagres separat for Posten-roboten.</p>
+									<?php endif; ?>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">Posten label-stempel</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_posten_robot_stamp_enabled" value="0">
+									<label>
+										<input type="checkbox" name="lp_cargonizer_posten_robot_stamp_enabled" value="1" <?php checked(!isset($posten_robot_settings['stamp_enabled']) || !empty($posten_robot_settings['stamp_enabled'])); ?>>
+										Add kolli description to Posten label PDF
+									</label>
+									<p class="description">Original PDF bevares alltid. Stemplet PDF brukes til DirectPrint og kan lastes ned separat fra ordrevisningen.</p>
+									<p>
+										<label for="lp_cargonizer_posten_robot_stamp_text_template">Text template</label><br>
+										<input type="text" name="lp_cargonizer_posten_robot_stamp_text_template" id="lp_cargonizer_posten_robot_stamp_text_template" class="regular-text" value="<?php echo esc_attr(isset($posten_robot_settings['stamp_text_template']) ? (string) $posten_robot_settings['stamp_text_template'] : 'Kolli {index}: {description}'); ?>">
+									</p>
+									<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;max-width:820px;">
+										<label>X position in mm<br><input type="number" step="0.1" min="0" name="lp_cargonizer_posten_robot_stamp_x_mm" value="<?php echo esc_attr(isset($posten_robot_settings['stamp_x_mm']) ? (string) $posten_robot_settings['stamp_x_mm'] : '8'); ?>"></label>
+										<label>Y position in mm<br><input type="number" step="0.1" min="0" name="lp_cargonizer_posten_robot_stamp_y_mm" value="<?php echo esc_attr(isset($posten_robot_settings['stamp_y_mm']) ? (string) $posten_robot_settings['stamp_y_mm'] : '8'); ?>"></label>
+										<label>Font size<br><input type="number" step="1" min="6" max="24" name="lp_cargonizer_posten_robot_stamp_font_size" value="<?php echo esc_attr(isset($posten_robot_settings['stamp_font_size']) ? (string) $posten_robot_settings['stamp_font_size'] : '10'); ?>"></label>
+										<label>Max width in mm<br><input type="number" step="0.1" min="10" name="lp_cargonizer_posten_robot_stamp_max_width_mm" value="<?php echo esc_attr(isset($posten_robot_settings['stamp_max_width_mm']) ? (string) $posten_robot_settings['stamp_max_width_mm'] : '80'); ?>"></label>
+										<label>Max lines<br><input type="number" step="1" min="1" max="5" name="lp_cargonizer_posten_robot_stamp_max_lines" value="<?php echo esc_attr(isset($posten_robot_settings['stamp_max_lines']) ? (string) $posten_robot_settings['stamp_max_lines'] : '2'); ?>"></label>
+									</div>
+									<p>
+										<input type="hidden" name="lp_cargonizer_posten_robot_stamp_required_for_print" value="0">
+										<label>
+											<input type="checkbox" name="lp_cargonizer_posten_robot_stamp_required_for_print" value="1" <?php checked(!isset($posten_robot_settings['stamp_required_for_print']) || !empty($posten_robot_settings['stamp_required_for_print'])); ?>>
+											Do not DirectPrint if stamping fails
+										</label>
+									</p>
+								</td>
+							</tr>
 						</tbody>
 					</table>
 
 					<h2 id="lp-cargonizer-section-printers">Standard printer for innlogget admin</h2>
 					<p>Denne innstillingen lagres kun på deg som innlogget admin-bruker.</p>
-					<?php
-					$printer_fetch_result = array(
-						'success' => false,
-						'http_status' => 0,
-						'message' => '',
-						'raw' => '',
-						'printers' => array(),
-					);
-					if (!empty($settings['api_key'])) {
-						$printer_fetch_result = $this->fetch_printers();
-					}
-					$available_printers = isset($printer_fetch_result['printers']) && is_array($printer_fetch_result['printers']) ? $printer_fetch_result['printers'] : array();
-					$available_printers = $this->apply_printer_aliases($available_printers);
-					$saved_printer_aliases = isset($settings['printer_aliases']) && is_array($settings['printer_aliases']) ? $settings['printer_aliases'] : array();
-					?>
 					<table class="form-table" role="presentation">
 						<tbody>
 							<tr>

@@ -612,6 +612,16 @@ class LP_Cargonizer_Settings_Service {
 			'token_generated_at_gmt' => '',
 			'status_when_queued' => 'lp-waiting-label',
 			'status_after_label_created' => 'lp-label-created',
+			'direct_print_enabled' => 0,
+			'direct_print_printer_id' => '',
+			'stamp_enabled' => 1,
+			'stamp_text_template' => 'Kolli {index}: {description}',
+			'stamp_font_size' => 10,
+			'stamp_x_mm' => 8,
+			'stamp_y_mm' => 8,
+			'stamp_max_width_mm' => 80,
+			'stamp_max_lines' => 2,
+			'stamp_required_for_print' => 1,
 		);
 	}
 
@@ -619,6 +629,17 @@ class LP_Cargonizer_Settings_Service {
 		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_posten_robot_defaults());
 		$queued_status = isset($input['status_when_queued']) ? sanitize_key((string) $input['status_when_queued']) : sanitize_key((string) $base['status_when_queued']);
 		$created_status = isset($input['status_after_label_created']) ? sanitize_key((string) $input['status_after_label_created']) : sanitize_key((string) $base['status_after_label_created']);
+		$stamp_font_size = isset($input['stamp_font_size']) ? $this->sanitize_number_in_range($input['stamp_font_size'], 6, 24, 10) : $this->sanitize_number_in_range($base['stamp_font_size'], 6, 24, 10);
+		$stamp_x_mm = isset($input['stamp_x_mm']) ? $this->sanitize_number_in_range($input['stamp_x_mm'], 0, 200, 8) : $this->sanitize_number_in_range($base['stamp_x_mm'], 0, 200, 8);
+		$stamp_y_mm = isset($input['stamp_y_mm']) ? $this->sanitize_number_in_range($input['stamp_y_mm'], 0, 200, 8) : $this->sanitize_number_in_range($base['stamp_y_mm'], 0, 200, 8);
+		$stamp_max_width_mm = isset($input['stamp_max_width_mm']) ? $this->sanitize_number_in_range($input['stamp_max_width_mm'], 10, 200, 80) : $this->sanitize_number_in_range($base['stamp_max_width_mm'], 10, 200, 80);
+		$stamp_max_lines = isset($input['stamp_max_lines']) ? absint($input['stamp_max_lines']) : absint($base['stamp_max_lines']);
+		if ($stamp_max_lines < 1) {
+			$stamp_max_lines = 1;
+		}
+		if ($stamp_max_lines > 5) {
+			$stamp_max_lines = 5;
+		}
 
 		return array(
 			'enabled' => isset($input['enabled']) ? $this->sanitize_checkbox_value($input['enabled']) : $this->sanitize_checkbox_value($base['enabled']),
@@ -627,7 +648,34 @@ class LP_Cargonizer_Settings_Service {
 			'token_generated_at_gmt' => isset($input['token_generated_at_gmt']) ? sanitize_text_field((string) $input['token_generated_at_gmt']) : sanitize_text_field((string) $base['token_generated_at_gmt']),
 			'status_when_queued' => $queued_status !== '' ? $queued_status : 'lp-waiting-label',
 			'status_after_label_created' => $created_status !== '' ? $created_status : 'lp-label-created',
+			'direct_print_enabled' => isset($input['direct_print_enabled']) ? $this->sanitize_checkbox_value($input['direct_print_enabled']) : $this->sanitize_checkbox_value($base['direct_print_enabled']),
+			'direct_print_printer_id' => isset($input['direct_print_printer_id']) ? sanitize_text_field((string) $input['direct_print_printer_id']) : sanitize_text_field((string) $base['direct_print_printer_id']),
+			'stamp_enabled' => isset($input['stamp_enabled']) ? $this->sanitize_checkbox_value($input['stamp_enabled']) : $this->sanitize_checkbox_value($base['stamp_enabled']),
+			'stamp_text_template' => isset($input['stamp_text_template']) && trim((string) $input['stamp_text_template']) !== '' ? sanitize_text_field((string) $input['stamp_text_template']) : 'Kolli {index}: {description}',
+			'stamp_font_size' => $stamp_font_size,
+			'stamp_x_mm' => $stamp_x_mm,
+			'stamp_y_mm' => $stamp_y_mm,
+			'stamp_max_width_mm' => $stamp_max_width_mm,
+			'stamp_max_lines' => $stamp_max_lines,
+			'stamp_required_for_print' => isset($input['stamp_required_for_print']) ? $this->sanitize_checkbox_value($input['stamp_required_for_print']) : $this->sanitize_checkbox_value($base['stamp_required_for_print']),
 		);
+	}
+
+	private function sanitize_number_in_range($value, $min, $max, $default) {
+		if (is_string($value)) {
+			$value = str_replace(',', '.', $value);
+		}
+		if (!is_numeric($value)) {
+			return $default;
+		}
+		$value = (float) $value;
+		if ($value < $min) {
+			return $min;
+		}
+		if ($value > $max) {
+			return $max;
+		}
+		return $value;
 	}
 
 	private function sanitize_shipping_profiles_settings($input, $current) {
