@@ -230,8 +230,8 @@ class LP_Cargonizer_Connector {
 		return str_repeat('*', max(0, $len - $show_last)) . substr($value, -$show_last);
 	}
 
-	private function fetch_transport_agreements($sender_id_override = '') {
-		return $this->api_service->fetch_transport_agreements($sender_id_override);
+	private function fetch_transport_agreements($sender_id_override = '', $api_key_override = '') {
+		return $this->api_service->fetch_transport_agreements($sender_id_override, $api_key_override);
 	}
 
 	private function fetch_printers() {
