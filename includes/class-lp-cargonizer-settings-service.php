@@ -126,7 +126,12 @@ class LP_Cargonizer_Settings_Service {
 		}
 
 		$available_map = array();
+		$legacy_method_key_map = array();
+		$legacy_method_default_key_map = array();
+		$legacy_method_single_key_map = array();
+		$available_legacy_key_by_method = array();
 		$available_service_ids_by_method = array();
+		$default_warehouse_profile_id = isset($output['warehouse_profiles']['default_profile_id']) ? sanitize_key((string) $output['warehouse_profiles']['default_profile_id']) : '';
 		foreach ($available_methods as $method) {
 			if (!is_array($method)) {
 				continue;
@@ -137,15 +142,24 @@ class LP_Cargonizer_Settings_Service {
 				continue;
 			}
 
+			$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
+			$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+			$legacy_key = isset($method['legacy_key']) ? sanitize_text_field((string) $method['legacy_key']) : implode('|', array($agreement_id, $product_id));
+			$sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+
 			$clean_method = array(
 				'key' => $method_key,
-				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '',
+				'legacy_key' => $legacy_key,
+				'sender_profile_id' => $sender_profile_id,
+				'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
+				'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
+				'agreement_id' => $agreement_id,
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field((string) $method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field((string) $method['agreement_description']) : '',
 				'agreement_number' => isset($method['agreement_number']) ? sanitize_text_field((string) $method['agreement_number']) : '',
 				'carrier_id' => isset($method['carrier_id']) ? sanitize_text_field((string) $method['carrier_id']) : '',
 				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field((string) $method['carrier_name']) : '',
-				'product_id' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
+				'product_id' => $product_id,
 				'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
 				'is_manual' => ($method_key === $this->manual_norgespakke_key) && !empty($method['is_manual']),
 				'is_manual_norgespakke' => ($method_key === $this->manual_norgespakke_key),
@@ -177,7 +191,24 @@ class LP_Cargonizer_Settings_Service {
 
 			$output['available_methods'][] = $clean_method;
 			$available_map[$method_key] = true;
+			$available_legacy_key_by_method[$method_key] = $legacy_key;
+			if ($legacy_key !== '') {
+				if (!isset($legacy_method_key_map[$legacy_key])) {
+					$legacy_method_key_map[$legacy_key] = array();
+				}
+				$legacy_method_key_map[$legacy_key][] = $method_key;
+				if ($sender_profile_id === '' || ($default_warehouse_profile_id !== '' && $sender_profile_id === $default_warehouse_profile_id)) {
+					$legacy_method_default_key_map[$legacy_key] = $method_key;
+				}
+			}
 			$available_service_ids_by_method[$method_key] = array_values(array_unique($available_service_ids_by_method[$method_key]));
+		}
+
+		foreach ($legacy_method_key_map as $legacy_key => $mapped_keys) {
+			$mapped_keys = array_values(array_unique($mapped_keys));
+			if (count($mapped_keys) === 1) {
+				$legacy_method_single_key_map[$legacy_key] = $mapped_keys[0];
+			}
 		}
 
 		$method_extra_services_input = isset($input['method_extra_services']) && is_array($input['method_extra_services'])
@@ -188,8 +219,10 @@ class LP_Cargonizer_Settings_Service {
 				continue;
 			}
 			$available_service_map = array_fill_keys($available_service_ids, true);
+			$legacy_method_key = isset($available_legacy_key_by_method[$method_key]) ? $available_legacy_key_by_method[$method_key] : '';
 			$has_explicit_service_input = is_array($method_extra_services_input) && array_key_exists($method_key, $method_extra_services_input);
-			$selected_service_ids = $has_explicit_service_input ? $method_extra_services_input[$method_key] : $available_service_ids;
+			$has_legacy_service_input = !$has_explicit_service_input && $legacy_method_key !== '' && is_array($method_extra_services_input) && array_key_exists($legacy_method_key, $method_extra_services_input);
+			$selected_service_ids = $has_explicit_service_input ? $method_extra_services_input[$method_key] : ($has_legacy_service_input ? $method_extra_services_input[$legacy_method_key] : $available_service_ids);
 			$selected_service_ids = is_array($selected_service_ids) ? $selected_service_ids : array();
 			$output['method_extra_services'][$method_key] = array();
 			foreach ($selected_service_ids as $selected_service_id) {
@@ -206,6 +239,14 @@ class LP_Cargonizer_Settings_Service {
 				$clean_key = sanitize_text_field($method_key);
 				if ($clean_key !== '' && isset($available_map[$clean_key])) {
 					$output['enabled_methods'][] = $clean_key;
+					continue;
+				}
+				if ($clean_key !== '' && isset($legacy_method_default_key_map[$clean_key])) {
+					$output['enabled_methods'][] = $legacy_method_default_key_map[$clean_key];
+					continue;
+				}
+				if ($clean_key !== '' && isset($legacy_method_single_key_map[$clean_key])) {
+					$output['enabled_methods'][] = $legacy_method_single_key_map[$clean_key];
 				}
 			}
 		}
@@ -216,6 +257,13 @@ class LP_Cargonizer_Settings_Service {
 			$enabled_map = array_fill_keys($output['enabled_methods'], true);
 			foreach ($input['method_discounts'] as $method_key => $discount_value) {
 				$clean_key = sanitize_text_field((string) $method_key);
+				if ($clean_key !== '' && !isset($available_map[$clean_key])) {
+					if (isset($legacy_method_default_key_map[$clean_key])) {
+						$clean_key = $legacy_method_default_key_map[$clean_key];
+					} elseif (isset($legacy_method_single_key_map[$clean_key])) {
+						$clean_key = $legacy_method_single_key_map[$clean_key];
+					}
+				}
 				if ($clean_key === '' || !isset($available_map[$clean_key]) || !isset($enabled_map[$clean_key])) {
 					continue;
 				}
@@ -228,6 +276,13 @@ class LP_Cargonizer_Settings_Service {
 		$enabled_map = array_fill_keys($output['enabled_methods'], true);
 		foreach ($method_pricing_input as $method_key => $pricing) {
 			$clean_key = sanitize_text_field((string) $method_key);
+			if ($clean_key !== '' && !isset($available_map[$clean_key])) {
+				if (isset($legacy_method_default_key_map[$clean_key])) {
+					$clean_key = $legacy_method_default_key_map[$clean_key];
+				} elseif (isset($legacy_method_single_key_map[$clean_key])) {
+					$clean_key = $legacy_method_single_key_map[$clean_key];
+				}
+			}
 			if ($clean_key === '' || !isset($available_map[$clean_key]) || !isset($enabled_map[$clean_key])) {
 				continue;
 			}

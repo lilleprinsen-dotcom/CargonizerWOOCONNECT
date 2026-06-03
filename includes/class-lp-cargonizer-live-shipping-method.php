@@ -638,6 +638,9 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 		$available = $this->settings_service->ensure_internal_manual_methods($available);
 		$method_pricing = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
 		$enabled_map = $this->settings_service->get_enabled_method_map();
+		$warehouse_profiles = isset($settings['warehouse_profiles']) && is_array($settings['warehouse_profiles']) ? $settings['warehouse_profiles'] : array();
+		$default_sender_profile_id = isset($warehouse_profiles['default_profile_id']) ? sanitize_key((string) $warehouse_profiles['default_profile_id']) : '';
+		$default_sender_id = isset($settings['sender_id']) ? sanitize_text_field((string) $settings['sender_id']) : '';
 		$methods = array();
 		foreach ($available as $method) {
 			if (!is_array($method)) {
@@ -648,6 +651,14 @@ class LP_Cargonizer_Live_Shipping_Method extends WC_Shipping_Method {
 				continue;
 			}
 			if ($this->settings_service->is_manual_norgespakke_method($method)) {
+				continue;
+			}
+			$method_sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+			$method_sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+			if ($method_sender_profile_id !== '' && $default_sender_profile_id !== '' && $method_sender_profile_id !== $default_sender_profile_id) {
+				continue;
+			}
+			if ($method_sender_profile_id !== '' && $default_sender_profile_id === '' && $default_sender_id !== '' && $method_sender_id !== '' && $method_sender_id !== $default_sender_id) {
 				continue;
 			}
 			$pricing = isset($method_pricing[$key]) && is_array($method_pricing[$key]) ? $method_pricing[$key] : array();

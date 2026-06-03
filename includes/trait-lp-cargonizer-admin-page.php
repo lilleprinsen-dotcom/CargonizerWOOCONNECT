@@ -526,6 +526,84 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		return $warnings;
 	}
 
+	private function fetch_transport_agreements_for_sender_profiles($settings) {
+		$settings = is_array($settings) ? $settings : $this->get_settings();
+		$profiles = $this->get_sender_profiles_from_settings($settings);
+		$active_profiles = array();
+		foreach ($profiles as $profile) {
+			if (!is_array($profile) || empty($profile['sender_id'])) {
+				continue;
+			}
+			$active_profiles[] = $profile;
+		}
+
+		if (empty($active_profiles)) {
+			$fallback_sender_id = isset($settings['sender_id']) ? sanitize_text_field((string) $settings['sender_id']) : '';
+			if ($fallback_sender_id !== '') {
+				$active_profiles[] = array(
+					'profile_id' => 'default_sender',
+					'name' => 'Default sender',
+					'sender_id' => $fallback_sender_id,
+				);
+			}
+		}
+
+		$all_methods = array();
+		$results = array();
+		$errors = array();
+		$raw_by_sender = array();
+
+		foreach ($active_profiles as $profile) {
+			$sender_id = isset($profile['sender_id']) ? sanitize_text_field((string) $profile['sender_id']) : '';
+			$profile_id = isset($profile['profile_id']) ? sanitize_key((string) $profile['profile_id']) : '';
+			$profile_name = isset($profile['name']) ? sanitize_text_field((string) $profile['name']) : $sender_id;
+			if ($sender_id === '') {
+				continue;
+			}
+
+			$result = $this->fetch_transport_agreements($sender_id);
+			$results[] = array(
+				'profile_id' => $profile_id,
+				'profile_name' => $profile_name,
+				'sender_id' => $sender_id,
+				'success' => !empty($result['success']),
+				'message' => isset($result['message']) ? (string) $result['message'] : '',
+				'status' => isset($result['status']) ? (int) $result['status'] : 0,
+				'agreement_count' => !empty($result['data']) && is_array($result['data']) ? count($result['data']) : 0,
+			);
+			$raw_by_sender[$profile_id !== '' ? $profile_id : $sender_id] = array(
+				'label' => trim($profile_name . ' (' . $sender_id . ')'),
+				'raw' => isset($result['raw']) ? (string) $result['raw'] : '',
+			);
+
+			if (empty($result['success'])) {
+				$errors[] = trim(($profile_name !== '' ? $profile_name : 'Sender') . ' (' . $sender_id . '): ' . (isset($result['message']) ? (string) $result['message'] : 'Ukjent feil'));
+				continue;
+			}
+
+			$all_methods = array_merge($all_methods, $this->flatten_shipping_methods(isset($result['data']) ? $result['data'] : array(), $profile));
+		}
+
+		if (!empty($errors)) {
+			return array(
+				'success' => false,
+				'message' => 'Kunne ikke hente fraktavtaler for alle senderadresser. Eksisterende metodevalg er beholdt. ' . implode(' | ', $errors),
+				'methods' => array(),
+				'results' => $results,
+				'raw_by_sender' => $raw_by_sender,
+			);
+		}
+
+		$all_methods = $this->ensure_internal_manual_methods($all_methods);
+		return array(
+			'success' => true,
+			'message' => 'Fraktmetoder ble hentet for ' . count($active_profiles) . ' senderadresse(r). Velg hvilke som skal være tilgjengelige og lagre innstillingene.',
+			'methods' => $all_methods,
+			'results' => $results,
+			'raw_by_sender' => $raw_by_sender,
+		);
+	}
+
 	private function get_live_checkout_quote_debug_payload($status_context) {
 		$status_context = is_array($status_context) ? $status_context : array();
 		$destination = isset($status_context['destination']) && is_array($status_context['destination']) ? $status_context['destination'] : array();
@@ -897,7 +975,11 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			&& isset($_POST['_wpnonce'])
 			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_FETCH)
 		) {
-			$result = $this->fetch_transport_agreements();
+			$method_fetch_settings = $settings;
+			if (isset($_POST['lp_cargonizer_warehouse_profiles']) && is_array($_POST['lp_cargonizer_warehouse_profiles'])) {
+				$method_fetch_settings['warehouse_profiles'] = wp_unslash($_POST['lp_cargonizer_warehouse_profiles']);
+			}
+			$result = $this->fetch_transport_agreements_for_sender_profiles($method_fetch_settings);
 		}
 
 
@@ -910,32 +992,40 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				|| wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_FETCH)
 			)
 		) {
-			$method_refresh = $this->fetch_transport_agreements();
+			$method_fetch_settings = $settings;
+			if (isset($_POST['lp_cargonizer_warehouse_profiles']) && is_array($_POST['lp_cargonizer_warehouse_profiles'])) {
+				$method_fetch_settings['warehouse_profiles'] = wp_unslash($_POST['lp_cargonizer_warehouse_profiles']);
+			}
+			$method_refresh = $this->fetch_transport_agreements_for_sender_profiles($method_fetch_settings);
 			if ($method_refresh['success']) {
-				$available_methods = $this->ensure_internal_manual_methods($this->flatten_shipping_methods($method_refresh['data']));
 				$posted_enabled_methods = isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods'])
 					? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods']))
 					: null;
-				$enabled_map = array();
-				$enabled_source = is_array($posted_enabled_methods)
-					? $posted_enabled_methods
-					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array());
-				foreach ($enabled_source as $saved_key) {
-						$enabled_map[(string) $saved_key] = true;
-				}
-				$new_enabled = array();
-				foreach ($available_methods as $method) {
-					$key = isset($method['key']) ? (string) $method['key'] : '';
-					if ($key !== '' && isset($enabled_map[$key])) {
-						$new_enabled[] = $key;
+
+				if (isset($method_fetch_settings['warehouse_profiles']) && is_array($method_fetch_settings['warehouse_profiles'])) {
+					$settings['warehouse_profiles'] = $method_fetch_settings['warehouse_profiles'];
+					if (!empty($settings['warehouse_profiles']['default_profile_id']) && !empty($settings['warehouse_profiles']['profiles']) && is_array($settings['warehouse_profiles']['profiles'])) {
+						$posted_default_sender_profile_id = sanitize_key((string) $settings['warehouse_profiles']['default_profile_id']);
+						foreach ($settings['warehouse_profiles']['profiles'] as $posted_sender_profile) {
+							if (!is_array($posted_sender_profile)) {
+								continue;
+							}
+							$posted_sender_profile_id = isset($posted_sender_profile['profile_id']) ? sanitize_key((string) $posted_sender_profile['profile_id']) : '';
+							$posted_sender_id = isset($posted_sender_profile['sender_id']) ? sanitize_text_field((string) $posted_sender_profile['sender_id']) : '';
+							if ($posted_sender_profile_id !== '' && $posted_sender_profile_id === $posted_default_sender_profile_id && $posted_sender_id !== '') {
+								$settings['sender_id'] = $posted_sender_id;
+								break;
+							}
+						}
 					}
 				}
-
-				$settings['available_methods'] = $available_methods;
-				$settings['enabled_methods'] = $new_enabled;
+				$settings['available_methods'] = isset($method_refresh['methods']) && is_array($method_refresh['methods']) ? $method_refresh['methods'] : array();
+				$settings['enabled_methods'] = is_array($posted_enabled_methods)
+					? $posted_enabled_methods
+					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array());
 				update_option(self::OPTION_KEY, $this->sanitize_settings($settings));
 				$settings = $this->get_settings();
-				echo '<div class="notice notice-success"><p>Fraktmetoder ble hentet. Velg hvilke som skal være tilgjengelige og lagre innstillingene.</p></div>';
+				echo '<div class="notice notice-success"><p>' . esc_html(isset($method_refresh['message']) ? $method_refresh['message'] : 'Fraktmetoder ble hentet.') . '</p></div>';
 			} else {
 				echo '<div class="notice notice-error"><p>' . esc_html($method_refresh['message']) . '</p></div>';
 			}
@@ -1797,14 +1887,18 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
 							$agreement_id = isset($method['agreement_id']) ? trim((string) $method['agreement_id']) : '';
 							$agreement_name = isset($method['agreement_name']) ? trim((string) $method['agreement_name']) : '';
+							$sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+							$sender_profile_name = isset($method['sender_profile_name']) ? trim((string) $method['sender_profile_name']) : '';
+							$sender_id = isset($method['sender_id']) ? trim((string) $method['sender_id']) : '';
+							$sender_group_key = $sender_profile_id !== '' ? $sender_profile_id : 'sender_default';
 							if ($is_manual_norgespakke_method) {
 								$group_key = 'manual_norgespakke';
 							} elseif ($agreement_id !== '') {
-								$group_key = 'agreement_id:' . $agreement_id;
+								$group_key = $sender_group_key . ':agreement_id:' . $agreement_id;
 							} elseif ($agreement_name !== '') {
-								$group_key = 'agreement_name:' . $agreement_name;
+								$group_key = $sender_group_key . ':agreement_name:' . $agreement_name;
 							} else {
-								$group_key = 'agreement_unknown';
+								$group_key = $sender_group_key . ':agreement_unknown';
 							}
 							if (!isset($method_groups[$group_key])) {
 								$agreement_description = isset($method['agreement_description']) ? trim((string) $method['agreement_description']) : '';
@@ -1815,6 +1909,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 								$method_groups[$group_key] = array(
 									'group_key' => $group_key,
 									'label' => $label,
+									'sender_label' => trim($sender_profile_name . ($sender_id !== '' ? ' (' . $sender_id . ')' : '')),
 									'agreement_number' => isset($method['agreement_number']) ? trim((string) $method['agreement_number']) : '',
 									'carriers' => array(),
 									'methods' => array(),
@@ -1850,6 +1945,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 								} elseif (count($carrier_names) > 1) {
 									$carrier_label = 'flere transportører';
 								}
+								$sender_label = isset($group['sender_label']) ? trim((string) $group['sender_label']) : '';
 								$summary_label = $group['label'] . ' (' . $enabled_count . '/' . $total_count . ' aktive)';
 								?>
 								<details class="lp-cargonizer-method-group" <?php echo $group_open ? 'open' : ''; ?> style="border:1px solid #dcdcde;border-radius:4px;background:#fff;margin-bottom:12px;">
@@ -1861,6 +1957,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 											<?php endif; ?>
 											<?php if ($carrier_label !== '') : ?>
 												<?php echo esc_html('Transportør: ' . $carrier_label); ?>
+											<?php endif; ?>
+											<?php if ($sender_label !== '') : ?>
+												<?php echo esc_html(($carrier_label !== '' || $group['agreement_number'] !== '') ? ' / ' : ''); ?><?php echo esc_html('Sender: ' . $sender_label); ?>
 											<?php endif; ?>
 										</small>
 									</summary>
@@ -1888,6 +1987,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 											$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
 											$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
 											$method_services = isset($method['services']) && is_array($method['services']) ? $method['services'] : array();
+											$method_sender_label = trim((isset($method['sender_profile_name']) ? (string) $method['sender_profile_name'] : '') . (!empty($method['sender_id']) ? ' (' . (string) $method['sender_id'] . ')' : ''));
 											$all_method_service_ids = array();
 											foreach ($method_services as $method_service) {
 												if (!is_array($method_service)) {
@@ -1910,6 +2010,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 													<strong><?php echo esc_html(isset($method['label']) ? $method['label'] : 'Ukjent metode'); ?></strong><br>
 													<small>
 														Transportør: <?php echo esc_html(isset($method['carrier_name']) && $method['carrier_name'] !== '' ? $method['carrier_name'] : '—'); ?><?php echo esc_html(isset($method['carrier_id']) && $method['carrier_id'] !== '' ? ' (' . $method['carrier_id'] . ')' : ''); ?> /
+														Sender: <?php echo esc_html($method_sender_label !== '' ? $method_sender_label : 'Standard'); ?> /
 														Fraktavtalebeskrivelse: <?php echo esc_html(isset($method['agreement_description']) && $method['agreement_description'] !== '' ? $method['agreement_description'] : (isset($method['agreement_name']) ? $method['agreement_name'] : '—')); ?> /
 														Fraktavtalenummer: <?php echo esc_html(isset($method['agreement_number']) && $method['agreement_number'] !== '' ? $method['agreement_number'] : '—'); ?> /
 														Agreement ID: <?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?> /
@@ -2625,56 +2726,72 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 					<?php if ($result['success']) : ?>
 						<div class="notice notice-success inline">
-							<p><?php echo esc_html($result['message']); ?> HTTP-status: <?php echo esc_html($result['status']); ?></p>
+							<p><?php echo esc_html($result['message']); ?></p>
 						</div>
 
-						<?php if (!empty($result['data'])) : ?>
-							<table class="widefat striped" style="margin-top:20px;">
+						<?php if (!empty($result['results']) && is_array($result['results'])) : ?>
+							<table class="widefat striped" style="margin-top:12px;max-width:900px;">
 								<thead>
 									<tr>
-									<th>Transport agreement ID</th>
-									<th>Transport agreement</th>
-									<th>Transportør / provider</th>
-									<th>Produkt ID</th>
-									<th>Produkt</th>
-									<th>Tjenester</th>
+										<th>Sender</th>
+										<th>Sender ID</th>
+										<th>Status</th>
+										<th>Fraktavtaler</th>
 									</tr>
 								</thead>
 								<tbody>
-									<?php foreach ($result['data'] as $agreement) : ?>
-										<?php if (!empty($agreement['products'])) : ?>
-											<?php foreach ($agreement['products'] as $product) : ?>
-												<tr>
-													<td><?php echo esc_html($agreement['agreement_id']); ?></td>
-													<td><?php echo esc_html($agreement['agreement_name']); ?></td>
-													<td><?php echo esc_html(!empty($agreement['carrier_name']) ? $agreement['carrier_name'] : '—'); ?><?php echo esc_html(!empty($agreement['carrier_id']) ? ' (' . $agreement['carrier_id'] . ')' : ''); ?></td>
-													<td><?php echo esc_html($product['product_id']); ?></td>
-													<td><?php echo esc_html($product['product_name']); ?></td>
-													<td>
-														<?php
-														if (!empty($product['services'])) {
-															$services = array();
-															foreach ($product['services'] as $service) {
-																$services[] = trim($service['service_name'] . ' (' . $service['service_id'] . ')');
-															}
-															echo esc_html(implode(', ', $services));
-														} else {
-															echo '—';
-														}
-														?>
-													</td>
-												</tr>
-											<?php endforeach; ?>
-										<?php else : ?>
+									<?php foreach ($result['results'] as $sender_result) : ?>
+										<tr>
+											<td><?php echo esc_html(isset($sender_result['profile_name']) ? $sender_result['profile_name'] : '—'); ?></td>
+											<td><?php echo esc_html(isset($sender_result['sender_id']) ? $sender_result['sender_id'] : '—'); ?></td>
+											<td><?php echo !empty($sender_result['success']) ? '<span style="color:#125228;">OK</span>' : '<span style="color:#b32d2e;">Feilet</span>'; ?></td>
+											<td><?php echo esc_html(isset($sender_result['agreement_count']) ? (string) $sender_result['agreement_count'] : '0'); ?></td>
+										</tr>
+									<?php endforeach; ?>
+								</tbody>
+							</table>
+						<?php endif; ?>
+
+						<?php if (!empty($result['methods']) && is_array($result['methods'])) : ?>
+							<table class="widefat striped" style="margin-top:20px;">
+								<thead>
+									<tr>
+										<th>Sender</th>
+										<th>Transport agreement ID</th>
+										<th>Transport agreement</th>
+										<th>Transportør / provider</th>
+										<th>Produkt ID</th>
+										<th>Produkt</th>
+										<th>Tjenester</th>
+									</tr>
+								</thead>
+								<tbody>
+									<?php foreach ($result['methods'] as $method) : ?>
+										<?php if ($this->is_manual_norgespakke_method($method)) { continue; } ?>
 											<tr>
-												<td><?php echo esc_html($agreement['agreement_id']); ?></td>
-												<td><?php echo esc_html($agreement['agreement_name']); ?></td>
-												<td><?php echo esc_html(!empty($agreement['carrier_name']) ? $agreement['carrier_name'] : '—'); ?><?php echo esc_html(!empty($agreement['carrier_id']) ? ' (' . $agreement['carrier_id'] . ')' : ''); ?></td>
-												<td>—</td>
-												<td>—</td>
-												<td>—</td>
+												<td><?php echo esc_html(trim((isset($method['sender_profile_name']) ? $method['sender_profile_name'] : '') . (!empty($method['sender_id']) ? ' (' . $method['sender_id'] . ')' : '')) ?: '—'); ?></td>
+												<td><?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?></td>
+												<td><?php echo esc_html(isset($method['agreement_name']) ? $method['agreement_name'] : '—'); ?></td>
+												<td><?php echo esc_html(!empty($method['carrier_name']) ? $method['carrier_name'] : '—'); ?><?php echo esc_html(!empty($method['carrier_id']) ? ' (' . $method['carrier_id'] . ')' : ''); ?></td>
+												<td><?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?></td>
+												<td><?php echo esc_html(isset($method['product_name']) ? $method['product_name'] : '—'); ?></td>
+												<td>
+													<?php
+													if (!empty($method['services']) && is_array($method['services'])) {
+														$services = array();
+														foreach ($method['services'] as $service) {
+															if (!is_array($service)) {
+																continue;
+															}
+															$services[] = trim((isset($service['service_name']) ? $service['service_name'] : '') . ' (' . (isset($service['service_id']) ? $service['service_id'] : '') . ')');
+														}
+														echo esc_html(implode(', ', array_filter($services, 'strlen')));
+													} else {
+														echo '—';
+													}
+													?>
+												</td>
 											</tr>
-										<?php endif; ?>
 									<?php endforeach; ?>
 								</tbody>
 							</table>
@@ -2684,7 +2801,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 
 						<details style="margin-top:20px;">
 							<summary><strong>Vis rå XML-respons</strong></summary>
-							<pre style="white-space:pre-wrap;background:#f6f7f7;padding:15px;border:1px solid #ddd;max-height:500px;overflow:auto;"><?php echo esc_html($result['raw']); ?></pre>
+							<?php if (!empty($result['raw_by_sender']) && is_array($result['raw_by_sender'])) : ?>
+								<?php foreach ($result['raw_by_sender'] as $sender_raw) : ?>
+									<h4><?php echo esc_html(isset($sender_raw['label']) ? $sender_raw['label'] : 'Sender'); ?></h4>
+									<pre style="white-space:pre-wrap;background:#f6f7f7;padding:15px;border:1px solid #ddd;max-height:500px;overflow:auto;"><?php echo esc_html(isset($sender_raw['raw']) ? $sender_raw['raw'] : ''); ?></pre>
+								<?php endforeach; ?>
+							<?php endif; ?>
 						</details>
 
 					<?php else : ?>
@@ -2692,10 +2814,17 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							<p><?php echo esc_html($result['message']); ?></p>
 						</div>
 
-						<?php if (!empty($result['raw'])) : ?>
+						<?php if (!empty($result['raw']) || (!empty($result['raw_by_sender']) && is_array($result['raw_by_sender']))) : ?>
 							<details style="margin-top:20px;">
 								<summary><strong>Vis respons fra Cargonizer</strong></summary>
-								<pre style="white-space:pre-wrap;background:#f6f7f7;padding:15px;border:1px solid #ddd;max-height:500px;overflow:auto;"><?php echo esc_html($result['raw']); ?></pre>
+								<?php if (!empty($result['raw_by_sender']) && is_array($result['raw_by_sender'])) : ?>
+									<?php foreach ($result['raw_by_sender'] as $sender_raw) : ?>
+										<h4><?php echo esc_html(isset($sender_raw['label']) ? $sender_raw['label'] : 'Sender'); ?></h4>
+										<pre style="white-space:pre-wrap;background:#f6f7f7;padding:15px;border:1px solid #ddd;max-height:500px;overflow:auto;"><?php echo esc_html(isset($sender_raw['raw']) ? $sender_raw['raw'] : ''); ?></pre>
+									<?php endforeach; ?>
+								<?php else : ?>
+									<pre style="white-space:pre-wrap;background:#f6f7f7;padding:15px;border:1px solid #ddd;max-height:500px;overflow:auto;"><?php echo esc_html($result['raw']); ?></pre>
+								<?php endif; ?>
 							</details>
 						<?php endif; ?>
 					<?php endif; ?>

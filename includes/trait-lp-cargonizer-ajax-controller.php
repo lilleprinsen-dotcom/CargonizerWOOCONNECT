@@ -955,6 +955,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$payload = array(
 			'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
+			'sender_profile_id' => isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '',
+			'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
+			'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
 			'agreement_id' => $agreement_id,
 			'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 			'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -1170,11 +1173,13 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		$clean_packages = $this->sanitize_posted_packages($packages);
+		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
 		$method_payload = $this->sanitize_posted_method_payload($methods[0]);
 		$notify_email_to_consignee = isset($_POST['notify_email_to_consignee']) ? (bool) $this->sanitize_checkbox_value(wp_unslash($_POST['notify_email_to_consignee'])) : false;
-		$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
-		if (!isset($enabled_map[$method_key])) {
-			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert i Cargonizer-innstillingene.'), 400);
+		$method_key = $this->normalize_method_key_for_sender_profile($method_payload, $warehouse_profile);
+		$method_payload['key'] = $method_key;
+		if (!isset($enabled_map[$method_key]) || !$this->method_matches_selected_sender_profile($method_payload, $warehouse_profile)) {
+			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt eller hent/aktiver fraktmetoder i Cargonizer-innstillingene.'), 400);
 		}
 
 		if ($method_payload['sms_service_id'] === '') {
@@ -1204,7 +1209,6 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
 		}
 
-		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
 		$sender_id_override = isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '';
 		$method_payload['sender_id_override'] = $sender_id_override;
 		$method_payload['warehouse_profile_id'] = isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '';
@@ -1481,6 +1485,82 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return !empty($profiles[0]) ? $profiles[0] : array();
 	}
 
+	private function method_matches_selected_sender_profile($method, $warehouse_profile) {
+		$method = is_array($method) ? $method : array();
+		if ($this->is_manual_norgespakke_method($method)) {
+			return true;
+		}
+
+		$selected_profile_id = isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '';
+		$method_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+		if ($method_profile_id === '' && isset($method['warehouse_profile_id'])) {
+			$method_profile_id = sanitize_key((string) $method['warehouse_profile_id']);
+		}
+		if ($method_profile_id === '' && isset($method['key']) && strpos((string) $method['key'], '::') !== false) {
+			$key_parts = explode('::', (string) $method['key'], 2);
+			$method_profile_id = sanitize_key((string) $key_parts[0]);
+		}
+
+		if ($method_profile_id !== '') {
+			return $selected_profile_id !== '' && $method_profile_id === $selected_profile_id;
+		}
+
+		$default_profile_id = $this->get_default_sender_profile_id();
+		return $selected_profile_id === '' || $default_profile_id === '' || $selected_profile_id === $default_profile_id;
+	}
+
+	private function normalize_method_key_for_sender_profile($method, $warehouse_profile) {
+		$method = is_array($method) ? $method : array();
+		if ($this->is_manual_norgespakke_method($method)) {
+			return self::MANUAL_NORGESPAKKE_KEY;
+		}
+
+		$profile_id = isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '';
+		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
+		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+		$legacy_key = implode('|', array($agreement_id, $product_id));
+		$key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
+		if ($key !== '' && ($profile_id === '' || $key !== $legacy_key)) {
+			return $key;
+		}
+		return $this->build_sender_method_key($agreement_id, $product_id, $profile_id);
+	}
+
+	private function find_enabled_method_for_sender_profile($method, $warehouse_profile, $enabled_map = null) {
+		$method = is_array($method) ? $method : array();
+		$settings = $this->get_settings();
+		$enabled_map = is_array($enabled_map) ? $enabled_map : $this->get_enabled_method_map();
+		$available_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+		$available_methods = $this->ensure_internal_manual_methods($available_methods);
+		$posted_key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
+		if ($posted_key === '' && isset($method['method_key'])) {
+			$posted_key = sanitize_text_field((string) $method['method_key']);
+		}
+		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
+		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+
+		foreach ($available_methods as $available_method) {
+			if (!is_array($available_method)) {
+				continue;
+			}
+			$available_key = $this->normalize_method_key_for_sender_profile($available_method, $warehouse_profile);
+			if ($available_key === '' || !isset($enabled_map[$available_key])) {
+				continue;
+			}
+			if (!$this->method_matches_selected_sender_profile($available_method, $warehouse_profile)) {
+				continue;
+			}
+			$available_agreement_id = isset($available_method['agreement_id']) ? sanitize_text_field((string) $available_method['agreement_id']) : '';
+			$available_product_id = isset($available_method['product_id']) ? sanitize_text_field((string) $available_method['product_id']) : '';
+			if (($posted_key !== '' && $posted_key === $available_key) || ($agreement_id !== '' && $product_id !== '' && $agreement_id === $available_agreement_id && $product_id === $available_product_id)) {
+				$available_method['key'] = $available_key;
+				return $available_method;
+			}
+		}
+
+		return array();
+	}
+
 	public function ajax_get_shipping_options() {
 		if (!current_user_can('manage_woocommerce')) {
 			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
@@ -1492,17 +1572,24 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		$settings = $this->get_settings();
+		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
 		$available_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
 		$available_methods = $this->ensure_internal_manual_methods($available_methods);
 
 		$allowed_options = $this->filter_options_by_enabled_methods($available_methods);
+		$allowed_options = array_values(array_filter($allowed_options, function($method) use ($warehouse_profile) {
+			return $this->method_matches_selected_sender_profile($method, $warehouse_profile);
+		}));
 		if (empty($allowed_options)) {
-			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert. Gå til WooCommerce → Cargonizer og aktiver minst én fraktmetode.'), 400);
+			$sender_label = isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '';
+			$sender_id = isset($warehouse_profile['sender_id']) ? sanitize_text_field((string) $warehouse_profile['sender_id']) : '';
+			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert for valgt senderadresse' . ($sender_label !== '' || $sender_id !== '' ? ' (' . trim($sender_label . ' ' . ($sender_id !== '' ? $sender_id : '')) . ')' : '') . '. Gå til WooCommerce → Cargonizer, hent fraktmetoder og aktiver metodene for denne senderen.'), 400);
 		}
 
 		$method_pricing = $this->get_enabled_method_pricing();
 		foreach ($allowed_options as &$option) {
-			$method_key = isset($option['key']) ? (string) $option['key'] : '';
+			$method_key = $this->normalize_method_key_for_sender_profile($option, $warehouse_profile);
+			$option['key'] = $method_key;
 			$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
 			$option['delivery_to_pickup_point'] = !empty($pricing['delivery_to_pickup_point']);
 			$option['delivery_to_home'] = !empty($pricing['delivery_to_home']);
@@ -1510,7 +1597,11 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 		unset($option);
 
-		wp_send_json_success(array('options' => $allowed_options));
+		wp_send_json_success(array(
+			'options' => $allowed_options,
+			'sender_profile_id' => isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '',
+			'sender_id' => isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '',
+		));
 	}
 
 	public function ajax_get_servicepartner_options() {
@@ -1534,6 +1625,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		$method = array(
+			'key' => isset($_POST['method_key']) ? sanitize_text_field(wp_unslash($_POST['method_key'])) : '',
 			'agreement_id' => $posted_agreement_id,
 			'product_id' => isset($_POST['product_id']) ? sanitize_text_field(wp_unslash($_POST['product_id'])) : '',
 			'carrier_id' => isset($_POST['carrier_id']) ? sanitize_text_field(wp_unslash($_POST['carrier_id'])) : '',
@@ -1546,6 +1638,27 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'sender_id_override' => $sender_id_override,
 			'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 		);
+
+		$enabled_method = $this->find_enabled_method_for_sender_profile($method, $warehouse_profile);
+		if (empty($enabled_method)) {
+			wp_send_json_error(array(
+				'message' => 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt etter bytte av sender.',
+				'debug' => array(
+					'method_key' => isset($method['key']) ? $method['key'] : '',
+					'agreement_id' => isset($method['agreement_id']) ? $method['agreement_id'] : '',
+					'product_id' => isset($method['product_id']) ? $method['product_id'] : '',
+					'sender_profile_id' => isset($warehouse_profile['profile_id']) ? $warehouse_profile['profile_id'] : '',
+				),
+			), 200);
+		}
+		$method = array_merge($enabled_method, array(
+			'country' => $method['country'],
+			'postcode' => $method['postcode'],
+			'city' => $method['city'],
+			'address' => $method['address'],
+			'sender_id_override' => $sender_id_override,
+			'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
+		));
 
 		if ($order) {
 			$recipient_country = $this->resolve_recipient_country_for_context($order, $method);
@@ -1700,6 +1813,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$sanitized_method_payload = $this->sanitize_posted_method_payload($method);
 			$method_payload = array(
 				'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
+				'sender_profile_id' => isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '',
+				'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
+				'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -1742,8 +1858,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'endpoint' => '/consignment_costs.xml',
 				'blocked_before_api' => false,
 			)));
-			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
-			if (!isset($enabled_map[$method_key])) {
+			$method_key = $this->normalize_method_key_for_sender_profile($method_payload, $warehouse_profile);
+			$method_payload['key'] = $method_key;
+			if (!isset($enabled_map[$method_key]) || !$this->method_matches_selected_sender_profile($method_payload, $warehouse_profile)) {
 				continue;
 			}
 			$has_allowed_methods = true;
@@ -1777,6 +1894,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$delivery_to_home = $this->is_method_explicitly_home_delivery($method_payload);
 
 			$item = array(
+				'method_key' => $method_key,
+				'key' => $method_key,
 				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
 				'agreement_id' => $method_payload['agreement_id'],
 				'agreement_name' => $method_payload['agreement_name'],
@@ -2260,6 +2379,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			}
 			$sanitized_method_payload = $this->sanitize_posted_method_payload($method);
 			$method_payload = array(
+				'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
+				'sender_profile_id' => isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '',
+				'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
+				'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -2283,10 +2406,11 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 				'warehouse_profile_name' => isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '',
 				);
-				$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+				$method_key = $this->normalize_method_key_for_sender_profile($method_payload, $warehouse_profile);
+				$method_payload['key'] = $method_key;
 				$method_payload['services'] = $this->filter_services_by_warehouse_availability($method_key, $method_payload['services']);
 				$method_payload['selected_service_ids'] = $this->filter_selected_service_ids_by_warehouse_availability($method_key, $method_payload['selected_service_ids'], $method_payload['services']);
-				if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
+				if (!isset($enabled_map[$method_key]) || !$this->method_matches_selected_sender_profile($method_payload, $warehouse_profile) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
 					continue;
 				}
 			if ($method_payload['sms_service_id'] === '') {
@@ -2313,6 +2437,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$pricing_config['handling_fee'] = round($manual_handling_fee + $bring_manual_handling_fee, 2);
 
 			$item = array(
+				'method_key' => $method_key,
+				'key' => $method_key,
 				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
 				'agreement_id' => $method_payload['agreement_id'],
 				'agreement_name' => $method_payload['agreement_name'],
@@ -2333,6 +2459,9 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'sms_service_name' => $method_payload['sms_service_name'],
+				'sender_profile_id' => isset($method_payload['warehouse_profile_id']) ? $method_payload['warehouse_profile_id'] : '',
+				'sender_profile_name' => isset($method_payload['warehouse_profile_name']) ? $method_payload['warehouse_profile_name'] : '',
+				'sender_id' => isset($method_payload['sender_id_override']) ? $method_payload['sender_id_override'] : '',
 				'requires_sms_service' => false,
 				'sms_service_missing' => false,
 				'sms_service_error' => '',
