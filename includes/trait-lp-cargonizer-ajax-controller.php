@@ -493,6 +493,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'packages' => is_array($packages) ? $packages : array(),
 			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
 			'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+			'servicepartner_selected_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
 			'use_sms_service' => !empty($method_payload['use_sms_service']),
 			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
 			'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
@@ -1003,6 +1004,8 @@ $servicepartner_selection_debug = array(
 			'postcode' => $order->get_shipping_postcode(),
 			'city' => $order->get_shipping_city(),
 			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
+			'email' => $order->get_billing_email(),
+			'phone' => method_exists($order, 'get_shipping_phone') && $order->get_shipping_phone() !== '' ? $order->get_shipping_phone() : $order->get_billing_phone(),
 		);
 
 		if ($recipient['name'] === '') {
@@ -1112,6 +1115,7 @@ $servicepartner_selection_debug = array(
 				'delivery_to_home' => $delivery_to_home,
 				'selected_servicepartner' => $method_payload['servicepartner'],
 				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+				'selected_servicepartner_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
 				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 				'servicepartner_auto_selected' => false,
 				'servicepartner_auto_selected_note' => '',
@@ -1208,6 +1212,7 @@ $servicepartner_selection_debug = array(
 				$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
 				$item['selected_servicepartner'] = $method_payload['servicepartner'];
 				$item['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+				$item['selected_servicepartner_option'] = isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array();
 				$item['servicepartner_selection_source'] = isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none';
 				$item['servicepartner_auto_selected'] = !empty($resolved_selection['servicepartner_auto_selected']);
 				$item['auto_selection_reason'] = isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '';
@@ -1328,6 +1333,7 @@ $servicepartner_selection_debug = array(
 				'packages' => $clean_packages,
 				'servicepartner' => $method_payload['servicepartner'],
 				'servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+				'servicepartner_selected_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'selected_service_ids' => isset($method_payload['selected_service_ids']) && is_array($method_payload['selected_service_ids']) ? $method_payload['selected_service_ids'] : array(),
@@ -1390,6 +1396,8 @@ $servicepartner_selection_debug = array(
 					if ($is_pickup_related && $method_payload['servicepartner'] === '') {
 						$item['human_error'] .= ' Valgt produkt ser ut til å være pickup point-relatert, og servicepartner er ikke valgt.';
 					}
+				} elseif ((strpos($combined_error_text, 'mobiltelefon') !== false || strpos($combined_error_text, 'mobile') !== false) && (strpos($combined_error_text, 'mottaker') !== false || strpos($combined_error_text, 'recipient') !== false || strpos($combined_error_text, 'consignee') !== false)) {
+					$item['human_error'] = 'Denne metoden krever mobiltelefonnummer på mottaker. Estimatoren sender billing/shipping phone som <mobile>; legg inn telefonnummer på ordren hvis feltet mangler.';
 				} elseif (strpos($combined_error_text, 'servicepartner') !== false && (strpos($combined_error_text, 'må angis') !== false || strpos($combined_error_text, 'must be specified') !== false || strpos($combined_error_text, 'missing') !== false)) {
 					$item['human_error'] = 'Denne metoden krever servicepartner. Hent servicepartnere og velg en verdi før du prøver igjen.';
 				} elseif ((strpos($combined_error_text, 'kolli') !== false || strpos($combined_error_text, 'package') !== false) && (strpos($combined_error_text, 'max') !== false || strpos($combined_error_text, '1') !== false || strpos($combined_error_text, 'one') !== false)) {
@@ -1403,6 +1411,7 @@ $servicepartner_selection_debug = array(
 						$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
 						$item['selected_servicepartner'] = $method_payload['servicepartner'];
 						$item['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+						$item['selected_servicepartner_option'] = isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array();
 						$item['servicepartner_selection_source'] = isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none';
 						$item['servicepartner_auto_selected'] = !empty($resolved_selection['servicepartner_auto_selected']);
 						$item['auto_selection_reason'] = isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '';
@@ -1546,6 +1555,8 @@ $servicepartner_selection_debug = array(
 			'postcode' => $order->get_shipping_postcode(),
 			'city' => $order->get_shipping_city(),
 			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
+			'email' => $order->get_billing_email(),
+			'phone' => method_exists($order, 'get_shipping_phone') && $order->get_shipping_phone() !== '' ? $order->get_shipping_phone() : $order->get_billing_phone(),
 		);
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
@@ -1627,6 +1638,7 @@ $servicepartner_selection_debug = array(
 				'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
 				'selected_servicepartner' => $method_payload['servicepartner'],
 				'selected_servicepartner_customer_number' => isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '',
+				'selected_servicepartner_option' => isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array(),
 				'servicepartner_selection_source' => $method_payload['servicepartner'] !== '' ? 'manual' : 'none',
 				'servicepartner_auto_selected' => false,
 				'servicepartner_auto_selected_note' => '',
@@ -1720,6 +1732,7 @@ $servicepartner_selection_debug = array(
 				$method_payload = $this->apply_servicepartner_resolution_to_method_payload($method_payload, $resolved_selection);
 				$item['selected_servicepartner'] = $method_payload['servicepartner'];
 				$item['selected_servicepartner_customer_number'] = isset($method_payload['servicepartner_customer_number']) ? $method_payload['servicepartner_customer_number'] : '';
+				$item['selected_servicepartner_option'] = isset($method_payload['servicepartner_selected_option']) && is_array($method_payload['servicepartner_selected_option']) ? $method_payload['servicepartner_selected_option'] : array();
 				$item['servicepartner_selection_source'] = isset($resolved_selection['servicepartner_selection_source']) ? $resolved_selection['servicepartner_selection_source'] : 'none';
 				$item['servicepartner_auto_selected'] = !empty($resolved_selection['servicepartner_auto_selected']);
 				$item['auto_selection_reason'] = isset($resolved_selection['auto_selection_reason']) ? $resolved_selection['auto_selection_reason'] : '';

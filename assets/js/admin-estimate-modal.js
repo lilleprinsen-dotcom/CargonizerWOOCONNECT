@@ -630,6 +630,86 @@
 				return null;
 			}
 
+			function findServicepartnerOption(row, value){
+				var selectedValue = value ? String(value) : '';
+				if (!row || !selectedValue) { return null; }
+				var selectedOption = row.selected_servicepartner_option || null;
+				if (selectedOption && selectedOption.value && String(selectedOption.value) === selectedValue) {
+					return selectedOption;
+				}
+				var options = Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
+				for (var i = 0; i < options.length; i++) {
+					var opt = options[i];
+					if (opt && opt.value && String(opt.value) === selectedValue) {
+						return opt;
+					}
+				}
+				return selectedOption || null;
+			}
+
+			function formatServicepartnerOptionLabel(option, fallbackValue){
+				var opt = option || {};
+				var label = opt.label ? String(opt.label) : '';
+				if (!label && opt.name) {
+					var locationParts = [];
+					if (opt.address1) { locationParts.push(String(opt.address1)); }
+					if (opt.postcode || opt.city) { locationParts.push(String((opt.postcode || '') + ' ' + (opt.city || '')).trim()); }
+					label = String(opt.name) + (locationParts.length ? ' – ' + locationParts.join(', ') : '');
+				}
+				if (!label && opt.raw) {
+					return formatServicepartnerOptionLabel(opt.raw, fallbackValue);
+				}
+				return label || fallbackValue || '—';
+			}
+
+			function formatServicepartnerDistance(option){
+				if (!option) { return ''; }
+				var distance = option.distance_meters;
+				if ((distance === undefined || distance === null || distance === '') && option.raw) {
+					distance = option.raw.distance_meters;
+				}
+				var parsed = parseFloat(distance);
+				if (isNaN(parsed)) { return ''; }
+				if (parsed >= 1000) {
+					return (Math.round((parsed / 1000) * 10) / 10) + ' km';
+				}
+				return Math.round(parsed) + ' m';
+			}
+
+			function buildServicepartnerOptionsHtml(options, selectedValue){
+				var html = '<option value="">Velg servicepartner…</option>';
+				(options || []).forEach(function(opt){
+					var value = (opt && opt.value) ? String(opt.value) : '';
+					var label = formatServicepartnerOptionLabel(opt, value);
+					var customerNumber = (opt && opt.customer_number) ? String(opt.customer_number) : '';
+					var distance = formatServicepartnerDistance(opt);
+					if (!value) { return; }
+					html += '<option value="'+esc(value)+'" data-customer-number="'+esc(customerNumber)+'" '+(selectedValue === value ? 'selected' : '')+'>'+esc(label + (distance ? ' (' + distance + ')' : ''))+'</option>';
+				});
+				return html;
+			}
+
+			function renderPickupPointPanel(row){
+				if (!methodLikelyNeedsServicepartner(row)) { return ''; }
+				var methodKey = methodKeyForRow(row);
+				var options = Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
+				var currentValue = row.selected_servicepartner ? String(row.selected_servicepartner) : '';
+				var selectedOption = findServicepartnerOption(row, currentValue);
+				var selectedLabel = currentValue ? formatServicepartnerOptionLabel(selectedOption, currentValue) : 'Ingen hentested valgt';
+				var selectedDistance = formatServicepartnerDistance(selectedOption);
+				var source = row.servicepartner_auto_selected
+					? 'Nærmeste hentested valgt automatisk'
+					: (row.servicepartner_selection_source === 'manual' ? 'Valgt hentested' : 'Valgt hentested');
+				var statusColor = currentValue ? '#125228' : '#8a4b00';
+				var optionsHtml = buildServicepartnerOptionsHtml(options, currentValue);
+				var fetchText = options.length ? 'Oppdater hentesteder' : 'Hent hentesteder';
+				return '<div style="margin-top:8px;padding:8px 10px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;font-size:12px;line-height:1.45;">' +
+					'<div style="font-weight:600;color:'+statusColor+';">'+esc(source)+': '+esc(selectedLabel)+(selectedDistance ? ' <span style="font-weight:400;color:#646970;">'+esc(selectedDistance)+'</span>' : '')+'</div>' +
+					(options.length ? '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><select class="lp-servicepartner-select" data-method-key="'+esc(methodKey)+'" style="min-width:260px;">'+optionsHtml+'</select><button type="button" class="button button-small lp-method-retry" data-method-key="'+esc(methodKey)+'">Estimer med valgt hentested</button></div>' : '') +
+					'<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="'+esc(methodKey)+'">'+esc(fetchText)+'</button><span style="color:#646970;">'+esc(options.length ? (options.length + ' hentesteder tilgjengelig.') : 'Ingen alternative hentesteder lastet i resultatet.')+'</span></div>' +
+				'</div>';
+			}
+
 			function getFetchFailureDetails(payload, debug){
 				var message = (payload && payload.data && payload.data.message) ? String(payload.data.message) : 'Ukjent feil';
 				var statusText = debug && debug.http_status ? ' (HTTP ' + debug.http_status + ')' : '';
@@ -970,23 +1050,15 @@
 			function renderServicepartnerControls(row){
 				var needsPartner = needsServicepartner(row);
 				var needsSms = needsSmsService(row);
+				var pickupPanel = renderPickupPointPanel(row);
 				if (!needsPartner && !needsSms) {
 					var baseMessage = row.human_error ? (row.error ? row.error + ' — ' + row.human_error : row.human_error) : (row.error || 'OK');
-					return '<span style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(baseMessage)+'</span>' + renderEstimateDebug(row);
+					return '<span style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(baseMessage)+'</span>' + pickupPanel + renderEstimateDebug(row);
 				}
 				var methodKey = methodKeyForRow(row);
 				var options = Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
 				var currentValue = row.selected_servicepartner || '';
-				var optionsHtml = '<option value="">Velg servicepartner…</option>';
-				if (options.length) {
-					options.forEach(function(opt){
-						var value = (opt && opt.value) ? String(opt.value) : '';
-						var label = (opt && opt.label) ? String(opt.label) : value;
-						var customerNumber = (opt && opt.customer_number) ? String(opt.customer_number) : '';
-						if (!value) { return; }
-						optionsHtml += '<option value="'+esc(value)+'" data-customer-number="'+esc(customerNumber)+'" '+(currentValue === value ? 'selected' : '')+'>'+esc(label)+'</option>';
-					});
-				}
+				var optionsHtml = buildServicepartnerOptionsHtml(options, currentValue);
 				var infoParts = [];
 				var partnerDebug = row.servicepartner_fetch || {};
 				if (needsPartner) {
@@ -1042,6 +1114,18 @@
 				latestEstimateResults = latestEstimateResults.map(function(row){
 					if (methodKeyForRow(row) === key) {
 						replaced = true;
+						if ((!Array.isArray(updatedRow.servicepartner_options) || !updatedRow.servicepartner_options.length) && Array.isArray(row.servicepartner_options) && row.servicepartner_options.length) {
+							updatedRow.servicepartner_options = row.servicepartner_options;
+						}
+						if ((!updatedRow.servicepartner_fetch || !Object.keys(updatedRow.servicepartner_fetch).length) && row.servicepartner_fetch) {
+							updatedRow.servicepartner_fetch = row.servicepartner_fetch;
+						}
+						if ((!updatedRow.selected_servicepartner_option || !Object.keys(updatedRow.selected_servicepartner_option).length) && updatedRow.selected_servicepartner) {
+							var preservedOption = findServicepartnerOption(row, updatedRow.selected_servicepartner);
+							if (preservedOption) {
+								updatedRow.selected_servicepartner_option = preservedOption;
+							}
+						}
 						return updatedRow;
 					}
 					return row;
@@ -1067,13 +1151,17 @@
 							agreement_name: latestEstimateResults[j].agreement_name || '',
 							agreement_description: latestEstimateResults[j].agreement_description || '',
 							agreement_number: latestEstimateResults[j].agreement_number || '',
-								carrier_id: latestEstimateResults[j].carrier_id || '',
-								carrier_name: latestEstimateResults[j].carrier_name || '',
-								product_id: latestEstimateResults[j].product_id || '',
-								product_name: latestEstimateResults[j].product_name || '',
-								sms_service_id: latestEstimateResults[j].sms_service_id || '',
-								sms_service_name: latestEstimateResults[j].sms_service_name || ''
-							};
+							carrier_id: latestEstimateResults[j].carrier_id || '',
+							carrier_name: latestEstimateResults[j].carrier_name || '',
+							product_id: latestEstimateResults[j].product_id || '',
+							product_name: latestEstimateResults[j].product_name || '',
+							delivery_to_pickup_point: !!latestEstimateResults[j].delivery_to_pickup_point,
+							delivery_to_home: !!latestEstimateResults[j].delivery_to_home,
+							sms_service_id: latestEstimateResults[j].sms_service_id || '',
+							sms_service_name: latestEstimateResults[j].sms_service_name || '',
+							selected_service_ids: Array.isArray(latestEstimateResults[j].selected_service_ids) ? latestEstimateResults[j].selected_service_ids : [],
+							services: Array.isArray(latestEstimateResults[j].services) ? latestEstimateResults[j].services : []
+						};
 					}
 				}
 				return null;
@@ -1116,12 +1204,18 @@
 								var selectedServicepartner = row.selected_servicepartner ? String(row.selected_servicepartner) : '';
 								var hasManualSelection = !!row.servicepartner_user_selected || row.servicepartner_selection_source === 'manual';
 								if (selectedServicepartner) {
+									var matchedSelectedOption = null;
 									var stillExists = options.some(function(opt){
-										return opt && opt.value && String(opt.value) === selectedServicepartner;
+										var matches = opt && opt.value && String(opt.value) === selectedServicepartner;
+										if (matches) { matchedSelectedOption = opt; }
+										return matches;
 									});
 									if (!stillExists) {
 										row.selected_servicepartner = '';
 										row.selected_servicepartner_customer_number = '';
+										row.selected_servicepartner_option = {};
+									} else if (matchedSelectedOption) {
+										row.selected_servicepartner_option = matchedSelectedOption;
 									}
 								}
 								if (!hasManualSelection && !row.selected_servicepartner) {
@@ -1129,6 +1223,7 @@
 									if (defaultOption && defaultOption.value) {
 										row.selected_servicepartner = String(defaultOption.value);
 										row.selected_servicepartner_customer_number = defaultOption.customer_number ? String(defaultOption.customer_number) : '';
+										row.selected_servicepartner_option = defaultOption;
 										row.servicepartner_selection_source = 'automatic';
 										row.servicepartner_auto_selected = true;
 										row.auto_selection_reason = 'nearest_or_first_available_option';
@@ -1409,9 +1504,10 @@
 						row.optimization_state === 'done' &&
 						!!(row.optimization_debug && row.optimization_debug.optimization_changed_result);
 					var optimizedBreakdownHtml = showOptimizedBreakdown ? renderOptimizedShipmentBreakdown(row) : '';
+					var pickupPointHtml = renderPickupPointPanel(row);
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
-					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + multiShipmentInfo + optimizationInfo + optimizedBreakdownHtml + '</td>' +
+					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + pickupPointHtml + multiShipmentInfo + optimizationInfo + optimizedBreakdownHtml + '</td>' +
 					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(listPriceText)+'</td>' +
 					'<td>'+esc(discountPercentText)+'</td>' +
@@ -1434,11 +1530,12 @@
 					if (row.human_error) { debugFields.push('Forklaring: ' + row.human_error); }
 					if (row.parsed_error_message && row.parsed_error_message !== row.error) { debugFields.push('Parsed: ' + row.parsed_error_message); }
 					var debugText = debugFields.length ? debugFields.join(' | ') : '—';
+					var recoveryHtml = renderServicepartnerControls(row);
 					return '<tr>' +
 					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
 					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(row.status || 'failed')+'</td>' +
-					'<td>'+esc(row.error || row.parsed_error_message || 'Ukjent feil')+'</td>' +
+					'<td>'+recoveryHtml+'</td>' +
 					'<td>'+esc(debugText)+'</td>' +
 				'</tr>';
 			}
@@ -1713,16 +1810,39 @@
 				return { packages: colli.payload.packages, methods: methods };
 			}
 
+			function appendFormValue(form, key, value){
+				if (value === undefined || value === null) {
+					return;
+				}
+				if (Array.isArray(value)) {
+					value.forEach(function(child, idx){
+						appendFormValue(form, key + '[' + idx + ']', child);
+					});
+					return;
+				}
+				if (typeof value === 'object') {
+					Object.keys(value).forEach(function(childKey){
+						appendFormValue(form, key + '[' + childKey + ']', value[childKey]);
+					});
+					return;
+				}
+				if (typeof value === 'boolean') {
+					form.append(key, value ? '1' : '0');
+					return;
+				}
+				form.append(key, value);
+			}
+
 			function appendEstimatePayload(form, packages, methods){
 				form.append('order_id', currentOrderId);
 				packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){
-						form.append('packages['+idx+']['+key+']', pkg[key]);
+						appendFormValue(form, 'packages['+idx+']['+key+']', pkg[key]);
 					});
 				});
 				methods.forEach(function(method, idx){
 					Object.keys(method).forEach(function(key){
-						form.append('methods['+idx+']['+key+']', method[key]);
+						appendFormValue(form, 'methods['+idx+']['+key+']', method[key]);
 					});
 				});
 			}
@@ -1987,6 +2107,7 @@
 						if (methodKeyForRow(row) === methodKey) {
 							row.selected_servicepartner = value;
 							row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(bookingServicepartnerSelect);
+							row.selected_servicepartner_option = resolveServicepartnerSelectedOption(methodKey, value) || {};
 							row.servicepartner_selection_source = value ? 'manual' : 'none';
 							row.servicepartner_user_selected = !!value;
 							row.servicepartner_auto_selected = false;
@@ -2041,6 +2162,7 @@
 					if (methodKeyForRow(row) === methodKey) {
 						row.selected_servicepartner = select.value || '';
 						row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(select);
+						row.selected_servicepartner_option = resolveServicepartnerSelectedOption(methodKey, select.value || '') || {};
 						row.servicepartner_selection_source = select.value ? 'manual' : 'none';
 						row.servicepartner_user_selected = !!select.value;
 						row.servicepartner_auto_selected = false;
@@ -2060,6 +2182,7 @@
 							if (methodKeyForRow(row) === methodKey) {
 								row.selected_servicepartner = value;
 								row.selected_servicepartner_customer_number = getSelectedServicepartnerCustomerNumber(select);
+								row.selected_servicepartner_option = resolveServicepartnerSelectedOption(methodKey, value) || {};
 								row.servicepartner_selection_source = value ? 'manual' : 'none';
 								row.servicepartner_user_selected = !!value;
 								row.servicepartner_auto_selected = false;

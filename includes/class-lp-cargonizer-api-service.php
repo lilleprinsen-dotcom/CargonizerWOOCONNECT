@@ -1552,11 +1552,23 @@ class LP_Cargonizer_Api_Service {
 		$consignee->addChild('postcode', (string) (isset($recipient['postcode']) ? $recipient['postcode'] : ''));
 		$consignee->addChild('city', (string) (isset($recipient['city']) ? $recipient['city'] : ''));
 		$consignee->addChild('country', (string) $country_resolution['normalized']);
+		$email = isset($recipient['email']) ? trim((string) $recipient['email']) : '';
+		if ($email !== '') {
+			$consignee->addChild('email', $email);
+		}
+		$mobile = isset($recipient['phone']) ? trim((string) $recipient['phone']) : '';
+		if ($mobile === '' && isset($recipient['mobile'])) {
+			$mobile = trim((string) $recipient['mobile']);
+		}
+		if ($mobile !== '') {
+			$consignee->addChild('mobile', $mobile);
+		}
 		error_log('LP Cargonizer: estimate payload summary ' . wp_json_encode(array(
 			'carrier' => isset($method['carrier']) ? sanitize_text_field((string) $method['carrier']) : '',
 			'product' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
 			'consignee' => array(
 				'postcode' => isset($recipient['postcode']) ? (string) $recipient['postcode'] : '',
+				'has_mobile' => $mobile !== '',
 			),
 			'service_partner' => array(
 				'number' => isset($servicepartner_selection['number']) ? (string) $servicepartner_selection['number'] : '',
