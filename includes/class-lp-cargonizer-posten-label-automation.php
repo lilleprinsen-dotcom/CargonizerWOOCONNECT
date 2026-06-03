@@ -93,6 +93,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_label_status_panel'), 20);
 		add_action('woocommerce_payment_complete', array($this, 'maybe_auto_queue_for_order'), 20, 1);
 		add_action('woocommerce_order_status_processing', array($this, 'maybe_auto_queue_for_order'), 20, 1);
+		add_action('woocommerce_order_status_cancelled', array($this, 'cancel_active_jobs_for_order'), 20, 2);
 	}
 
 	public function register_order_statuses() {
@@ -313,6 +314,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$order_id = (int) $order->get_id();
+		if (method_exists($order, 'get_status') && (string) $order->get_status() === 'cancelled') {
+			return new WP_Error('posten_job_order_cancelled', 'Posten etikettjobb kan ikke opprettes fordi WooCommerce-ordren er kansellert.');
+		}
 		$method_key = LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY;
 		$clean_packages = $this->sanitize_packages($packages);
 		if (is_wp_error($clean_packages)) {
@@ -475,6 +479,42 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 	}
 
+	public function cancel_active_jobs_for_order($order_id, $order = null) {
+		$order_id = absint($order_id);
+		if ($order_id < 1) {
+			return 0;
+		}
+
+		$this->maybe_install_table();
+		global $wpdb;
+		$table = $this->get_table_name();
+		$now = gmdate('Y-m-d H:i:s');
+		$message = 'WooCommerce-ordren ble kansellert.';
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET status = %s, last_error = %s, failure_message = %s, updated_at_gmt = %s WHERE order_id = %d AND status IN (%s, %s)",
+				self::JOB_STATUS_CANCELLED,
+				$message,
+				$message,
+				$now,
+				$order_id,
+				self::JOB_STATUS_QUEUED,
+				self::JOB_STATUS_PROCESSING
+			)
+		);
+
+		if ((int) $updated > 0) {
+			$order = is_object($order) ? $order : wc_get_order($order_id);
+			if ($order) {
+				$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_CANCELLED);
+				$order->save();
+				$this->add_private_order_note($order, 'Posten Norgespakke etikettjobb kansellert fordi ordren ble kansellert. Antall jobber: ' . (int) $updated . '.');
+			}
+		}
+
+		return (int) $updated;
+	}
+
 	public function render_order_label_status_panel($order) {
 		if (!current_user_can('manage_woocommerce') || !$order || !is_object($order) || !method_exists($order, 'get_id')) {
 			return;
@@ -618,7 +658,17 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$jobs = array();
+		$exclude_cancelled_orders = in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true);
 		foreach ((array) $rows as $row) {
+			if ($this->maybe_cancel_job_for_cancelled_order($row)) {
+				if ($exclude_cancelled_orders) {
+					continue;
+				}
+				$refreshed = $this->get_job_by_id(isset($row->job_id) ? (string) $row->job_id : '');
+				if ($refreshed) {
+					$row = $refreshed;
+				}
+			}
 			$jobs[] = $this->format_job_response($row, true);
 		}
 
@@ -642,6 +692,19 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$worker_id = sanitize_text_field((string) $request->get_param('worker_id'));
 		if ($worker_id === '') {
 			return new WP_Error('posten_job_worker_required', 'worker_id er påkrevd.', array('status' => 400));
+		}
+
+		$job = $this->get_job_by_id($job_id);
+		if (!$job) {
+			return new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.', array('status' => 404));
+		}
+		if ($this->maybe_cancel_job_for_cancelled_order($job)) {
+			$cancelled_job = $this->get_job_by_id($job_id);
+			return new WP_Error('posten_job_order_cancelled', 'Posten labeljobb ble kansellert fordi WooCommerce-ordren er kansellert.', array(
+				'status' => 409,
+				'job_status' => self::JOB_STATUS_CANCELLED,
+				'job' => $cancelled_job ? $this->format_job_response($cancelled_job, true) : array(),
+			));
 		}
 
 		global $wpdb;
@@ -686,6 +749,14 @@ class LP_Cargonizer_Posten_Label_Automation {
 				'status' => 409,
 				'job_status' => isset($job->status) ? (string) $job->status : '',
 				'job' => $this->format_job_response($job, true),
+			));
+		}
+		if ($this->maybe_cancel_job_for_cancelled_order($job)) {
+			$cancelled_job = $this->get_job_by_id($job_id);
+			return new WP_Error('posten_job_order_cancelled', 'Posten labeljobb ble kansellert fordi WooCommerce-ordren er kansellert.', array(
+				'status' => 409,
+				'job_status' => self::JOB_STATUS_CANCELLED,
+				'job' => $cancelled_job ? $this->format_job_response($cancelled_job, true) : array(),
 			));
 		}
 
@@ -1295,6 +1366,35 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return in_array(LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY, array_map('strval', $enabled_methods), true);
 	}
 
+	private function maybe_cancel_job_for_cancelled_order($job) {
+		if (!$job || !isset($job->order_id)) {
+			return false;
+		}
+		$status = isset($job->status) ? (string) $job->status : '';
+		if (!in_array($status, array(self::JOB_STATUS_QUEUED, self::JOB_STATUS_PROCESSING), true)) {
+			return false;
+		}
+		if ($this->get_order_status_for_job($job) !== 'cancelled') {
+			return false;
+		}
+
+		$this->cancel_active_jobs_for_order((int) $job->order_id);
+		return true;
+	}
+
+	private function get_order_status_for_job($job) {
+		$order_id = $job && isset($job->order_id) ? absint($job->order_id) : 0;
+		if ($order_id < 1 || !function_exists('wc_get_order')) {
+			return '';
+		}
+		$order = wc_get_order($order_id);
+		if (!$order || !method_exists($order, 'get_status')) {
+			return '';
+		}
+
+		return sanitize_key((string) $order->get_status());
+	}
+
 	private function get_active_job_for_order($order_id, $method_key) {
 		global $wpdb;
 		$table = $this->get_table_name();
@@ -1356,6 +1456,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			'job_id' => (string) $row->job_id,
 			'order_id' => (int) $row->order_id,
 			'order_number' => isset($row->order_number) ? (string) $row->order_number : '',
+			'order_status' => $this->get_order_status_for_job($row),
 			'status' => (string) $row->status,
 			'source' => isset($row->source) ? (string) $row->source : '',
 			'attempts' => isset($row->attempts) ? (int) $row->attempts : 0,
@@ -2247,6 +2348,8 @@ class LP_Cargonizer_Posten_Label_Automation {
 				return 'Feilet';
 			case self::JOB_STATUS_PARTIAL_FAILED:
 				return 'Delvis feilet';
+			case self::JOB_STATUS_CANCELLED:
+				return 'Kansellert';
 		}
 
 		return (string) $status;
