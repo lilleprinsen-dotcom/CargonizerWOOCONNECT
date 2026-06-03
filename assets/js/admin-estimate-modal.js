@@ -2322,10 +2322,10 @@
 					var postenSummary = bookingData.posten_summary || {};
 					var postenRecipient = postenJob.recipient || {};
 					var postenShipping = postenJob.shipping || {};
-					var postenMethodLabel = postenShipping.method_label || (method && (method.product_name || method.label) ? (method.product_name || method.label) : 'Posten Norgespakke');
+					var postenMethodLabel = postenShipping.label || postenShipping.method_label || (method && (method.product_name || method.label) ? (method.product_name || method.label) : 'Posten Norgespakke');
 					var postenEstimatedPrice = bookingData.estimated_shipping_price || postenShipping.estimated_price || 'ikke tilgjengelig';
 					return '' +
-						'<div style="color:#125228;font-weight:600;">Posten labeljobb opprettet.</div>' +
+						'<div style="color:#125228;font-weight:600;">Posten Norgespakke etikettjobb opprettet.</div>' +
 						'<div><strong>Jobb-ID:</strong> ' + esc(bookingData.posten_label_job_id || postenJob.job_id || '—') + '</div>' +
 						'<div><strong>Status:</strong> ' + esc(bookingData.posten_label_status || postenJob.status || 'queued') + '</div>' +
 						'<div><strong>Kolli:</strong> ' + esc(postenSummary.colli_count || (Array.isArray(postenJob.packages) ? postenJob.packages.length : '—')) + '</div>' +
