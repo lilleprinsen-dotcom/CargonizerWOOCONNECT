@@ -133,6 +133,7 @@ class LP_Cargonizer_Settings_Service {
 		$legacy_method_single_key_map = array();
 		$available_legacy_key_by_method = array();
 		$available_service_ids_by_method = array();
+		$sender_alias_method_key_map = array();
 		$default_warehouse_profile_id = isset($output['warehouse_profiles']['default_profile_id']) ? sanitize_key((string) $output['warehouse_profiles']['default_profile_id']) : '';
 		foreach ($available_methods as $method) {
 			if (!is_array($method)) {
@@ -155,6 +156,7 @@ class LP_Cargonizer_Settings_Service {
 				'sender_profile_id' => $sender_profile_id,
 				'sender_profile_name' => isset($method['sender_profile_name']) ? sanitize_text_field((string) $method['sender_profile_name']) : '',
 				'sender_id' => isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '',
+				'sender_entity_id' => isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : '',
 				'agreement_id' => $agreement_id,
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field((string) $method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field((string) $method['agreement_description']) : '',
@@ -195,6 +197,11 @@ class LP_Cargonizer_Settings_Service {
 			$available_map[$method_key] = true;
 			$available_legacy_key_by_method[$method_key] = $legacy_key;
 			if ($legacy_key !== '') {
+				foreach ($this->build_method_sender_identity_aliases($clean_method, $output['warehouse_profiles']) as $sender_alias) {
+					$sender_alias_method_key_map[$sender_alias . '::' . $legacy_key] = $method_key;
+				}
+			}
+			if ($legacy_key !== '') {
 				if (!isset($legacy_method_key_map[$legacy_key])) {
 					$legacy_method_key_map[$legacy_key] = array();
 				}
@@ -223,8 +230,24 @@ class LP_Cargonizer_Settings_Service {
 			$available_service_map = array_fill_keys($available_service_ids, true);
 			$legacy_method_key = isset($available_legacy_key_by_method[$method_key]) ? $available_legacy_key_by_method[$method_key] : '';
 			$has_explicit_service_input = is_array($method_extra_services_input) && array_key_exists($method_key, $method_extra_services_input);
-			$has_legacy_service_input = !$has_explicit_service_input && $legacy_method_key !== '' && is_array($method_extra_services_input) && array_key_exists($legacy_method_key, $method_extra_services_input);
-			$selected_service_ids = $has_explicit_service_input ? $method_extra_services_input[$method_key] : ($has_legacy_service_input ? $method_extra_services_input[$legacy_method_key] : $available_service_ids);
+			$alias_service_input_key = '';
+			if (!$has_explicit_service_input && $legacy_method_key !== '' && is_array($method_extra_services_input)) {
+				foreach ($output['available_methods'] as $candidate_method) {
+					if (!is_array($candidate_method) || (isset($candidate_method['key']) ? (string) $candidate_method['key'] : '') !== (string) $method_key) {
+						continue;
+					}
+					foreach ($this->build_method_sender_identity_aliases($candidate_method, $output['warehouse_profiles']) as $sender_alias) {
+						$candidate_input_key = $sender_alias . '::' . $legacy_method_key;
+						if (array_key_exists($candidate_input_key, $method_extra_services_input)) {
+							$alias_service_input_key = $candidate_input_key;
+							break 2;
+						}
+					}
+				}
+			}
+			$has_alias_service_input = $alias_service_input_key !== '';
+			$has_legacy_service_input = !$has_explicit_service_input && !$has_alias_service_input && $legacy_method_key !== '' && is_array($method_extra_services_input) && array_key_exists($legacy_method_key, $method_extra_services_input);
+			$selected_service_ids = $has_explicit_service_input ? $method_extra_services_input[$method_key] : ($has_alias_service_input ? $method_extra_services_input[$alias_service_input_key] : ($has_legacy_service_input ? $method_extra_services_input[$legacy_method_key] : $available_service_ids));
 			$selected_service_ids = is_array($selected_service_ids) ? $selected_service_ids : array();
 			$output['method_extra_services'][$method_key] = array();
 			foreach ($selected_service_ids as $selected_service_id) {
@@ -253,6 +276,7 @@ class LP_Cargonizer_Settings_Service {
 				'profile_name' => isset($fetch_result['profile_name']) ? sanitize_text_field((string) $fetch_result['profile_name']) : '',
 				'sender_id' => $sender_id,
 				'sender_entity_id' => isset($fetch_result['sender_entity_id']) ? sanitize_text_field((string) $fetch_result['sender_entity_id']) : '',
+				'effective_sender_id' => isset($fetch_result['effective_sender_id']) ? sanitize_text_field((string) $fetch_result['effective_sender_id']) : '',
 				'success' => !empty($fetch_result['success']) ? 1 : 0,
 				'message' => isset($fetch_result['message']) ? sanitize_text_field((string) $fetch_result['message']) : '',
 				'status' => isset($fetch_result['status']) ? absint($fetch_result['status']) : 0,
@@ -265,16 +289,9 @@ class LP_Cargonizer_Settings_Service {
 		if (isset($input['enabled_methods']) && is_array($input['enabled_methods'])) {
 			foreach ($input['enabled_methods'] as $method_key) {
 				$clean_key = sanitize_text_field($method_key);
-				if ($clean_key !== '' && isset($available_map[$clean_key])) {
-					$output['enabled_methods'][] = $clean_key;
-					continue;
-				}
-				if ($clean_key !== '' && isset($legacy_method_default_key_map[$clean_key])) {
-					$output['enabled_methods'][] = $legacy_method_default_key_map[$clean_key];
-					continue;
-				}
-				if ($clean_key !== '' && isset($legacy_method_single_key_map[$clean_key])) {
-					$output['enabled_methods'][] = $legacy_method_single_key_map[$clean_key];
+				$resolved_key = $this->resolve_available_method_key($clean_key, $available_map, $sender_alias_method_key_map, $legacy_method_default_key_map, $legacy_method_single_key_map);
+				if ($resolved_key !== '') {
+					$output['enabled_methods'][] = $resolved_key;
 				}
 			}
 		}
@@ -285,13 +302,7 @@ class LP_Cargonizer_Settings_Service {
 			$enabled_map = array_fill_keys($output['enabled_methods'], true);
 			foreach ($input['method_discounts'] as $method_key => $discount_value) {
 				$clean_key = sanitize_text_field((string) $method_key);
-				if ($clean_key !== '' && !isset($available_map[$clean_key])) {
-					if (isset($legacy_method_default_key_map[$clean_key])) {
-						$clean_key = $legacy_method_default_key_map[$clean_key];
-					} elseif (isset($legacy_method_single_key_map[$clean_key])) {
-						$clean_key = $legacy_method_single_key_map[$clean_key];
-					}
-				}
+				$clean_key = $this->resolve_available_method_key($clean_key, $available_map, $sender_alias_method_key_map, $legacy_method_default_key_map, $legacy_method_single_key_map);
 				if ($clean_key === '' || !isset($available_map[$clean_key]) || !isset($enabled_map[$clean_key])) {
 					continue;
 				}
@@ -304,13 +315,7 @@ class LP_Cargonizer_Settings_Service {
 		$enabled_map = array_fill_keys($output['enabled_methods'], true);
 		foreach ($method_pricing_input as $method_key => $pricing) {
 			$clean_key = sanitize_text_field((string) $method_key);
-			if ($clean_key !== '' && !isset($available_map[$clean_key])) {
-				if (isset($legacy_method_default_key_map[$clean_key])) {
-					$clean_key = $legacy_method_default_key_map[$clean_key];
-				} elseif (isset($legacy_method_single_key_map[$clean_key])) {
-					$clean_key = $legacy_method_single_key_map[$clean_key];
-				}
-			}
+			$clean_key = $this->resolve_available_method_key($clean_key, $available_map, $sender_alias_method_key_map, $legacy_method_default_key_map, $legacy_method_single_key_map);
 			if ($clean_key === '' || !isset($available_map[$clean_key]) || !isset($enabled_map[$clean_key])) {
 				continue;
 			}
@@ -1168,6 +1173,106 @@ class LP_Cargonizer_Settings_Service {
 
 		return false;
 	}
+
+	private function build_sender_identity_aliases($profile_id = '', $sender_id = '', $sender_entity_id = '') {
+		$aliases = array();
+		$profile_id = sanitize_key((string) $profile_id);
+		$sender_id = sanitize_text_field((string) $sender_id);
+		$sender_entity_id = sanitize_text_field((string) $sender_entity_id);
+
+		if ($profile_id !== '') {
+			$aliases[] = $profile_id;
+		}
+		if ($sender_id !== '') {
+			$aliases[] = $sender_id;
+			$aliases[] = sanitize_key('sender_' . $sender_id);
+		}
+		if ($sender_entity_id !== '') {
+			$aliases[] = $sender_entity_id;
+			$aliases[] = sanitize_key('sender_' . $sender_entity_id);
+		}
+
+		$clean_aliases = array();
+		foreach ($aliases as $alias) {
+			$alias = sanitize_key((string) $alias);
+			if ($alias !== '') {
+				$clean_aliases[$alias] = true;
+			}
+		}
+
+		return array_keys($clean_aliases);
+	}
+
+	private function build_method_sender_identity_aliases($method, $warehouse_profiles) {
+		$method = is_array($method) ? $method : array();
+		$warehouse_profiles = is_array($warehouse_profiles) ? $warehouse_profiles : array();
+		$method_aliases = $this->build_sender_identity_aliases(
+			isset($method['sender_profile_id']) ? $method['sender_profile_id'] : '',
+			isset($method['sender_id']) ? $method['sender_id'] : '',
+			isset($method['sender_entity_id']) ? $method['sender_entity_id'] : ''
+		);
+
+		$method_alias_map = array_fill_keys($method_aliases, true);
+		$profiles = isset($warehouse_profiles['profiles']) && is_array($warehouse_profiles['profiles']) ? $warehouse_profiles['profiles'] : array();
+		foreach ($profiles as $profile) {
+			if (!is_array($profile)) {
+				continue;
+			}
+			$profile_aliases = $this->build_sender_identity_aliases(
+				isset($profile['profile_id']) ? $profile['profile_id'] : '',
+				isset($profile['sender_id']) ? $profile['sender_id'] : '',
+				isset($profile['sender_entity_id']) ? $profile['sender_entity_id'] : ''
+			);
+			$profile_matches_method = false;
+			foreach ($profile_aliases as $profile_alias) {
+				if (isset($method_alias_map[$profile_alias])) {
+					$profile_matches_method = true;
+					break;
+				}
+			}
+			if (!$profile_matches_method) {
+				continue;
+			}
+			foreach ($profile_aliases as $profile_alias) {
+				$method_alias_map[$profile_alias] = true;
+			}
+		}
+
+		return array_keys($method_alias_map);
+	}
+
+	private function extract_legacy_method_key($method_key) {
+		$method_key = sanitize_text_field((string) $method_key);
+		if (strpos($method_key, '::') === false) {
+			return $method_key;
+		}
+		$key_parts = explode('::', $method_key, 2);
+		return isset($key_parts[1]) ? sanitize_text_field((string) $key_parts[1]) : '';
+	}
+
+	private function resolve_available_method_key($method_key, $available_map, $sender_alias_method_key_map, $legacy_method_default_key_map, $legacy_method_single_key_map) {
+		$method_key = sanitize_text_field((string) $method_key);
+		if ($method_key === '') {
+			return '';
+		}
+		if (isset($available_map[$method_key])) {
+			return $method_key;
+		}
+		if (isset($sender_alias_method_key_map[$method_key])) {
+			return $sender_alias_method_key_map[$method_key];
+		}
+
+		$legacy_key = $this->extract_legacy_method_key($method_key);
+		if ($legacy_key !== '' && isset($legacy_method_default_key_map[$legacy_key])) {
+			return $legacy_method_default_key_map[$legacy_key];
+		}
+		if ($legacy_key !== '' && isset($legacy_method_single_key_map[$legacy_key])) {
+			return $legacy_method_single_key_map[$legacy_key];
+		}
+
+		return '';
+	}
+
 	private function get_warehouse_profiles_defaults() {
 		return array(
 			'default_profile_id' => '',

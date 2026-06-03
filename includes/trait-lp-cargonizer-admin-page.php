@@ -552,6 +552,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$results = array();
 		$errors = array();
 		$raw_by_sender = array();
+		$success_count = 0;
 		$api_key = isset($settings['api_key']) ? sanitize_text_field((string) $settings['api_key']) : '';
 
 		foreach ($active_profiles as $profile) {
@@ -564,15 +565,39 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			}
 
 			$result = $this->fetch_transport_agreements($sender_id, $api_key);
+			$effective_sender_id = $sender_id;
+			if (
+				empty($result['success'])
+				&& in_array(isset($result['status']) ? (int) $result['status'] : 0, array(401, 403), true)
+				&& $sender_entity_id !== ''
+				&& $sender_entity_id !== $sender_id
+			) {
+				$fallback_result = $this->fetch_transport_agreements($sender_entity_id, $api_key);
+				if (!empty($fallback_result['success'])) {
+					$effective_sender_id = $sender_entity_id;
+					$fallback_result['message'] = (isset($fallback_result['message']) ? (string) $fallback_result['message'] : 'Fraktmetoder hentet.')
+						. ' Hentet med Cargonizer sender ' . $sender_entity_id . ' etter HTTP ' . (isset($result['status']) ? (int) $result['status'] : 0) . ' for API Sender ID ' . $sender_id . '.';
+					$result = $fallback_result;
+				} else {
+					$result['message'] = (isset($result['message']) ? (string) $result['message'] : 'Henting feilet.')
+						. ' Fallback med Cargonizer sender ' . $sender_entity_id . ' feilet også'
+						. (!empty($fallback_result['status']) ? ' (HTTP ' . (int) $fallback_result['status'] . ')' : '')
+						. ': ' . (isset($fallback_result['message']) ? (string) $fallback_result['message'] : 'Ukjent feil');
+				}
+			}
 			$flattened_methods = array();
 			if (!empty($result['success'])) {
-				$flattened_methods = $this->flatten_shipping_methods(isset($result['data']) ? $result['data'] : array(), $profile);
+				$effective_profile = $profile;
+				$effective_profile['sender_id'] = $effective_sender_id;
+				$effective_profile['sender_entity_id'] = $sender_entity_id;
+				$flattened_methods = $this->flatten_shipping_methods(isset($result['data']) ? $result['data'] : array(), $effective_profile);
 			}
 			$results[] = array(
 				'profile_id' => $profile_id,
 				'profile_name' => $profile_name,
 				'sender_id' => $sender_id,
 				'sender_entity_id' => $sender_entity_id,
+				'effective_sender_id' => $effective_sender_id,
 				'success' => !empty($result['success']),
 				'message' => isset($result['message']) ? (string) $result['message'] : '',
 				'status' => isset($result['status']) ? (int) $result['status'] : 0,
@@ -581,7 +606,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'fetched_at_gmt' => gmdate('Y-m-d H:i:s'),
 			);
 			$raw_by_sender[$profile_id !== '' ? $profile_id : $sender_id] = array(
-				'label' => trim($profile_name . ' (' . $sender_id . ')'),
+				'label' => trim($profile_name . ' (' . $sender_id . ($effective_sender_id !== $sender_id ? ' / hentet med ' . $effective_sender_id : '') . ')'),
 				'raw' => isset($result['raw']) ? (string) $result['raw'] : '',
 			);
 
@@ -590,10 +615,23 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				continue;
 			}
 
+			$success_count++;
 			$all_methods = array_merge($all_methods, $flattened_methods);
 		}
 
 		if (!empty($errors)) {
+			if ($success_count > 0) {
+				$all_methods = $this->ensure_internal_manual_methods($all_methods);
+				return array(
+					'success' => true,
+					'partial_success' => true,
+					'message' => 'Fraktmetoder ble hentet for ' . $success_count . ' av ' . count($active_profiles) . ' senderadresse(r). Metoder fra senderadresser med feil er beholdt som før. Feil: ' . implode(' | ', $errors),
+					'methods' => $all_methods,
+					'results' => $results,
+					'raw_by_sender' => $raw_by_sender,
+				);
+			}
+
 			return array(
 				'success' => false,
 				'message' => 'Kunne ikke hente fraktavtaler for alle senderadresser. Eksisterende metodevalg er beholdt. ' . implode(' | ', $errors),
@@ -606,11 +644,130 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$all_methods = $this->ensure_internal_manual_methods($all_methods);
 		return array(
 			'success' => true,
+			'partial_success' => false,
 			'message' => 'Fraktmetoder ble hentet for ' . count($active_profiles) . ' senderadresse(r). Velg hvilke som skal være tilgjengelige og lagre innstillingene.',
 			'methods' => $all_methods,
 			'results' => $results,
 			'raw_by_sender' => $raw_by_sender,
 		);
+	}
+
+	private function build_sender_identity_aliases($profile_id = '', $sender_id = '', $sender_entity_id = '') {
+		$aliases = array();
+		$profile_id = sanitize_key((string) $profile_id);
+		$sender_id = sanitize_text_field((string) $sender_id);
+		$sender_entity_id = sanitize_text_field((string) $sender_entity_id);
+
+		if ($profile_id !== '') {
+			$aliases[] = $profile_id;
+		}
+		if ($sender_id !== '') {
+			$aliases[] = $sender_id;
+			$aliases[] = $this->build_sender_profile_id($sender_id);
+		}
+		if ($sender_entity_id !== '') {
+			$aliases[] = $sender_entity_id;
+			$aliases[] = $this->build_sender_profile_id($sender_entity_id);
+		}
+
+		$clean_aliases = array();
+		foreach ($aliases as $alias) {
+			$alias = sanitize_key((string) $alias);
+			if ($alias !== '') {
+				$clean_aliases[$alias] = true;
+			}
+		}
+
+		return array_keys($clean_aliases);
+	}
+
+	private function build_method_sender_identity_aliases($method) {
+		$method = is_array($method) ? $method : array();
+		$profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
+		$sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+		$sender_entity_id = isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : '';
+		$aliases = $this->build_sender_identity_aliases($profile_id, $sender_id, $sender_entity_id);
+
+		if (!empty($method['key']) && strpos((string) $method['key'], '::') !== false) {
+			$key_parts = explode('::', (string) $method['key'], 2);
+			$key_profile_id = sanitize_key((string) $key_parts[0]);
+			if ($key_profile_id !== '') {
+				$aliases[] = $key_profile_id;
+			}
+		}
+
+		$clean_aliases = array();
+		foreach ($aliases as $alias) {
+			$alias = sanitize_key((string) $alias);
+			if ($alias !== '') {
+				$clean_aliases[$alias] = true;
+			}
+		}
+
+		return array_keys($clean_aliases);
+	}
+
+	private function method_matches_sender_identity_aliases($method, $sender_alias_map) {
+		$sender_alias_map = is_array($sender_alias_map) ? $sender_alias_map : array();
+		if (empty($sender_alias_map)) {
+			return false;
+		}
+
+		foreach ($this->build_method_sender_identity_aliases($method) as $alias) {
+			if (isset($sender_alias_map[$alias])) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private function merge_fetched_methods_with_existing_sender_methods($existing_methods, $fetched_methods, $fetch_results) {
+		$existing_methods = is_array($existing_methods) ? $existing_methods : array();
+		$fetched_methods = is_array($fetched_methods) ? $fetched_methods : array();
+		$fetch_results = is_array($fetch_results) ? $fetch_results : array();
+		$successful_sender_aliases = array();
+
+		foreach ($fetch_results as $fetch_result) {
+			if (!is_array($fetch_result) || empty($fetch_result['success'])) {
+				continue;
+			}
+			$aliases = $this->build_sender_identity_aliases(
+				isset($fetch_result['profile_id']) ? $fetch_result['profile_id'] : '',
+				isset($fetch_result['sender_id']) ? $fetch_result['sender_id'] : '',
+				isset($fetch_result['sender_entity_id']) ? $fetch_result['sender_entity_id'] : ''
+			);
+			foreach ($aliases as $alias) {
+				$successful_sender_aliases[$alias] = true;
+			}
+		}
+
+		if (empty($successful_sender_aliases)) {
+			return $this->ensure_internal_manual_methods($existing_methods);
+		}
+
+		$merged_methods = array();
+		foreach ($existing_methods as $existing_method) {
+			if (!is_array($existing_method)) {
+				continue;
+			}
+			if ($this->is_manual_norgespakke_method($existing_method)) {
+				continue;
+			}
+			if ($this->method_matches_sender_identity_aliases($existing_method, $successful_sender_aliases)) {
+				continue;
+			}
+			$merged_methods[] = $existing_method;
+		}
+
+		foreach ($fetched_methods as $fetched_method) {
+			if (!is_array($fetched_method) || $this->is_manual_norgespakke_method($fetched_method)) {
+				continue;
+			}
+			$merged_methods[] = $fetched_method;
+		}
+
+		return $this->ensure_internal_manual_methods($merged_methods);
 	}
 
 	private function get_live_checkout_quote_debug_payload($status_context) {
@@ -983,6 +1140,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'agreement_count' => isset($fetch_result['agreement_count']) ? (int) $fetch_result['agreement_count'] : 0,
 				'method_count' => isset($fetch_result['method_count']) ? (int) $fetch_result['method_count'] : 0,
 				'fetched_at_gmt' => isset($fetch_result['fetched_at_gmt']) ? sanitize_text_field((string) $fetch_result['fetched_at_gmt']) : '',
+				'effective_sender_id' => isset($fetch_result['effective_sender_id']) ? sanitize_text_field((string) $fetch_result['effective_sender_id']) : '',
 			);
 		}
 
@@ -999,6 +1157,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$method_key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
 			$sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
 			$sender_id = isset($method['sender_id']) ? sanitize_text_field((string) $method['sender_id']) : '';
+			$sender_entity_id = isset($method['sender_entity_id']) ? sanitize_text_field((string) $method['sender_entity_id']) : '';
 			if ($sender_profile_id === '' && $sender_id !== '') {
 				$sender_profile_id = $this->build_sender_profile_id($sender_id);
 			}
@@ -1009,11 +1168,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			if ($sender_profile_id !== '' && !isset($summaries[$sender_profile_id]) && isset($sender_profile_aliases[$sender_profile_id])) {
 				$sender_profile_id = $sender_profile_aliases[$sender_profile_id];
 			}
-			if ($sender_id !== '' && ($sender_profile_id === '' || !isset($summaries[$sender_profile_id]))) {
-				$sender_id_aliases = array($sender_id, $this->build_sender_profile_id($sender_id));
-				foreach ($sender_id_aliases as $sender_id_alias) {
-					if (isset($sender_profile_aliases[$sender_id_alias])) {
-						$sender_profile_id = $sender_profile_aliases[$sender_id_alias];
+			if ($sender_profile_id === '' || !isset($summaries[$sender_profile_id])) {
+				foreach ($this->build_sender_identity_aliases('', $sender_id, $sender_entity_id) as $sender_alias) {
+					if (isset($sender_profile_aliases[$sender_alias])) {
+						$sender_profile_id = $sender_profile_aliases[$sender_alias];
 						break;
 					}
 				}
@@ -1031,7 +1189,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				$summaries[$sender_profile_id] = array(
 					'profile_id' => $sender_profile_id,
 					'sender_id' => $sender_id,
-					'sender_entity_id' => '',
+					'sender_entity_id' => $sender_entity_id,
 					'sender_label' => $sender_label !== '' ? $sender_label : $sender_profile_id,
 					'total_methods' => 0,
 					'enabled_methods' => 0,
@@ -1237,7 +1395,11 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			if (!empty($result['success'])) {
 				$settings['api_key'] = isset($method_fetch_settings['api_key']) ? $method_fetch_settings['api_key'] : (isset($settings['api_key']) ? $settings['api_key'] : '');
 				$settings['sender_id'] = isset($method_fetch_settings['sender_id']) ? $method_fetch_settings['sender_id'] : (isset($settings['sender_id']) ? $settings['sender_id'] : '');
-				$settings['available_methods'] = isset($result['methods']) && is_array($result['methods']) ? $result['methods'] : array();
+				$settings['available_methods'] = $this->merge_fetched_methods_with_existing_sender_methods(
+					isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
+					isset($result['methods']) && is_array($result['methods']) ? $result['methods'] : array(),
+					isset($result['results']) && is_array($result['results']) ? $result['results'] : array()
+				);
 				$settings['enabled_methods'] = isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array();
 				if (isset($method_fetch_settings['warehouse_profiles']) && is_array($method_fetch_settings['warehouse_profiles'])) {
 					$settings['warehouse_profiles'] = $method_fetch_settings['warehouse_profiles'];
@@ -1290,14 +1452,19 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						}
 					}
 				}
-				$settings['available_methods'] = isset($method_refresh['methods']) && is_array($method_refresh['methods']) ? $method_refresh['methods'] : array();
+				$settings['available_methods'] = $this->merge_fetched_methods_with_existing_sender_methods(
+					isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
+					isset($method_refresh['methods']) && is_array($method_refresh['methods']) ? $method_refresh['methods'] : array(),
+					isset($method_refresh['results']) && is_array($method_refresh['results']) ? $method_refresh['results'] : array()
+				);
 				$settings['transport_agreement_fetch_results'] = isset($method_refresh['results']) && is_array($method_refresh['results']) ? $method_refresh['results'] : array();
 				$settings['enabled_methods'] = is_array($posted_enabled_methods)
 					? $posted_enabled_methods
 					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array());
 				update_option(self::OPTION_KEY, $this->sanitize_settings($settings));
 				$settings = $this->get_settings();
-				echo '<div class="notice notice-success"><p>' . esc_html(isset($method_refresh['message']) ? $method_refresh['message'] : 'Fraktmetoder ble hentet.') . '</p></div>';
+				$method_refresh_notice_class = !empty($method_refresh['partial_success']) ? 'notice-warning' : 'notice-success';
+				echo '<div class="notice ' . esc_attr($method_refresh_notice_class) . '"><p>' . esc_html(isset($method_refresh['message']) ? $method_refresh['message'] : 'Fraktmetoder ble hentet.') . '</p></div>';
 			} else {
 				if (!empty($method_refresh['results']) && is_array($method_refresh['results'])) {
 					$settings['transport_agreement_fetch_results'] = $method_refresh['results'];
@@ -1980,6 +2147,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									$sender_fetch_agreement_count = isset($sender_fetch['agreement_count']) ? (int) $sender_fetch['agreement_count'] : 0;
 									$sender_fetch_method_count = isset($sender_fetch['method_count']) ? (int) $sender_fetch['method_count'] : 0;
 									$sender_fetch_time = isset($sender_fetch['fetched_at_gmt']) ? trim((string) $sender_fetch['fetched_at_gmt']) : '';
+									$sender_fetch_effective_sender_id = isset($sender_fetch['effective_sender_id']) ? trim((string) $sender_fetch['effective_sender_id']) : '';
 									?>
 									<tr>
 										<td>
@@ -2019,6 +2187,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 												<small><?php echo esc_html($sender_agreement_count . ' fraktavtale(r) hentet'); ?></small><br>
 												<?php if ($sender_fetch_time !== '') : ?>
 													<small><?php echo esc_html('Sist hentet: ' . $sender_fetch_time . ' GMT'); ?></small><br>
+												<?php endif; ?>
+												<?php if ($sender_fetch_effective_sender_id !== '' && $sender_fetch_effective_sender_id !== $sender_id) : ?>
+													<small><?php echo esc_html('API-kall brukt sender: ' . $sender_fetch_effective_sender_id); ?></small><br>
 												<?php endif; ?>
 												<a href="#lp-cargonizer-section-methods">Vis/velg fraktmetoder</a>
 											<?php elseif (!empty($sender_fetch)) : ?>
@@ -2303,6 +2474,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							$sender_profile_id = isset($method['sender_profile_id']) ? sanitize_key((string) $method['sender_profile_id']) : '';
 							$sender_profile_name = isset($method['sender_profile_name']) ? trim((string) $method['sender_profile_name']) : '';
 							$sender_id = isset($method['sender_id']) ? trim((string) $method['sender_id']) : '';
+							$sender_entity_id = isset($method['sender_entity_id']) ? trim((string) $method['sender_entity_id']) : '';
 							if ($sender_profile_id === '' && $sender_id !== '') {
 								$sender_profile_id = $this->build_sender_profile_id($sender_id);
 							}
@@ -2313,11 +2485,10 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							if ($sender_profile_id !== '' && !isset($sender_method_summary[$sender_profile_id]) && isset($method_sender_profile_aliases[$sender_profile_id])) {
 								$sender_profile_id = $method_sender_profile_aliases[$sender_profile_id];
 							}
-							if ($sender_id !== '' && ($sender_profile_id === '' || !isset($sender_method_summary[$sender_profile_id]))) {
-								$method_sender_id_aliases = array($sender_id, $this->build_sender_profile_id($sender_id));
-								foreach ($method_sender_id_aliases as $method_sender_id_alias) {
-									if (isset($method_sender_profile_aliases[$method_sender_id_alias])) {
-										$sender_profile_id = $method_sender_profile_aliases[$method_sender_id_alias];
+							if ($sender_profile_id === '' || !isset($sender_method_summary[$sender_profile_id])) {
+								foreach ($this->build_sender_identity_aliases('', $sender_id, $sender_entity_id) as $method_sender_alias) {
+									if (isset($method_sender_profile_aliases[$method_sender_alias])) {
+										$sender_profile_id = $method_sender_profile_aliases[$method_sender_alias];
 										break;
 									}
 								}
@@ -3176,7 +3347,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<h2>Resultat</h2>
 
 					<?php if ($result['success']) : ?>
-						<div class="notice notice-success inline">
+						<div class="notice <?php echo esc_attr(!empty($result['partial_success']) ? 'notice-warning' : 'notice-success'); ?> inline">
 							<p><?php echo esc_html($result['message']); ?></p>
 						</div>
 
@@ -3186,6 +3357,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									<tr>
 										<th>Sender</th>
 										<th>Sender ID</th>
+										<th>API-kall brukt sender</th>
 										<th>Status</th>
 										<th>Fraktavtaler</th>
 									</tr>
@@ -3195,6 +3367,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										<tr>
 											<td><?php echo esc_html(isset($sender_result['profile_name']) ? $sender_result['profile_name'] : '—'); ?></td>
 											<td><?php echo esc_html(isset($sender_result['sender_id']) ? $sender_result['sender_id'] : '—'); ?></td>
+											<td><?php echo esc_html(!empty($sender_result['effective_sender_id']) ? $sender_result['effective_sender_id'] : (isset($sender_result['sender_id']) ? $sender_result['sender_id'] : '—')); ?></td>
 											<td><?php echo !empty($sender_result['success']) ? '<span style="color:#125228;">OK</span>' : '<span style="color:#b32d2e;">Feilet</span>'; ?></td>
 											<td><?php echo esc_html(isset($sender_result['agreement_count']) ? (string) $sender_result['agreement_count'] : '0'); ?></td>
 										</tr>
