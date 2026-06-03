@@ -861,6 +861,28 @@ trait LP_Cargonizer_Admin_Page_Trait {
 	private function build_sender_transport_agreement_summary($settings) {
 		$settings = is_array($settings) ? $settings : $this->get_settings();
 		$summaries = array();
+		$sender_profile_aliases = array();
+		$add_sender_summary_aliases = function($profile_id, $sender_id = '', $sender_entity_id = '') use (&$sender_profile_aliases) {
+			$profile_id = sanitize_key((string) $profile_id);
+			if ($profile_id === '') {
+				return;
+			}
+			$aliases = array($profile_id);
+			$sender_id = sanitize_text_field((string) $sender_id);
+			$sender_entity_id = sanitize_text_field((string) $sender_entity_id);
+			if ($sender_id !== '') {
+				$aliases[] = $sender_id;
+				$aliases[] = $this->build_sender_profile_id($sender_id);
+			}
+			if ($sender_entity_id !== '') {
+				$aliases[] = $sender_entity_id;
+				$aliases[] = $this->build_sender_profile_id($sender_entity_id);
+			}
+			foreach (array_values(array_unique(array_filter($aliases, 'strlen'))) as $alias) {
+				$sender_profile_aliases[sanitize_key((string) $alias)] = $profile_id;
+				$sender_profile_aliases[sanitize_text_field((string) $alias)] = $profile_id;
+			}
+		};
 		$profiles = $this->get_sender_profiles_from_settings($settings);
 		foreach ($profiles as $profile) {
 			if (!is_array($profile)) {
@@ -868,6 +890,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			}
 			$profile_id = isset($profile['profile_id']) ? sanitize_key((string) $profile['profile_id']) : '';
 			$sender_id = isset($profile['sender_id']) ? sanitize_text_field((string) $profile['sender_id']) : '';
+			$sender_entity_id = isset($profile['sender_entity_id']) ? sanitize_text_field((string) $profile['sender_entity_id']) : '';
 			if ($profile_id === '' && $sender_id !== '') {
 				$profile_id = $this->build_sender_profile_id($sender_id);
 			}
@@ -885,6 +908,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$summaries[$profile_id] = array(
 				'profile_id' => $profile_id,
 				'sender_id' => $sender_id,
+				'sender_entity_id' => $sender_entity_id,
 				'sender_label' => $sender_label,
 				'total_methods' => 0,
 				'enabled_methods' => 0,
@@ -894,6 +918,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'last_fetch' => array(),
 				'is_legacy_unscoped' => false,
 			);
+			$add_sender_summary_aliases($profile_id, $sender_id, $sender_entity_id);
 		}
 
 		$fetch_results = isset($settings['transport_agreement_fetch_results']) && is_array($settings['transport_agreement_fetch_results'])
@@ -905,17 +930,35 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			}
 			$profile_id = isset($fetch_result['profile_id']) ? sanitize_key((string) $fetch_result['profile_id']) : '';
 			$sender_id = isset($fetch_result['sender_id']) ? sanitize_text_field((string) $fetch_result['sender_id']) : '';
+			$sender_entity_id = isset($fetch_result['sender_entity_id']) ? sanitize_text_field((string) $fetch_result['sender_entity_id']) : '';
 			if ($profile_id === '' && $sender_id !== '') {
 				$profile_id = $this->build_sender_profile_id($sender_id);
 			}
 			if ($profile_id === '') {
 				continue;
 			}
+			$fetch_profile_aliases = array($profile_id);
+			if ($sender_id !== '') {
+				$fetch_profile_aliases[] = $sender_id;
+				$fetch_profile_aliases[] = $this->build_sender_profile_id($sender_id);
+			}
+			if ($sender_entity_id !== '') {
+				$fetch_profile_aliases[] = $sender_entity_id;
+				$fetch_profile_aliases[] = $this->build_sender_profile_id($sender_entity_id);
+			}
+			foreach (array_values(array_unique(array_filter($fetch_profile_aliases, 'strlen'))) as $fetch_profile_alias) {
+				$fetch_profile_alias_key = sanitize_key((string) $fetch_profile_alias);
+				if ($fetch_profile_alias_key !== '' && isset($sender_profile_aliases[$fetch_profile_alias_key]) && isset($summaries[$sender_profile_aliases[$fetch_profile_alias_key]])) {
+					$profile_id = $sender_profile_aliases[$fetch_profile_alias_key];
+					break;
+				}
+			}
 			if (!isset($summaries[$profile_id])) {
 				$profile_name = isset($fetch_result['profile_name']) ? sanitize_text_field((string) $fetch_result['profile_name']) : '';
 				$summaries[$profile_id] = array(
 					'profile_id' => $profile_id,
 					'sender_id' => $sender_id,
+					'sender_entity_id' => $sender_entity_id,
 					'sender_label' => trim($profile_name . ($sender_id !== '' ? ' (' . $sender_id . ')' : '')),
 					'total_methods' => 0,
 					'enabled_methods' => 0,
@@ -926,6 +969,13 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					'is_legacy_unscoped' => false,
 				);
 			}
+			if ($sender_id !== '' && empty($summaries[$profile_id]['sender_id'])) {
+				$summaries[$profile_id]['sender_id'] = $sender_id;
+			}
+			if ($sender_entity_id !== '' && empty($summaries[$profile_id]['sender_entity_id'])) {
+				$summaries[$profile_id]['sender_entity_id'] = $sender_entity_id;
+			}
+			$add_sender_summary_aliases($profile_id, $sender_id, $sender_entity_id);
 			$summaries[$profile_id]['last_fetch'] = array(
 				'success' => !empty($fetch_result['success']),
 				'message' => isset($fetch_result['message']) ? sanitize_text_field((string) $fetch_result['message']) : '',
@@ -956,6 +1006,18 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				$key_parts = explode('::', (string) $method['key'], 2);
 				$sender_profile_id = sanitize_key((string) $key_parts[0]);
 			}
+			if ($sender_profile_id !== '' && !isset($summaries[$sender_profile_id]) && isset($sender_profile_aliases[$sender_profile_id])) {
+				$sender_profile_id = $sender_profile_aliases[$sender_profile_id];
+			}
+			if ($sender_id !== '' && ($sender_profile_id === '' || !isset($summaries[$sender_profile_id]))) {
+				$sender_id_aliases = array($sender_id, $this->build_sender_profile_id($sender_id));
+				foreach ($sender_id_aliases as $sender_id_alias) {
+					if (isset($sender_profile_aliases[$sender_id_alias])) {
+						$sender_profile_id = $sender_profile_aliases[$sender_id_alias];
+						break;
+					}
+				}
+			}
 			if ($sender_profile_id === '') {
 				$sender_profile_id = '__legacy_unscoped';
 			}
@@ -969,6 +1031,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				$summaries[$sender_profile_id] = array(
 					'profile_id' => $sender_profile_id,
 					'sender_id' => $sender_id,
+					'sender_entity_id' => '',
 					'sender_label' => $sender_label !== '' ? $sender_label : $sender_profile_id,
 					'total_methods' => 0,
 					'enabled_methods' => 0,
@@ -1114,6 +1177,26 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$current_user_default_printer_id = $posted_default_printer_id;
 
 			echo '<div class="notice notice-success"><p>Innstillinger lagret.</p></div>';
+		}
+
+		if (
+			isset($_POST['lp_cargonizer_clear_stored_methods'])
+			&& isset($_POST['_wpnonce'])
+			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)
+		) {
+			$settings['available_methods'] = array();
+			$settings['enabled_methods'] = array();
+			$settings['method_discounts'] = array();
+			$settings['method_pricing'] = array();
+			$settings['method_extra_services'] = array();
+			$settings['transport_agreement_fetch_results'] = array();
+
+			update_option(self::OPTION_KEY, $this->sanitize_settings($settings));
+			$settings = $this->get_settings();
+
+			echo '<div class="notice notice-success"><p>Alle lagrede Cargonizer-fraktmetoder, metodevalg, prisoppsett, tilleggstjenestevalg og hentestatus er fjernet. Hent fraktavtaler på nytt for å bygge listen.</p></div>';
+		} elseif (isset($_POST['lp_cargonizer_clear_stored_methods'])) {
+			echo '<div class="notice notice-error"><p>Kunne ikke fjerne lagrede fraktmetoder fordi sikkerhetsnøkkelen var ugyldig. Last siden på nytt og prøv igjen.</p></div>';
 		}
 
 		if (isset($_POST['lp_cargonizer_direct_print_upload'])) {
@@ -1872,6 +1955,22 @@ trait LP_Cargonizer_Admin_Page_Trait {
 									$sender_profile_id = $this->build_sender_profile_id($sender_id);
 									$sender_profile_name = $sender_name !== '' ? $sender_name : ($sender_id !== '' ? 'Sender ' . $sender_id : 'Sender');
 									$sender_summary = isset($sender_method_summary[$sender_profile_id]) ? $sender_method_summary[$sender_profile_id] : array();
+									if (empty($sender_summary)) {
+										foreach ($sender_method_summary as $sender_summary_candidate) {
+											if (!is_array($sender_summary_candidate) || !empty($sender_summary_candidate['is_legacy_unscoped'])) {
+												continue;
+											}
+											$candidate_sender_id = isset($sender_summary_candidate['sender_id']) ? sanitize_text_field((string) $sender_summary_candidate['sender_id']) : '';
+											$candidate_sender_entity_id = isset($sender_summary_candidate['sender_entity_id']) ? sanitize_text_field((string) $sender_summary_candidate['sender_entity_id']) : '';
+											if (
+												($sender_id !== '' && ($candidate_sender_id === $sender_id || $candidate_sender_entity_id === $sender_id))
+												|| ($sender_entity_id !== '' && ($candidate_sender_id === $sender_entity_id || $candidate_sender_entity_id === $sender_entity_id))
+											) {
+												$sender_summary = $sender_summary_candidate;
+												break;
+											}
+										}
+									}
 									$sender_total_methods = isset($sender_summary['total_methods']) ? (int) $sender_summary['total_methods'] : 0;
 									$sender_enabled_methods = isset($sender_summary['enabled_methods']) ? (int) $sender_summary['enabled_methods'] : 0;
 									$sender_agreement_count = isset($sender_summary['agreement_count']) ? (int) $sender_summary['agreement_count'] : 0;
@@ -1924,8 +2023,13 @@ trait LP_Cargonizer_Admin_Page_Trait {
 												<a href="#lp-cargonizer-section-methods">Vis/velg fraktmetoder</a>
 											<?php elseif (!empty($sender_fetch)) : ?>
 												<?php if (!empty($sender_fetch['success'])) : ?>
-													<span style="color:#8a4b00;">Hentet, men ingen produkter funnet</span><br>
-													<small><?php echo esc_html($sender_fetch_agreement_count . ' avtale(r), ' . $sender_fetch_method_count . ' produkt(er) fra Cargonizer' . ($sender_fetch_time !== '' ? ' - ' . $sender_fetch_time . ' GMT' : '')); ?></small>
+													<?php if ($sender_fetch_method_count > 0) : ?>
+														<span style="color:#8a4b00;">Hentet, men lagrede produkter matcher ikke sender-raden</span><br>
+														<small><?php echo esc_html($sender_fetch_agreement_count . ' avtale(r), ' . $sender_fetch_method_count . ' produkt(er) fra Cargonizer' . ($sender_fetch_time !== '' ? ' - ' . $sender_fetch_time . ' GMT' : '') . '. Fjern lagrede fraktmetoder og hent på nytt dersom dette vedvarer.'); ?></small>
+													<?php else : ?>
+														<span style="color:#8a4b00;">Hentet, men ingen produkter funnet</span><br>
+														<small><?php echo esc_html($sender_fetch_agreement_count . ' avtale(r), ' . $sender_fetch_method_count . ' produkt(er) fra Cargonizer' . ($sender_fetch_time !== '' ? ' - ' . $sender_fetch_time . ' GMT' : '')); ?></small>
+													<?php endif; ?>
 												<?php else : ?>
 													<span style="color:#b32d2e;">Henting feilet<?php echo esc_html($sender_fetch_status > 0 ? ' (HTTP ' . $sender_fetch_status . ')' : ''); ?></span><br>
 													<small><?php echo esc_html($sender_fetch_message !== '' ? $sender_fetch_message : 'Ukjent feil ved henting fra Cargonizer.'); ?></small>
@@ -1949,9 +2053,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							<button type="submit" name="lp_cargonizer_refresh_method_choices" class="button button-secondary">
 								Hent/oppdater fraktavtaler for alle senderadresser
 							</button>
+							<button type="submit" name="lp_cargonizer_clear_stored_methods" value="1" class="button button-secondary" onclick="return window.confirm('Dette fjerner alle lagrede Cargonizer-fraktmetoder, aktive metodevalg, prisoppsett, tilleggstjenestevalg og hentestatus. Fortsette?');">
+								Fjern alle lagrede fraktmetoder
+							</button>
 							<a class="button button-secondary" href="#lp-cargonizer-section-methods">Vis fraktmetoder</a>
 						</p>
-						<p class="description">Knappen henter transport agreements og produkter for alle senderadressene som vises over med hver rad sin <code>X-Cargonizer-Sender</code>. Hvis én sender feiler, beholdes eksisterende metodevalg slik at booking ikke mister fungerende avtaler.</p>
+						<p class="description">Hent-knappen laster transport agreements og produkter for alle senderadressene som vises over med hver rad sin <code>X-Cargonizer-Sender</code>. Fjern-knappen rydder lagrede produkter og metodevalg, men beholder API key, senderadresser, printere og bookingoppsett.</p>
 					<?php endif; ?>
 
 					<h2 id="lp-cargonizer-section-booking">Booking-standardvalg</h2>
@@ -2142,7 +2249,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										$summary_text = $summary_enabled_methods . '/' . $summary_total_methods . ' aktive produkter, ' . $summary_agreement_count . ' fraktavtale(r)';
 									} elseif (!empty($summary_last_fetch)) {
 										if (!empty($summary_last_fetch['success'])) {
-											$summary_text = 'Hentet fra Cargonizer, men ingen produkter funnet (' . (isset($summary_last_fetch['agreement_count']) ? (int) $summary_last_fetch['agreement_count'] : 0) . ' avtale(r)).';
+											$summary_fetch_methods = isset($summary_last_fetch['method_count']) ? (int) $summary_last_fetch['method_count'] : 0;
+											if ($summary_fetch_methods > 0) {
+												$summary_text = 'Hentet fra Cargonizer med ' . $summary_fetch_methods . ' produkt(er), men lagrede produkter matcher ikke senderprofilen. Fjern lagrede fraktmetoder og hent på nytt dersom dette vedvarer.';
+											} else {
+												$summary_text = 'Hentet fra Cargonizer, men ingen produkter funnet (' . (isset($summary_last_fetch['agreement_count']) ? (int) $summary_last_fetch['agreement_count'] : 0) . ' avtale(r)).';
+											}
 										} else {
 											$summary_text = 'Henting feilet' . (!empty($summary_last_fetch['status']) ? ' (HTTP ' . (int) $summary_last_fetch['status'] . ')' : '') . ': ' . (isset($summary_last_fetch['message']) && $summary_last_fetch['message'] !== '' ? (string) $summary_last_fetch['message'] : 'Ukjent feil');
 										}
@@ -2159,6 +2271,31 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<?php
 						$method_groups = array();
+						$method_sender_profile_aliases = array();
+						foreach ($sender_method_summary as $summary_profile_id => $summary) {
+							if (!is_array($summary) || !empty($summary['is_legacy_unscoped'])) {
+								continue;
+							}
+							$summary_profile_id = sanitize_key((string) $summary_profile_id);
+							if ($summary_profile_id === '') {
+								continue;
+							}
+							$summary_sender_id = isset($summary['sender_id']) ? sanitize_text_field((string) $summary['sender_id']) : '';
+							$summary_sender_entity_id = isset($summary['sender_entity_id']) ? sanitize_text_field((string) $summary['sender_entity_id']) : '';
+							$summary_aliases = array($summary_profile_id);
+							if ($summary_sender_id !== '') {
+								$summary_aliases[] = $summary_sender_id;
+								$summary_aliases[] = $this->build_sender_profile_id($summary_sender_id);
+							}
+							if ($summary_sender_entity_id !== '') {
+								$summary_aliases[] = $summary_sender_entity_id;
+								$summary_aliases[] = $this->build_sender_profile_id($summary_sender_entity_id);
+							}
+							foreach (array_values(array_unique(array_filter($summary_aliases, 'strlen'))) as $summary_alias) {
+								$method_sender_profile_aliases[sanitize_key((string) $summary_alias)] = $summary_profile_id;
+								$method_sender_profile_aliases[sanitize_text_field((string) $summary_alias)] = $summary_profile_id;
+							}
+						}
 						foreach ($settings['available_methods'] as $method) {
 							$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
 							$agreement_id = isset($method['agreement_id']) ? trim((string) $method['agreement_id']) : '';
@@ -2172,6 +2309,18 @@ trait LP_Cargonizer_Admin_Page_Trait {
 							if ($sender_profile_id === '' && !empty($method['key']) && strpos((string) $method['key'], '::') !== false) {
 								$key_parts = explode('::', (string) $method['key'], 2);
 								$sender_profile_id = sanitize_key((string) $key_parts[0]);
+							}
+							if ($sender_profile_id !== '' && !isset($sender_method_summary[$sender_profile_id]) && isset($method_sender_profile_aliases[$sender_profile_id])) {
+								$sender_profile_id = $method_sender_profile_aliases[$sender_profile_id];
+							}
+							if ($sender_id !== '' && ($sender_profile_id === '' || !isset($sender_method_summary[$sender_profile_id]))) {
+								$method_sender_id_aliases = array($sender_id, $this->build_sender_profile_id($sender_id));
+								foreach ($method_sender_id_aliases as $method_sender_id_alias) {
+									if (isset($method_sender_profile_aliases[$method_sender_id_alias])) {
+										$sender_profile_id = $method_sender_profile_aliases[$method_sender_id_alias];
+										break;
+									}
+								}
 							}
 							$is_legacy_unscoped_method = $sender_profile_id === '' && !$is_manual_norgespakke_method;
 							if ($is_legacy_unscoped_method) {
@@ -2493,6 +2642,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 					<p>
 						<button type="submit" name="lp_cargonizer_refresh_method_choices" class="button button-secondary">
 							Hent/oppdater fraktavtaler for alle senderadresser
+						</button>
+						<button type="submit" name="lp_cargonizer_clear_stored_methods" value="1" class="button button-secondary" onclick="return window.confirm('Dette fjerner alle lagrede Cargonizer-fraktmetoder, aktive metodevalg, prisoppsett, tilleggstjenestevalg og hentestatus. Fortsette?');">
+							Fjern alle lagrede fraktmetoder
 						</button>
 					</p>
 
