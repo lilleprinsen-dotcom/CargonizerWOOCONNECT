@@ -394,6 +394,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'profile_id' => $profile_id,
 			'name' => $display_name,
 			'sender_id' => $sender_id,
+			'sender_entity_id' => isset($profile['sender_entity_id']) ? sanitize_text_field((string) $profile['sender_entity_id']) : '',
 			'company' => $company,
 			'address1' => $address1,
 			'address2' => $address2,
