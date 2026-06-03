@@ -63,6 +63,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'optimizeDsv' => wp_create_nonce(self::NONCE_ACTION_OPTIMIZE_DSV),
 				'servicepartners' => wp_create_nonce(self::NONCE_ACTION_SERVICEPARTNERS),
 				'book' => wp_create_nonce(self::NONCE_ACTION_BOOK),
+				'postenQueue' => class_exists('LP_Cargonizer_Posten_Label_Automation') ? wp_create_nonce(LP_Cargonizer_Posten_Label_Automation::get_queue_nonce_action()) : '',
 				'printers' => wp_create_nonce(self::NONCE_ACTION_PRINTERS),
 			),
 			'bookingDefaults' => array(
@@ -1246,10 +1247,11 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		$method_refresh = null;
 		$admin_servicepoint_diag_result = null;
 		$direct_print_result = null;
+		$posten_robot_plain_token = '';
 
 		// Lagre innstillinger
 		if (
-			isset($_POST['lp_cargonizer_save_settings'])
+			(isset($_POST['lp_cargonizer_save_settings']) || isset($_POST['lp_cargonizer_generate_posten_robot_token']))
 			&& isset($_POST['_wpnonce'])
 			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)
 		) {
@@ -1264,6 +1266,14 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'booking_estimator_top_count' => isset($_POST['lp_cargonizer_booking_estimator_top_count']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_estimator_top_count'])) : (isset($settings['booking_estimator_top_count']) ? $settings['booking_estimator_top_count'] : 3),
 				'booking_pickup_autoselect_mode' => isset($_POST['lp_cargonizer_booking_pickup_autoselect_mode']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_pickup_autoselect_mode'])) : (isset($settings['booking_pickup_autoselect_mode']) ? $settings['booking_pickup_autoselect_mode'] : 'nearest'),
 				'booking_order_status_after_created' => isset($_POST['lp_cargonizer_booking_order_status_after_created']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_booking_order_status_after_created'])) : (isset($settings['booking_order_status_after_created']) ? $settings['booking_order_status_after_created'] : ''),
+				'posten_robot' => array(
+					'enabled' => isset($_POST['lp_cargonizer_posten_robot_enabled']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_enabled'])) : '0',
+					'auto_queue_checkout_norgespakke' => isset($_POST['lp_cargonizer_posten_robot_auto_queue']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_posten_robot_auto_queue'])) : '0',
+					'token_hash' => isset($settings['posten_robot']['token_hash']) ? sanitize_text_field((string) $settings['posten_robot']['token_hash']) : '',
+					'token_generated_at_gmt' => isset($settings['posten_robot']['token_generated_at_gmt']) ? sanitize_text_field((string) $settings['posten_robot']['token_generated_at_gmt']) : '',
+					'status_when_queued' => 'lp-waiting-label',
+					'status_after_label_created' => 'lp-label-created',
+				),
 				'printer_aliases' => isset($_POST['lp_cargonizer_printer_aliases']) && is_array($_POST['lp_cargonizer_printer_aliases']) ? wp_unslash($_POST['lp_cargonizer_printer_aliases']) : array(),
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => is_array($posted_enabled_methods)
@@ -1315,6 +1325,12 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				}
 			}
 
+			if (isset($_POST['lp_cargonizer_generate_posten_robot_token']) && class_exists('LP_Cargonizer_Posten_Label_Automation')) {
+				$posten_robot_plain_token = LP_Cargonizer_Posten_Label_Automation::generate_robot_token();
+				$new_settings['posten_robot']['token_hash'] = LP_Cargonizer_Posten_Label_Automation::hash_robot_token($posten_robot_plain_token);
+				$new_settings['posten_robot']['token_generated_at_gmt'] = gmdate('Y-m-d H:i:s');
+			}
+
 			$new_settings = $this->sanitize_settings($new_settings);
 			$profiles_json = $this->parse_live_checkout_json_array_input(isset($_POST['lp_cargonizer_shipping_profiles_json']) ? wp_unslash($_POST['lp_cargonizer_shipping_profiles_json']) : '');
 			if (!empty($profiles_json) && empty($new_settings['shipping_profiles']['profiles'])) {
@@ -1335,6 +1351,9 @@ trait LP_Cargonizer_Admin_Page_Trait {
 			$current_user_default_printer_id = $posted_default_printer_id;
 
 			echo '<div class="notice notice-success"><p>Innstillinger lagret.</p></div>';
+			if ($posten_robot_plain_token !== '') {
+				echo '<div class="notice notice-warning"><p><strong>Ny Posten robot-token:</strong> <code>' . esc_html($posten_robot_plain_token) . '</code></p><p>Kopier denne naa. Den lagres bare som hash og kan ikke vises igjen.</p></div>';
+			}
 		}
 
 		if (
@@ -2024,6 +2043,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 						<strong>Hopp til</strong>
 						<a href="#lp-cargonizer-section-connection">Tilkobling</a>
 						<a href="#lp-cargonizer-section-booking">Booking</a>
+						<a href="#lp-cargonizer-section-posten-robot">Posten robot</a>
 						<a href="#lp-cargonizer-section-printers">Printere</a>
 						<a href="#lp-cargonizer-section-methods">Fraktmetoder</a>
 						<a href="#lp-cargonizer-section-checkout">Checkout</a>
@@ -2305,6 +2325,65 @@ trait LP_Cargonizer_Admin_Page_Trait {
 										<?php endforeach; ?>
 									</select>
 									<p class="description">Når Cargonizer-booking er opprettet, endres statusen automatisk, ordren lastes inn på nytt, og pluginen verifiserer at statusen faktisk ble lagret. Hvis verifisering feiler, planlegges automatisk retry uten admin-handling.</p>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+
+					<h2 id="lp-cargonizer-section-posten-robot">Posten Norgespakke robot</h2>
+					<?php
+					$posten_robot_settings = isset($settings['posten_robot']) && is_array($settings['posten_robot']) ? $settings['posten_robot'] : array();
+					$posten_robot_token_exists = !empty($posten_robot_settings['token_hash']);
+					$posten_robot_token_generated = isset($posten_robot_settings['token_generated_at_gmt']) ? sanitize_text_field((string) $posten_robot_settings['token_generated_at_gmt']) : '';
+					?>
+					<p class="description">For manuell Norgespakke blir Book shipment omdirigert til en lokal Posten-labelko. Den lokale Playwright-roboten henter jobber via REST API og laster tracking/label tilbake til ordren.</p>
+					<table class="form-table" role="presentation">
+						<tbody>
+							<tr>
+								<th scope="row">Robotko</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_posten_robot_enabled" value="0">
+									<label>
+										<input type="checkbox" name="lp_cargonizer_posten_robot_enabled" value="1" <?php checked(!empty($posten_robot_settings['enabled'])); ?>>
+										Aktiver Posten-labelko for manuell Norgespakke
+									</label>
+									<p class="description">Paavirker bare <code>manual|norgespakke</code>. Vanlige Logistra/Cargonizer-metoder bruker fortsatt eksisterende booking, print og tracking.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">Auto-ko fra checkout</th>
+								<td>
+									<input type="hidden" name="lp_cargonizer_posten_robot_auto_queue" value="0">
+									<label>
+										<input type="checkbox" name="lp_cargonizer_posten_robot_auto_queue" value="1" <?php checked(!empty($posten_robot_settings['auto_queue_checkout_norgespakke'])); ?>>
+										Opprett kojobb automatisk naar checkout-valget er manuell Norgespakke og betaling/status trigges
+									</label>
+									<p class="description">Standard er av. Admin-booking fra ordresiden kan alltid opprette kojobb naar robotkoen er aktiv.</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">REST-token</th>
+								<td>
+									<p style="margin-top:0;">
+										Status:
+										<strong><?php echo $posten_robot_token_exists ? esc_html('Token er generert') : esc_html('Ingen token generert'); ?></strong>
+										<?php if ($posten_robot_token_generated !== '') : ?>
+											<br><small><?php echo esc_html('Sist generert (GMT): ' . $posten_robot_token_generated); ?></small>
+										<?php endif; ?>
+									</p>
+									<button type="submit" name="lp_cargonizer_generate_posten_robot_token" value="1" class="button button-secondary">
+										Generer ny robot-token
+									</button>
+									<p class="description">Token vises bare én gang etter generering. Roboten kan sende den som <code><?php echo esc_html(LP_Cargonizer_Posten_Label_Automation::TOKEN_HEADER); ?></code> eller Bearer-token.</p>
+									<p class="description">REST-endepunkt: <code><?php echo esc_html(rest_url(LP_Cargonizer_Posten_Label_Automation::REST_NAMESPACE . '/posten-label-jobs')); ?></code></p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">Ordrestatus</th>
+								<td>
+									<p style="margin-top:0;">Ved ko: <code>wc-<?php echo esc_html(LP_Cargonizer_Posten_Label_Automation::ORDER_STATUS_WAITING); ?></code></p>
+									<p>Ved opplastet label: <code>wc-<?php echo esc_html(LP_Cargonizer_Posten_Label_Automation::ORDER_STATUS_CREATED); ?></code></p>
+									<p class="description">Status settes og verifiseres av ko-tjenesten naar jobben opprettes og naar roboten fullfoerer jobben.</p>
 								</td>
 							</tr>
 						</tbody>

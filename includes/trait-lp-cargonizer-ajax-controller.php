@@ -1185,6 +1185,19 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt eller hent/aktiver fraktmetoder i Cargonizer-innstillingene.'), 400);
 		}
 
+		if ($this->is_manual_norgespakke_method($method_payload) && class_exists('LP_Cargonizer_Posten_Label_Automation')) {
+			$queue_result = LP_Cargonizer_Posten_Label_Automation::instance()->queue_from_admin_request($order, $method_payload, $clean_packages, array(
+				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
+				'notify_email_to_consignee' => $notify_email_to_consignee,
+				'source' => 'legacy_booking_ajax',
+			));
+			if (is_wp_error($queue_result)) {
+				wp_send_json_error(array('message' => $queue_result->get_error_message()), 400);
+			}
+
+			wp_send_json_success($queue_result);
+		}
+
 		if ($method_payload['sms_service_id'] === '') {
 			$sms_service = $this->find_sms_service_for_method($methods[0]);
 			$method_payload['sms_service_id'] = $sms_service['service_id'];
