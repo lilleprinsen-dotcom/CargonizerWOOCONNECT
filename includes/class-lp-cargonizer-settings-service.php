@@ -25,6 +25,7 @@ class LP_Cargonizer_Settings_Service {
 			'booking_estimator_top_count' => 3,
 			'booking_pickup_autoselect_mode' => 'nearest',
 			'booking_order_status_after_created' => '',
+			'posten_robot' => $this->get_posten_robot_defaults(),
 			'printer_aliases' => array(),
 			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
@@ -76,6 +77,10 @@ class LP_Cargonizer_Settings_Service {
 			'booking_order_status_after_created' => isset($input['booking_order_status_after_created'])
 				? $this->sanitize_booking_order_status_after_created($input['booking_order_status_after_created'])
 				: $this->sanitize_booking_order_status_after_created(isset($current['booking_order_status_after_created']) ? $current['booking_order_status_after_created'] : ''),
+			'posten_robot' => $this->sanitize_posten_robot_settings(
+				isset($input['posten_robot']) && is_array($input['posten_robot']) ? $input['posten_robot'] : array(),
+				isset($current['posten_robot']) && is_array($current['posten_robot']) ? $current['posten_robot'] : array()
+			),
 			'printer_aliases' => array(),
 			'available_methods' => array(),
 			'enabled_methods' => array(),
@@ -597,6 +602,32 @@ class LP_Cargonizer_Settings_Service {
 		}
 
 		return $status;
+	}
+
+	private function get_posten_robot_defaults() {
+		return array(
+			'enabled' => 1,
+			'auto_queue_checkout_norgespakke' => 0,
+			'token_hash' => '',
+			'token_generated_at_gmt' => '',
+			'status_when_queued' => 'lp-waiting-label',
+			'status_after_label_created' => 'lp-label-created',
+		);
+	}
+
+	private function sanitize_posten_robot_settings($input, $current) {
+		$base = wp_parse_args(is_array($current) ? $current : array(), $this->get_posten_robot_defaults());
+		$queued_status = isset($input['status_when_queued']) ? sanitize_key((string) $input['status_when_queued']) : sanitize_key((string) $base['status_when_queued']);
+		$created_status = isset($input['status_after_label_created']) ? sanitize_key((string) $input['status_after_label_created']) : sanitize_key((string) $base['status_after_label_created']);
+
+		return array(
+			'enabled' => isset($input['enabled']) ? $this->sanitize_checkbox_value($input['enabled']) : $this->sanitize_checkbox_value($base['enabled']),
+			'auto_queue_checkout_norgespakke' => isset($input['auto_queue_checkout_norgespakke']) ? $this->sanitize_checkbox_value($input['auto_queue_checkout_norgespakke']) : $this->sanitize_checkbox_value($base['auto_queue_checkout_norgespakke']),
+			'token_hash' => isset($input['token_hash']) ? sanitize_text_field((string) $input['token_hash']) : sanitize_text_field((string) $base['token_hash']),
+			'token_generated_at_gmt' => isset($input['token_generated_at_gmt']) ? sanitize_text_field((string) $input['token_generated_at_gmt']) : sanitize_text_field((string) $base['token_generated_at_gmt']),
+			'status_when_queued' => $queued_status !== '' ? $queued_status : 'lp-waiting-label',
+			'status_after_label_created' => $created_status !== '' ? $created_status : 'lp-label-created',
+		);
 	}
 
 	private function sanitize_shipping_profiles_settings($input, $current) {

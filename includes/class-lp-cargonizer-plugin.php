@@ -11,6 +11,8 @@ class LP_Cargonizer_Plugin {
 	private $checkout_pickup_controller;
 	/** @var LP_Cargonizer_Checkout_Selection_Persistence_Service */
 	private $checkout_selection_persistence_service;
+	/** @var LP_Cargonizer_Posten_Label_Automation */
+	private $posten_label_automation;
 	/** @var LP_Cargonizer_Checkout_Pickup_Compatibility_Layer */
 	private $checkout_pickup_compatibility_layer;
 	/** @var LP_Cargonizer_Settings_Service */
@@ -22,11 +24,13 @@ class LP_Cargonizer_Plugin {
 		$this->checkout_pickup_controller = new LP_Cargonizer_Checkout_Pickup_Controller();
 		$this->checkout_pickup_compatibility_layer = new LP_Cargonizer_Checkout_Pickup_Compatibility_Layer();
 		$this->checkout_selection_persistence_service = new LP_Cargonizer_Checkout_Selection_Persistence_Service();
+		$this->posten_label_automation = LP_Cargonizer_Posten_Label_Automation::instance();
 	}
 
 	public function bootstrap() {
 		$this->log_live_checkout_event('debug', 'Bootstrapping Cargonizer plugin services.');
 		$this->connector->register_hooks();
+		$this->posten_label_automation->register_hooks();
 		if ($this->is_live_checkout_enabled()) {
 			$this->checkout_pickup_controller->register_hooks();
 			$this->checkout_pickup_compatibility_layer->register_hooks();

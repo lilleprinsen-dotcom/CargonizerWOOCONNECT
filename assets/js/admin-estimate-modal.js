@@ -2317,6 +2317,24 @@
 
 			function renderBookingSuccess(booking, method){
 				var bookingData = booking || {};
+				if (bookingData.booking_mode === 'posten_label_queue') {
+					var postenJob = bookingData.posten_label_job || {};
+					var postenSummary = bookingData.posten_summary || {};
+					var postenRecipient = postenJob.recipient || {};
+					var postenShipping = postenJob.shipping || {};
+					var postenMethodLabel = postenShipping.method_label || (method && (method.product_name || method.label) ? (method.product_name || method.label) : 'Posten Norgespakke');
+					var postenEstimatedPrice = bookingData.estimated_shipping_price || postenShipping.estimated_price || 'ikke tilgjengelig';
+					return '' +
+						'<div style="color:#125228;font-weight:600;">Posten labeljobb opprettet.</div>' +
+						'<div><strong>Jobb-ID:</strong> ' + esc(bookingData.posten_label_job_id || postenJob.job_id || '—') + '</div>' +
+						'<div><strong>Status:</strong> ' + esc(bookingData.posten_label_status || postenJob.status || 'queued') + '</div>' +
+						'<div><strong>Kolli:</strong> ' + esc(postenSummary.colli_count || (Array.isArray(postenJob.packages) ? postenJob.packages.length : '—')) + '</div>' +
+						'<div><strong>Mottaker:</strong> ' + esc(postenSummary.receiver_name || postenRecipient.name || '—') + '</div>' +
+						'<div><strong>Postnummer:</strong> ' + esc(postenSummary.receiver_postcode || postenRecipient.postcode || '—') + '</div>' +
+						'<div><strong>Fraktmetode:</strong> ' + esc(postenMethodLabel) + '</div>' +
+						'<div><strong>Estimert fraktpris:</strong> ' + esc(postenEstimatedPrice) + '</div>' +
+						'<div style="margin-top:6px;color:#646970;">Lokal Posten-robot henter jobben via REST API og laster opp label/tracking tilbake til ordren.</div>';
+				}
 				var methodLabel = '';
 				if (method && (method.product_name || method.agreement_name)) {
 					methodLabel = [method.agreement_name || '', method.product_name || ''].filter(function(v){ return !!v; }).join(' - ');
@@ -2858,7 +2876,10 @@
 					}
 					bookingResultsContent.innerHTML = '<em>Booker shipment...</em>';
 
-					var bookingNonce = (config.nonces && config.nonces.book ? config.nonces.book : '');
+					var usePostenQueue = isManualNorgespakkeRow(method);
+					var bookingNonce = usePostenQueue
+						? (config.nonces && config.nonces.postenQueue ? config.nonces.postenQueue : '')
+						: (config.nonces && config.nonces.book ? config.nonces.book : '');
 					if (!bookingNonce) {
 						bookingResultsContent.innerHTML = '<span style="color:#b32d2e;">Booking nonce mangler i frontend-konfigurasjonen.</span>';
 						setBookingActionLoading(false);
@@ -2866,7 +2887,7 @@
 					}
 
 				var form = new FormData();
-				form.append('action', 'lp_cargonizer_book_shipment');
+				form.append('action', usePostenQueue ? 'lp_cargonizer_queue_posten_label_job' : 'lp_cargonizer_book_shipment');
 				form.append('nonce', bookingNonce);
 				form.append('order_id', currentOrderId);
 				form.append('warehouse_profile_id', getSelectedSenderProfileId());
