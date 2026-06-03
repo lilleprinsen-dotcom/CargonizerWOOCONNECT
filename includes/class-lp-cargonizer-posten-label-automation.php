@@ -12,19 +12,23 @@ class LP_Cargonizer_Posten_Label_Automation {
 	const REST_ROUTE_LEGACY = '/posten-label-jobs';
 	const TOKEN_HEADER = 'X-LP-Posten-Robot-Token';
 	const SCHEMA_VERSION_OPTION = 'lp_cargonizer_posten_jobs_schema_version';
-	const SCHEMA_VERSION = '2';
+	const SCHEMA_VERSION = '3';
 	const ORDER_STATUS_WAITING = 'lp-waiting-label';
 	const ORDER_STATUS_CREATED = 'lp-label-created';
 	const JOB_STATUS_QUEUED = 'queued';
 	const JOB_STATUS_PROCESSING = 'processing';
 	const JOB_STATUS_COMPLETED = 'completed';
 	const JOB_STATUS_FAILED = 'failed';
+	const JOB_STATUS_PARTIAL_FAILED = 'partial_failed';
 	const JOB_STATUS_CANCELLED = 'cancelled';
 	const META_JOB_ID = '_lp_posten_label_job_id';
 	const META_LABEL_STATUS = '_lp_posten_label_status';
 	const META_TRACKING_NUMBER = '_lp_posten_tracking_number';
+	const META_TRACKING_NUMBERS = '_lp_posten_tracking_numbers';
 	const META_TRACKING_URL = '_lp_posten_tracking_url';
+	const META_PACKAGE_RESULTS = '_lp_posten_package_results';
 	const META_LABEL_FILE_PATH = '_lp_posten_label_file_path';
+	const META_LABEL_FILES = '_lp_posten_label_files';
 	const META_LABEL_ATTACHMENT_ID = '_lp_posten_label_attachment_id';
 	const META_LABEL_PRINTED = '_lp_posten_label_printed';
 	const META_REQUESTED_AT_GMT = '_lp_posten_label_requested_at_gmt';
@@ -137,6 +141,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 			items_json longtext NOT NULL,
 			tracking_number varchar(191) NOT NULL DEFAULT '',
 			tracking_url text NULL,
+			tracking_numbers_json longtext NULL,
+			package_results_json longtext NULL,
+			label_files_json longtext NULL,
 			label_file_path text NULL,
 			label_attachment_id bigint(20) unsigned NOT NULL DEFAULT 0,
 			printed tinyint(1) NOT NULL DEFAULT 0,
@@ -457,6 +464,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$tracking_number = isset($payload['tracking_number']) ? (string) $payload['tracking_number'] : '';
 		$label_url = isset($payload['label_url']) ? (string) $payload['label_url'] : '';
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
+		$package_results = isset($payload['package_results']) && is_array($payload['package_results']) ? $payload['package_results'] : array();
 		$worker_id = isset($payload['worker_id']) ? (string) $payload['worker_id'] : '';
 		$last_error = isset($payload['last_error']) ? (string) $payload['last_error'] : '';
 
@@ -468,16 +476,35 @@ class LP_Cargonizer_Posten_Label_Automation {
 		if ($worker_id !== '' && $status === self::JOB_STATUS_PROCESSING) {
 			echo '<div>Worker ID: ' . esc_html($worker_id) . '</div>';
 		}
-		if ($last_error !== '' && $status === self::JOB_STATUS_FAILED) {
+		if ($last_error !== '' && in_array($status, array(self::JOB_STATUS_FAILED, self::JOB_STATUS_PARTIAL_FAILED), true)) {
 			echo '<div style="color:#b32d2e;">Siste feil: ' . esc_html($last_error) . '</div>';
 		}
-		if ($tracking_number !== '') {
+		if (!empty($package_results)) {
+			echo '<div style="margin-top:6px;"><strong>Kolli/etiketter:</strong></div>';
+			foreach ($package_results as $result) {
+				$package_index = isset($result['package_index']) ? absint($result['package_index']) : 0;
+				$result_tracking_number = isset($result['tracking_number']) ? (string) $result['tracking_number'] : '';
+				$result_tracking_url = isset($result['tracking_url']) ? (string) $result['tracking_url'] : '';
+				$result_label_url = isset($result['label_url']) ? (string) $result['label_url'] : '';
+				echo '<div>';
+				echo 'Kolli ' . esc_html((string) $package_index) . ': ';
+				if ($result_tracking_number !== '' && $result_tracking_url !== '') {
+					echo '<a href="' . esc_url($result_tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($result_tracking_number) . '</a>';
+				} else {
+					echo esc_html($result_tracking_number !== '' ? $result_tracking_number : '-');
+				}
+				if ($result_label_url !== '') {
+					echo ' - <a href="' . esc_url($result_label_url) . '" target="_blank" rel="noopener noreferrer">Last ned label</a>';
+				}
+				echo '</div>';
+			}
+		} elseif ($tracking_number !== '') {
 			echo '<div>Sporingsnummer: ' . esc_html($tracking_number) . '</div>';
 		}
-		if ($tracking_url !== '') {
+		if (empty($package_results) && $tracking_url !== '') {
 			echo '<div>Sporing: <a href="' . esc_url($tracking_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($tracking_url) . '</a></div>';
 		}
-		if ($label_url !== '') {
+		if (empty($package_results) && $label_url !== '') {
 			echo '<div>Etikett: <a href="' . esc_url($label_url) . '" target="_blank" rel="noopener noreferrer">Last ned PDF</a></div>';
 		}
 		echo '<div style="margin-top:6px;color:#646970;">Køjobber behandles når lokal pakkemaskin/robot kjører.</div>';
@@ -612,44 +639,42 @@ class LP_Cargonizer_Posten_Label_Automation {
 			return new WP_Error('posten_job_worker_mismatch', 'Worker-ID matcher ikke claime-jobben.', array('status' => 409));
 		}
 
-		$tracking_number = sanitize_text_field((string) $request->get_param('tracking_number'));
-		$tracking_url = esc_url_raw((string) $request->get_param('tracking_url'));
-		if ($tracking_url === '' && $tracking_number !== '') {
-			$tracking_url = $this->build_default_tracking_url($tracking_number);
-		}
-		$label_base64 = (string) $request->get_param('label_pdf_base64');
-		if ($label_base64 === '') {
-			$label_base64 = (string) $request->get_param('label_pdf');
-		}
-		if ($tracking_number === '' || $label_base64 === '') {
-			return new WP_Error('posten_job_complete_missing_fields', 'tracking_number og label_pdf_base64 er påkrevd.', array('status' => 400));
-		}
 		$printed = $this->parse_bool_param($request->get_param('printed')) ? 1 : 0;
-
-		$stored_label = $this->store_label_pdf($job_id, $label_base64, sanitize_file_name((string) $request->get_param('label_filename')));
-		if (is_wp_error($stored_label)) {
-			return $stored_label;
+		$completion = $this->prepare_completion_payload($request, $job, $printed);
+		if (is_wp_error($completion)) {
+			return $completion;
 		}
 
 		global $wpdb;
 		$table = $this->get_table_name();
 		$now = gmdate('Y-m-d H:i:s');
-		$set_sql = 'status = %s, tracking_number = %s, tracking_url = %s, label_file_path = %s, label_attachment_id = %d, printed = %d, completed_at_gmt = %s, updated_at_gmt = %s, last_error = %s, failure_message = %s';
+		$set_sql = 'status = %s, tracking_number = %s, tracking_url = %s, label_file_path = %s, label_attachment_id = %d, printed = %d, tracking_numbers_json = %s, package_results_json = %s, label_files_json = %s, updated_at_gmt = %s, last_error = %s, failure_message = %s';
 		$where_sql = 'job_id = %s AND status = %s';
 		$args = array(
-			self::JOB_STATUS_COMPLETED,
-			$tracking_number,
-			$tracking_url,
-			$stored_label['path'],
+			$completion['status'],
+			$completion['tracking_number'],
+			$completion['tracking_url'],
+			$completion['label_file_path'],
 			0,
 			$printed,
+			$this->json_encode($completion['tracking_numbers']),
+			$this->json_encode($completion['package_results']),
+			$this->json_encode($completion['label_files']),
 			$now,
-			$now,
-			'',
-			'',
+			$completion['last_error'],
+			$completion['last_error'],
+		);
+		if ($completion['status'] === self::JOB_STATUS_COMPLETED) {
+			$set_sql .= ', completed_at_gmt = %s, failed_at_gmt = NULL';
+			$args[] = $now;
+		} else {
+			$set_sql .= ', completed_at_gmt = NULL, failed_at_gmt = %s';
+			$args[] = $now;
+		}
+		$args = array_merge($args, array(
 			$job_id,
 			self::JOB_STATUS_PROCESSING,
-		);
+		));
 		if (!$this->is_admin_override_request()) {
 			$where_sql .= ' AND worker_id = %s';
 			$args[] = $worker_id;
@@ -669,26 +694,37 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$order = wc_get_order((int) $job->order_id);
 		if ($order) {
 			$order->update_meta_data(self::META_JOB_ID, $job_id);
-			$order->update_meta_data(self::META_LABEL_STATUS, self::JOB_STATUS_COMPLETED);
-			$order->update_meta_data(self::META_TRACKING_NUMBER, $tracking_number);
-			$order->update_meta_data(self::META_TRACKING_URL, $tracking_url);
-			$order->update_meta_data(self::META_LABEL_FILE_PATH, $stored_label['path']);
+			$order->update_meta_data(self::META_LABEL_STATUS, $completion['status']);
+			$order->update_meta_data(self::META_TRACKING_NUMBER, $completion['tracking_number']);
+			$order->update_meta_data(self::META_TRACKING_NUMBERS, $completion['tracking_numbers']);
+			$order->update_meta_data(self::META_TRACKING_URL, $completion['tracking_url']);
+			$order->update_meta_data(self::META_PACKAGE_RESULTS, $completion['order_package_results']);
+			$order->update_meta_data(self::META_LABEL_FILE_PATH, $completion['label_file_path']);
+			$order->update_meta_data(self::META_LABEL_FILES, $completion['label_files']);
 			$order->update_meta_data(self::META_LABEL_ATTACHMENT_ID, 0);
-			$order->update_meta_data(self::META_COMPLETED_AT_GMT, $now);
 			$order->update_meta_data(self::META_LABEL_PRINTED, $printed);
+			if ($completion['status'] === self::JOB_STATUS_COMPLETED) {
+				$order->update_meta_data(self::META_COMPLETED_AT_GMT, $now);
+			}
 			$order->save();
 			$this->add_private_order_note($order, $this->build_completed_order_note($updated_job));
-			$this->set_order_status_if_current($order, self::ORDER_STATUS_WAITING, self::ORDER_STATUS_CREATED, 'Posten Norgespakke etikett opprettet.');
+			if ($completion['status'] === self::JOB_STATUS_COMPLETED) {
+				$this->set_order_status_if_current($order, self::ORDER_STATUS_WAITING, self::ORDER_STATUS_CREATED, 'Posten Norgespakke etikett opprettet.');
+			}
 		}
 
-		$response = $this->format_job_response($updated_job, false);
+		$response = $this->format_job_response($updated_job, true);
 		return rest_ensure_response(array(
 			'job_id' => isset($response['job_id']) ? $response['job_id'] : $job_id,
 			'order_id' => isset($response['order_id']) ? $response['order_id'] : (int) $job->order_id,
-			'status' => isset($response['status']) ? $response['status'] : self::JOB_STATUS_COMPLETED,
-			'tracking_number' => $tracking_number,
-			'tracking_url' => $tracking_url,
+			'status' => isset($response['status']) ? $response['status'] : $completion['status'],
+			'tracking_number' => $completion['tracking_number'],
+			'tracking_numbers' => isset($response['tracking_numbers']) ? $response['tracking_numbers'] : $completion['tracking_numbers'],
+			'tracking_url' => $completion['tracking_url'],
 			'label_url' => isset($response['label_url']) ? $response['label_url'] : '',
+			'package_results' => isset($response['package_results']) ? $response['package_results'] : array(),
+			'label_files' => isset($response['label_files']) ? $response['label_files'] : array(),
+			'missing_package_indexes' => isset($completion['missing_package_indexes']) ? $completion['missing_package_indexes'] : array(),
 		));
 	}
 
@@ -783,18 +819,36 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 	public function rest_download_label($request) {
 		$job = $this->get_job_by_id($this->sanitize_job_id($request['job_id']));
-		if (!$job || empty($job->label_file_path)) {
+		if (!$job) {
 			return new WP_Error('posten_label_not_found', 'Label PDF ikke funnet.', array('status' => 404));
 		}
 
-		$file = (string) $job->label_file_path;
+		$package_index = absint($request->get_param('package_index'));
+		if ($package_index > 0) {
+			$file = $this->get_label_file_for_package($job, $package_index);
+		} else {
+			$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
+			$label_files = $this->json_decode(isset($job->label_files_json) ? $job->label_files_json : '');
+			if (count($packages) > 1 && count($label_files) > 0) {
+				return new WP_Error('posten_label_package_index_required', 'Denne jobben har flere etiketter. Angi package_index.', array('status' => 400));
+			}
+			$file = !empty($job->label_file_path) ? (string) $job->label_file_path : '';
+			if ($file === '' && count($label_files) === 1 && !empty($label_files[0]['label_file_path'])) {
+				$file = (string) $label_files[0]['label_file_path'];
+			}
+		}
+
+		if ($file === '') {
+			return new WP_Error('posten_label_not_found', 'Label PDF ikke funnet.', array('status' => 404));
+		}
 		if (!$this->is_file_inside_label_dir($file) || !is_readable($file)) {
 			return new WP_Error('posten_label_unreadable', 'Label PDF kan ikke leses.', array('status' => 404));
 		}
 
 		nocache_headers();
 		header('Content-Type: application/pdf');
-		header('Content-Disposition: inline; filename="' . sanitize_file_name('posten-label-' . $job->job_id . '.pdf') . '"');
+		$filename = 'posten-label-' . $job->job_id . ($package_index > 0 ? '-kolli-' . $package_index : '') . '.pdf';
+		header('Content-Disposition: inline; filename="' . sanitize_file_name($filename) . '"');
 		header('Content-Length: ' . filesize($file));
 		readfile($file);
 		exit;
@@ -1187,6 +1241,12 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 		$shipping = $this->json_decode(isset($row->shipping_json) ? $row->shipping_json : '');
 		$method_key = isset($row->method_key) && (string) $row->method_key !== '' ? (string) $row->method_key : LP_Cargonizer_Connector::MANUAL_NORGESPAKKE_KEY;
+		$tracking_numbers = $this->json_decode(isset($row->tracking_numbers_json) ? $row->tracking_numbers_json : '');
+		if (empty($tracking_numbers) && isset($row->tracking_number) && (string) $row->tracking_number !== '') {
+			$tracking_numbers = array((string) $row->tracking_number);
+		}
+		$package_results = $this->get_package_results_for_response($row);
+		$label_files = $this->get_label_files_for_response($row);
 		$response = array(
 			'job_id' => (string) $row->job_id,
 			'order_id' => (int) $row->order_id,
@@ -1203,8 +1263,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 				'method_key' => $method_key,
 			),
 			'tracking_number' => (string) $row->tracking_number,
+			'tracking_numbers' => array_values($tracking_numbers),
 			'tracking_url' => (string) $row->tracking_url,
 			'label_url' => $this->get_admin_label_url($row),
+			'package_results' => $package_results,
+			'label_files' => $label_files,
 			'last_error' => isset($row->last_error) ? (string) $row->last_error : (isset($row->failure_message) ? (string) $row->failure_message : ''),
 			'created_at_gmt' => $this->get_job_datetime($row, 'created_at_gmt', $this->get_job_datetime($row, 'requested_at_gmt')),
 			'claimed_at_gmt' => $this->nullable_datetime($this->get_job_datetime($row, 'claimed_at_gmt')),
@@ -1266,6 +1329,30 @@ class LP_Cargonizer_Posten_Label_Automation {
 
 	private function build_completed_order_note($job) {
 		$printed = isset($job->printed) && (int) $job->printed === 1 ? 'Ja' : 'Nei';
+		$package_results = $this->json_decode(isset($job->package_results_json) ? $job->package_results_json : '');
+		$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
+		$is_multi_note = count($packages) > 1 || count($package_results) > 1 || (isset($job->status) && (string) $job->status === self::JOB_STATUS_PARTIAL_FAILED);
+		if (!empty($package_results) && $is_multi_note) {
+			usort($package_results, array($this, 'sort_by_package_index'));
+			$lines = array();
+			$lines[] = isset($job->status) && (string) $job->status === self::JOB_STATUS_PARTIAL_FAILED
+				? 'Posten Norgespakke etiketter delvis opprettet.'
+				: 'Posten Norgespakke etiketter opprettet.';
+			foreach ($package_results as $result) {
+				$package_index = isset($result['package_index']) ? absint($result['package_index']) : 0;
+				$tracking_number = isset($result['tracking_number']) ? (string) $result['tracking_number'] : '';
+				if ($package_index > 0 && $tracking_number !== '') {
+					$lines[] = 'Kolli ' . $package_index . ': ' . $tracking_number;
+				}
+			}
+			$missing = $this->get_missing_package_indexes($packages, $package_results);
+			if (!empty($missing)) {
+				$lines[] = 'Mangler kolli: ' . implode(', ', array_map('strval', $missing));
+			}
+			$lines[] = 'Utskrift: ' . $printed;
+			return implode("\n", $lines);
+		}
+
 		$tracking_number = isset($job->tracking_number) ? (string) $job->tracking_number : '';
 		$tracking_url = isset($job->tracking_url) ? (string) $job->tracking_url : '';
 		$tracking_text = $tracking_number;
@@ -1303,7 +1390,200 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$order->add_order_note((string) $note, false, true);
 	}
 
-	private function store_label_pdf($job_id, $label_base64, $label_filename = '') {
+	private function prepare_completion_payload($request, $job, $printed) {
+		$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
+		$expected_indexes = $this->get_expected_package_indexes($packages);
+		if (empty($expected_indexes)) {
+			$expected_indexes = array(1);
+		}
+
+		$raw_package_results = $this->get_request_package_results($request);
+		if (is_wp_error($raw_package_results)) {
+			return $raw_package_results;
+		}
+		if (is_array($raw_package_results)) {
+			return $this->prepare_multi_package_completion((string) $job->job_id, $raw_package_results, $expected_indexes, $printed);
+		}
+
+		return $this->prepare_single_package_completion($request, (string) $job->job_id, $expected_indexes, $printed);
+	}
+
+	private function get_request_package_results($request) {
+		$raw = $request->get_param('package_results');
+		if ($raw === null || $raw === '') {
+			return null;
+		}
+		if (is_string($raw)) {
+			$decoded = json_decode($raw, true);
+			$raw = is_array($decoded) ? $decoded : null;
+		}
+		if (!is_array($raw) || empty($raw)) {
+			return new WP_Error('posten_job_package_results_invalid', 'package_results maa vaere en ikke-tom liste.', array('status' => 400));
+		}
+
+		return array_values($raw);
+	}
+
+	private function prepare_multi_package_completion($job_id, $raw_package_results, $expected_indexes, $printed) {
+		$results = array();
+		$seen = array();
+		foreach ($raw_package_results as $result) {
+			if (!is_array($result)) {
+				return new WP_Error('posten_job_package_result_invalid', 'Hvert package_results-element maa vaere et objekt.', array('status' => 400));
+			}
+			$package_index = isset($result['package_index']) ? absint($result['package_index']) : 0;
+			if ($package_index < 1 || !in_array($package_index, $expected_indexes, true)) {
+				return new WP_Error('posten_job_package_index_invalid', 'package_index matcher ikke et kolli i jobben.', array('status' => 400));
+			}
+			if (isset($seen[$package_index])) {
+				return new WP_Error('posten_job_package_index_duplicate', 'package_results inneholder duplikat package_index.', array('status' => 400));
+			}
+			$seen[$package_index] = true;
+
+			$tracking_number = isset($result['tracking_number']) ? sanitize_text_field((string) $result['tracking_number']) : '';
+			$label_base64 = isset($result['label_pdf_base64']) ? (string) $result['label_pdf_base64'] : '';
+			if ($label_base64 === '' && isset($result['label_pdf'])) {
+				$label_base64 = (string) $result['label_pdf'];
+			}
+			if ($tracking_number === '' || $label_base64 === '') {
+				return new WP_Error('posten_job_package_result_missing_fields', 'Hvert kolli maa ha tracking_number og label_pdf_base64.', array('status' => 400));
+			}
+			$tracking_url = isset($result['tracking_url']) ? esc_url_raw((string) $result['tracking_url']) : '';
+			if ($tracking_url === '') {
+				$tracking_url = $this->build_default_tracking_url($tracking_number);
+			}
+			$stored_label = $this->store_label_pdf($job_id, $label_base64, isset($result['label_filename']) ? sanitize_file_name((string) $result['label_filename']) : '', $package_index);
+			if (is_wp_error($stored_label)) {
+				return $stored_label;
+			}
+
+			$results[] = $this->build_stored_package_result($package_index, $tracking_number, $tracking_url, $stored_label['path'], 0, $printed);
+		}
+
+		return $this->finalize_completion_payload($results, $expected_indexes);
+	}
+
+	private function prepare_single_package_completion($request, $job_id, $expected_indexes, $printed) {
+		$tracking_number = sanitize_text_field((string) $request->get_param('tracking_number'));
+		$tracking_url = esc_url_raw((string) $request->get_param('tracking_url'));
+		if ($tracking_url === '' && $tracking_number !== '') {
+			$tracking_url = $this->build_default_tracking_url($tracking_number);
+		}
+		$label_base64 = (string) $request->get_param('label_pdf_base64');
+		if ($label_base64 === '') {
+			$label_base64 = (string) $request->get_param('label_pdf');
+		}
+		if ($tracking_number === '' || $label_base64 === '') {
+			return new WP_Error('posten_job_complete_missing_fields', 'tracking_number og label_pdf_base64 er påkrevd.', array('status' => 400));
+		}
+
+		$package_index = isset($expected_indexes[0]) ? (int) $expected_indexes[0] : 1;
+		$stored_label = $this->store_label_pdf($job_id, $label_base64, sanitize_file_name((string) $request->get_param('label_filename')), count($expected_indexes) > 1 ? $package_index : 0);
+		if (is_wp_error($stored_label)) {
+			return $stored_label;
+		}
+
+		return $this->finalize_completion_payload(array(
+			$this->build_stored_package_result($package_index, $tracking_number, $tracking_url, $stored_label['path'], 0, $printed),
+		), $expected_indexes);
+	}
+
+	private function build_stored_package_result($package_index, $tracking_number, $tracking_url, $label_file_path, $attachment_id, $printed) {
+		return array(
+			'package_index' => absint($package_index),
+			'tracking_number' => sanitize_text_field((string) $tracking_number),
+			'tracking_url' => esc_url_raw((string) $tracking_url),
+			'label_file_path' => (string) $label_file_path,
+			'label_attachment_id' => absint($attachment_id),
+			'label_filename' => basename((string) $label_file_path),
+			'printed' => (int) $printed,
+		);
+	}
+
+	private function finalize_completion_payload($package_results, $expected_indexes) {
+		usort($package_results, array($this, 'sort_by_package_index'));
+		$missing = $this->get_missing_package_indexes_from_expected($expected_indexes, $package_results);
+		$status = empty($missing) ? self::JOB_STATUS_COMPLETED : self::JOB_STATUS_PARTIAL_FAILED;
+		$tracking_numbers = array();
+		$label_files = array();
+		$order_package_results = array();
+		foreach ($package_results as $result) {
+			$tracking_numbers[] = (string) $result['tracking_number'];
+			$label_files[] = array(
+				'package_index' => (int) $result['package_index'],
+				'label_file_path' => (string) $result['label_file_path'],
+				'label_attachment_id' => (int) $result['label_attachment_id'],
+				'label_filename' => (string) $result['label_filename'],
+			);
+			$order_package_results[] = array(
+				'package_index' => (int) $result['package_index'],
+				'tracking_number' => (string) $result['tracking_number'],
+				'tracking_url' => (string) $result['tracking_url'],
+				'label_file_path' => (string) $result['label_file_path'],
+				'label_attachment_id' => (int) $result['label_attachment_id'],
+				'label_filename' => (string) $result['label_filename'],
+				'printed' => (int) $result['printed'],
+			);
+		}
+
+		$first = isset($package_results[0]) ? $package_results[0] : array();
+		$last_error = '';
+		if ($status === self::JOB_STATUS_PARTIAL_FAILED) {
+			$last_error = 'Posten robot fullførte ' . count($package_results) . ' av ' . count($expected_indexes) . ' kolli. Mangler kolli: ' . implode(', ', array_map('strval', $missing)) . '.';
+		}
+
+		return array(
+			'status' => $status,
+			'tracking_number' => isset($first['tracking_number']) ? (string) $first['tracking_number'] : '',
+			'tracking_numbers' => $tracking_numbers,
+			'tracking_url' => isset($first['tracking_url']) ? (string) $first['tracking_url'] : '',
+			'label_file_path' => isset($first['label_file_path']) ? (string) $first['label_file_path'] : '',
+			'package_results' => $package_results,
+			'order_package_results' => $order_package_results,
+			'label_files' => $label_files,
+			'missing_package_indexes' => $missing,
+			'last_error' => $last_error,
+		);
+	}
+
+	private function get_expected_package_indexes($packages) {
+		$indexes = array();
+		foreach ((array) $packages as $position => $package) {
+			$index = is_array($package) && isset($package['index']) ? absint($package['index']) : ((int) $position + 1);
+			if ($index > 0 && !in_array($index, $indexes, true)) {
+				$indexes[] = $index;
+			}
+		}
+		sort($indexes, SORT_NUMERIC);
+		return $indexes;
+	}
+
+	private function get_missing_package_indexes($packages, $package_results) {
+		return $this->get_missing_package_indexes_from_expected($this->get_expected_package_indexes($packages), $package_results);
+	}
+
+	private function get_missing_package_indexes_from_expected($expected_indexes, $package_results) {
+		$completed = array();
+		foreach ((array) $package_results as $result) {
+			if (is_array($result) && isset($result['package_index'])) {
+				$completed[] = absint($result['package_index']);
+			}
+		}
+
+		return array_values(array_diff(array_map('absint', (array) $expected_indexes), $completed));
+	}
+
+	private function sort_by_package_index($a, $b) {
+		$a_index = is_array($a) && isset($a['package_index']) ? absint($a['package_index']) : 0;
+		$b_index = is_array($b) && isset($b['package_index']) ? absint($b['package_index']) : 0;
+		if ($a_index === $b_index) {
+			return 0;
+		}
+
+		return $a_index < $b_index ? -1 : 1;
+	}
+
+	private function store_label_pdf($job_id, $label_base64, $label_filename = '', $package_index = 0) {
 		$label_base64 = trim((string) $label_base64);
 		if (strpos($label_base64, ',') !== false && preg_match('/^data:application\/pdf;base64,/', $label_base64)) {
 			$label_base64 = substr($label_base64, strpos($label_base64, ',') + 1);
@@ -1328,9 +1608,10 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$this->write_label_dir_guards($dir);
 		$label_filename = sanitize_file_name((string) $label_filename);
 		if ($label_filename === '' || strtolower(substr($label_filename, -4)) !== '.pdf') {
-			$label_filename = 'posten-label-' . $job_id . '.pdf';
+			$label_filename = 'posten-label-' . $job_id . ($package_index > 0 ? '-kolli-' . absint($package_index) : '') . '.pdf';
 		}
-		$file = trailingslashit($dir) . sanitize_file_name($job_id . '-' . $label_filename);
+		$prefix = $job_id . ($package_index > 0 ? '-kolli-' . absint($package_index) : '');
+		$file = trailingslashit($dir) . sanitize_file_name($prefix . '-' . $label_filename);
 		$written = file_put_contents($file, $pdf, LOCK_EX);
 		if ($written === false) {
 			return new WP_Error('posten_label_write_failed', 'Kunne ikke lagre label PDF.', array('status' => 500));
@@ -1527,13 +1808,95 @@ class LP_Cargonizer_Posten_Label_Automation {
 				return 'Etikett opprettet';
 			case self::JOB_STATUS_FAILED:
 				return 'Feilet';
+			case self::JOB_STATUS_PARTIAL_FAILED:
+				return 'Delvis feilet';
 		}
 
 		return (string) $status;
 	}
 
-	private function get_admin_label_url($row) {
-		if (empty($row->label_file_path) || !current_user_can('manage_woocommerce')) {
+	private function get_package_results_for_response($row) {
+		$package_results = $this->json_decode(isset($row->package_results_json) ? $row->package_results_json : '');
+		if (empty($package_results) && !empty($row->tracking_number)) {
+			$package_results = array(array(
+				'package_index' => 1,
+				'tracking_number' => (string) $row->tracking_number,
+				'tracking_url' => isset($row->tracking_url) ? (string) $row->tracking_url : '',
+				'label_attachment_id' => isset($row->label_attachment_id) ? (int) $row->label_attachment_id : 0,
+				'label_filename' => !empty($row->label_file_path) ? basename((string) $row->label_file_path) : '',
+			));
+		}
+		usort($package_results, array($this, 'sort_by_package_index'));
+		foreach ($package_results as &$result) {
+			$package_index = isset($result['package_index']) ? absint($result['package_index']) : 0;
+			unset($result['label_file_path']);
+			$result['label_url'] = $package_index > 0 ? $this->get_admin_label_url($row, $package_index) : '';
+		}
+		unset($result);
+
+		return $package_results;
+	}
+
+	private function get_label_files_for_response($row) {
+		$label_files = $this->json_decode(isset($row->label_files_json) ? $row->label_files_json : '');
+		if (empty($label_files) && !empty($row->label_file_path)) {
+			$label_files = array(array(
+				'package_index' => 1,
+				'label_attachment_id' => isset($row->label_attachment_id) ? (int) $row->label_attachment_id : 0,
+				'label_filename' => basename((string) $row->label_file_path),
+				'label_file_path' => (string) $row->label_file_path,
+			));
+		}
+		usort($label_files, array($this, 'sort_by_package_index'));
+		foreach ($label_files as &$label_file) {
+			$package_index = isset($label_file['package_index']) ? absint($label_file['package_index']) : 0;
+			unset($label_file['label_file_path']);
+			$label_file['label_url'] = $package_index > 0 ? $this->get_admin_label_url($row, $package_index) : '';
+		}
+		unset($label_file);
+
+		return $label_files;
+	}
+
+	private function get_label_file_for_package($row, $package_index) {
+		$package_index = absint($package_index);
+		if ($package_index < 1) {
+			return '';
+		}
+		$label_files = $this->json_decode(isset($row->label_files_json) ? $row->label_files_json : '');
+		foreach ($label_files as $label_file) {
+			if (is_array($label_file) && isset($label_file['package_index']) && absint($label_file['package_index']) === $package_index && !empty($label_file['label_file_path'])) {
+				return (string) $label_file['label_file_path'];
+			}
+		}
+		if ($package_index === 1 && !empty($row->label_file_path)) {
+			return (string) $row->label_file_path;
+		}
+
+		return '';
+	}
+
+	private function get_admin_label_url($row, $package_index = null) {
+		if (!current_user_can('manage_woocommerce')) {
+			return '';
+		}
+		$package_index = $package_index === null ? null : absint($package_index);
+		if ($package_index !== null && $package_index > 0) {
+			if ($this->get_label_file_for_package($row, $package_index) === '') {
+				return '';
+			}
+
+			return add_query_arg(
+				array(
+					'_wpnonce' => wp_create_nonce('wp_rest'),
+					'package_index' => $package_index,
+				),
+				rest_url(self::REST_NAMESPACE . self::REST_ROUTE_PRIMARY . '/' . rawurlencode((string) $row->job_id) . '/label')
+			);
+		}
+
+		$packages = $this->json_decode(isset($row->packages_json) ? $row->packages_json : '');
+		if (count($packages) > 1 || empty($row->label_file_path)) {
 			return '';
 		}
 
