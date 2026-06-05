@@ -1109,7 +1109,10 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$order->save();
 			$this->add_private_order_note($order, $this->build_completed_order_note($updated_job));
 			if ($completion['status'] === self::JOB_STATUS_COMPLETED) {
-				$this->set_order_status_if_current($order, self::ORDER_STATUS_WAITING, self::ORDER_STATUS_CREATED, 'Posten Norgespakke etikett opprettet.');
+				$status_updated = $this->set_order_status_if_current($order, self::ORDER_STATUS_WAITING, self::ORDER_STATUS_CREATED, 'Posten Norgespakke etikett opprettet.');
+				if ($status_updated) {
+					$this->add_customer_order_note($order, $this->build_customer_tracking_order_note($updated_job));
+				}
 			}
 		}
 
@@ -1860,6 +1863,79 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return 'Posten Norgespakke etikett opprettet. Sporingsnummer: ' . $tracking_text . '. DirectPrint: ' . $single_print_text . '.';
 	}
 
+	private function build_customer_tracking_order_note($job) {
+		$links = $this->get_tracking_links_from_job($job);
+		if (empty($links)) {
+			return '';
+		}
+
+		if (count($links) === 1) {
+			$link = $links[0];
+			$tracking_number = isset($link['tracking_number']) ? (string) $link['tracking_number'] : '';
+			$tracking_url = isset($link['tracking_url']) ? (string) $link['tracking_url'] : '';
+			$tracking_text = $tracking_url;
+			if ($tracking_number !== '') {
+				$tracking_text = $tracking_number . ': ' . $tracking_url;
+			}
+
+			return 'Posten-sporing for ordren din: ' . $tracking_text;
+		}
+
+		$lines = array('Posten-sporing for ordren din:');
+		foreach ($links as $link) {
+			$package_index = isset($link['package_index']) ? absint($link['package_index']) : 0;
+			$tracking_number = isset($link['tracking_number']) ? (string) $link['tracking_number'] : '';
+			$tracking_url = isset($link['tracking_url']) ? (string) $link['tracking_url'] : '';
+			$prefix = $package_index > 0 ? 'Kolli ' . $package_index : 'Sporing';
+			if ($tracking_number !== '') {
+				$prefix .= ' (' . $tracking_number . ')';
+			}
+			$lines[] = $prefix . ': ' . $tracking_url;
+		}
+
+		return implode("\n", $lines);
+	}
+
+	private function get_tracking_links_from_job($job) {
+		$links = array();
+		$seen_urls = array();
+		$package_results = $this->json_decode(isset($job->package_results_json) ? $job->package_results_json : '');
+		if (!empty($package_results)) {
+			usort($package_results, array($this, 'sort_by_package_index'));
+			foreach ($package_results as $result) {
+				if (!is_array($result)) {
+					continue;
+				}
+				$tracking_url = isset($result['tracking_url']) ? esc_url_raw((string) $result['tracking_url']) : '';
+				if ($tracking_url === '') {
+					continue;
+				}
+				if (isset($seen_urls[$tracking_url])) {
+					continue;
+				}
+				$seen_urls[$tracking_url] = true;
+				$links[] = array(
+					'package_index' => isset($result['package_index']) ? absint($result['package_index']) : 0,
+					'tracking_number' => isset($result['tracking_number']) ? sanitize_text_field((string) $result['tracking_number']) : '',
+					'tracking_url' => $tracking_url,
+				);
+			}
+		}
+
+		if (empty($links)) {
+			$tracking_url = isset($job->tracking_url) ? esc_url_raw((string) $job->tracking_url) : '';
+			if ($tracking_url !== '') {
+				$links[] = array(
+					'package_index' => 0,
+					'tracking_number' => isset($job->tracking_number) ? sanitize_text_field((string) $job->tracking_number) : '',
+					'tracking_url' => $tracking_url,
+				);
+			}
+		}
+
+		return $links;
+	}
+
 	private function get_print_result_note_text($result) {
 		if (!is_array($result)) {
 			return 'Ikke printet';
@@ -1913,6 +1989,14 @@ class LP_Cargonizer_Posten_Label_Automation {
 			return;
 		}
 		$order->add_order_note((string) $note, false, true);
+	}
+
+	private function add_customer_order_note($order, $note) {
+		$note = trim((string) $note);
+		if (!$order || $note === '' || !method_exists($order, 'add_order_note')) {
+			return;
+		}
+		$order->add_order_note($note, true, true);
 	}
 
 	private function reprint_job_labels($job, $printer_id, $package_index = 0) {
