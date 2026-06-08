@@ -61,7 +61,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'city' => $order->get_shipping_city(),
 				'country' => isset($recipient_country['normalized']) && $recipient_country['normalized'] !== '' ? $recipient_country['normalized'] : '',
 				'email' => $order->get_billing_email(),
-				'phone' => $order->get_billing_phone(),
+				'phone' => $this->get_order_recipient_phone_for_api($order),
 			),
 			'items' => $items,
 			'packages' => $packages,
@@ -1213,7 +1213,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'city' => $order->get_shipping_city(),
 			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
 			'email' => $order->get_billing_email(),
-			'phone' => $order->get_billing_phone(),
+			'phone' => $this->get_order_recipient_phone_for_api($order),
 		);
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
@@ -1856,7 +1856,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'city' => $order->get_shipping_city(),
 			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
 			'email' => $order->get_billing_email(),
-			'phone' => method_exists($order, 'get_shipping_phone') && $order->get_shipping_phone() !== '' ? $order->get_shipping_phone() : $order->get_billing_phone(),
+			'phone' => $this->get_order_recipient_phone_for_api($order),
 		);
 
 		if ($recipient['name'] === '') {
@@ -2268,7 +2268,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 						$item['human_error'] .= ' Valgt produkt ser ut til å være pickup point-relatert, og servicepartner er ikke valgt.';
 					}
 				} elseif ((strpos($combined_error_text, 'mobiltelefon') !== false || strpos($combined_error_text, 'mobile') !== false) && (strpos($combined_error_text, 'mottaker') !== false || strpos($combined_error_text, 'recipient') !== false || strpos($combined_error_text, 'consignee') !== false)) {
-					$item['human_error'] = 'Denne metoden krever mobiltelefonnummer på mottaker. Estimatoren sender billing/shipping phone som <mobile>; legg inn telefonnummer på ordren hvis feltet mangler.';
+					$item['human_error'] = 'Denne metoden krever mobiltelefonnummer på mottaker. Estimatoren sender shipping/freight phone som <mobile>, med billing phone som fallback; legg inn telefonnummer på ordren hvis feltet mangler.';
 				} elseif (strpos($combined_error_text, 'servicepartner') !== false && (strpos($combined_error_text, 'må angis') !== false || strpos($combined_error_text, 'must be specified') !== false || strpos($combined_error_text, 'missing') !== false)) {
 					$item['human_error'] = 'Denne metoden krever servicepartner. Hent servicepartnere og velg en verdi før du prøver igjen.';
 				} elseif ((strpos($combined_error_text, 'kolli') !== false || strpos($combined_error_text, 'package') !== false) && (strpos($combined_error_text, 'max') !== false || strpos($combined_error_text, '1') !== false || strpos($combined_error_text, 'one') !== false)) {
@@ -2429,7 +2429,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'city' => $order->get_shipping_city(),
 			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
 			'email' => $order->get_billing_email(),
-			'phone' => method_exists($order, 'get_shipping_phone') && $order->get_shipping_phone() !== '' ? $order->get_shipping_phone() : $order->get_billing_phone(),
+			'phone' => $this->get_order_recipient_phone_for_api($order),
 		);
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
@@ -2682,6 +2682,21 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		wp_send_json_success(array('results' => $results));
+	}
+
+	private function get_order_recipient_phone_for_api($order) {
+		$shipping_phone = '';
+		if ($order && is_object($order) && method_exists($order, 'get_shipping_phone')) {
+			$shipping_phone = sanitize_text_field((string) $order->get_shipping_phone());
+		}
+		if ($shipping_phone !== '') {
+			return $shipping_phone;
+		}
+		if ($order && is_object($order) && method_exists($order, 'get_billing_phone')) {
+			return sanitize_text_field((string) $order->get_billing_phone());
+		}
+
+		return '';
 	}
 
 }
