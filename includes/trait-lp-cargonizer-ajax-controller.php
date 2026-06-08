@@ -322,6 +322,28 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return !empty($booking_state['booked']) ? (count($history) + 1) : count($history);
 	}
 
+	private function build_customer_tracking_order_note_for_booking($booking_state, $method_payload) {
+		$booking_state = is_array($booking_state) ? $booking_state : array();
+		$method_payload = is_array($method_payload) ? $method_payload : array();
+		$tracking_url = isset($booking_state['tracking_url']) ? esc_url_raw((string) $booking_state['tracking_url']) : '';
+		if ($tracking_url === '') {
+			return '';
+		}
+
+		$carrier_name = isset($method_payload['carrier_name']) ? sanitize_text_field((string) $method_payload['carrier_name']) : '';
+		$prefix = $carrier_name !== '' ? $carrier_name . '-sporing for ordren din:' : 'Sporing for ordren din:';
+		$consignment_number = isset($booking_state['consignment_number']) ? sanitize_text_field((string) $booking_state['consignment_number']) : '';
+		$piece_numbers = isset($booking_state['piece_numbers']) && is_array($booking_state['piece_numbers'])
+			? array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $booking_state['piece_numbers'])), 'strlen'))
+			: array();
+		$tracking_number = $consignment_number !== '' ? $consignment_number : (isset($piece_numbers[0]) ? (string) $piece_numbers[0] : '');
+		if ($tracking_number !== '') {
+			return $prefix . ' ' . $tracking_number . ': ' . $tracking_url;
+		}
+
+		return $prefix . ' ' . $tracking_url;
+	}
+
 	private function save_order_booking_state($order, $state) {
 		if (!$order || !is_a($order, 'WC_Order')) {
 			return;
@@ -1474,6 +1496,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			}
 		}
 		$order->add_order_note(implode("\n", $order_note_lines));
+		$customer_tracking_note = $this->build_customer_tracking_order_note_for_booking($booking_state, $method_payload);
+		if ($customer_tracking_note !== '') {
+			$order->add_order_note($customer_tracking_note, true, true);
+		}
 		$booking_count = $this->get_booking_count_from_state($booking_state);
 
 		wp_send_json_success(array(
