@@ -2711,15 +2711,36 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 	}
 
 	private function get_order_recipient_phone_for_api($order) {
-		$shipping_phone = '';
-		if ($order && is_object($order) && method_exists($order, 'get_shipping_phone')) {
-			$shipping_phone = sanitize_text_field((string) $order->get_shipping_phone());
-		}
+		$shipping_phone = $this->get_order_shipping_phone_for_api($order);
 		if ($shipping_phone !== '') {
 			return $shipping_phone;
 		}
 		if ($order && is_object($order) && method_exists($order, 'get_billing_phone')) {
 			return sanitize_text_field((string) $order->get_billing_phone());
+		}
+
+		return '';
+	}
+
+	private function get_order_shipping_phone_for_api($order) {
+		if (!$order || !is_object($order)) {
+			return '';
+		}
+
+		$candidates = array();
+		if (method_exists($order, 'get_shipping_phone')) {
+			$candidates[] = $order->get_shipping_phone();
+		}
+		if (method_exists($order, 'get_meta')) {
+			$candidates[] = $order->get_meta('_shipping_phone', true);
+			$candidates[] = $order->get_meta('shipping_phone', true);
+		}
+
+		foreach ($candidates as $candidate) {
+			$phone = sanitize_text_field((string) $candidate);
+			if ($phone !== '') {
+				return $phone;
+			}
 		}
 
 		return '';
