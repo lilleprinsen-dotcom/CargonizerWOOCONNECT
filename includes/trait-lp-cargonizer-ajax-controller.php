@@ -927,6 +927,99 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return $print_state;
 	}
 
+	private function build_reprint_packages_from_booking_state($order, $booking_state) {
+		$piece_ids = isset($booking_state['piece_ids']) && is_array($booking_state['piece_ids']) ? $booking_state['piece_ids'] : array();
+		$piece_numbers = isset($booking_state['piece_numbers']) && is_array($booking_state['piece_numbers']) ? $booking_state['piece_numbers'] : array();
+		$expected_count = max(count($piece_ids), count($piece_numbers), 1);
+		$packages = array();
+
+		if ($order && is_a($order, 'WC_Order') && isset($this->package_builder_service) && is_object($this->package_builder_service) && method_exists($this->package_builder_service, 'build_admin_prefill_packages_from_order')) {
+			$built_packages = $this->package_builder_service->build_admin_prefill_packages_from_order($order);
+			if (is_array($built_packages)) {
+				$packages = $built_packages;
+			}
+		}
+
+		if (count($packages) > $expected_count) {
+			$packages = array_slice($packages, 0, $expected_count);
+		}
+		while (count($packages) < $expected_count) {
+			$packages[] = array(
+				'name' => '',
+				'description' => '',
+				'weight' => 0,
+				'length' => 0,
+				'width' => 0,
+				'height' => 0,
+			);
+		}
+
+		return $packages;
+	}
+
+	public function ajax_reprint_booking_labels() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_REPRINT_BOOKING_LABELS)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$order = $order_id ? wc_get_order($order_id) : false;
+		if (!$order || !is_a($order, 'WC_Order')) {
+			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+		}
+
+		$booking_state = $this->load_order_booking_state($order);
+		if (empty($booking_state['booked'])) {
+			wp_send_json_error(array('message' => 'Ordren har ingen lagret Cargonizer-booking å skrive ut på nytt.'), 400);
+		}
+
+		$method_key = isset($booking_state['method_key']) ? sanitize_text_field((string) $booking_state['method_key']) : '';
+		if ($method_key === self::MANUAL_NORGESPAKKE_KEY) {
+			wp_send_json_error(array('message' => 'Bruk Posten/Norgespakke reprint for denne bookingen.'), 400);
+		}
+
+		$consignment_id = isset($booking_state['consignment_id']) ? sanitize_text_field((string) $booking_state['consignment_id']) : '';
+		$piece_ids = isset($booking_state['piece_ids']) && is_array($booking_state['piece_ids'])
+			? array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $booking_state['piece_ids'])), 'strlen'))
+			: array();
+		if ($consignment_id === '' && empty($piece_ids)) {
+			wp_send_json_error(array('message' => 'Mangler consignment-id eller piece-id fra bookingen.'), 400);
+		}
+
+		$posted_printer_choice = isset($_POST['printer_id']) ? wp_unslash($_POST['printer_id']) : '';
+		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
+		if ($printer_id === '') {
+			wp_send_json_error(array('message' => 'Velg en DirectPrint-printer.'), 400);
+		}
+
+		$packages = $this->build_reprint_packages_from_booking_state($order, $booking_state);
+		$sender_id_override = isset($booking_state['sender_id']) ? sanitize_text_field((string) $booking_state['sender_id']) : '';
+		$booking_state['print'] = $this->run_booking_label_prints($booking_state, $packages, $printer_id, array(), $sender_id_override);
+		$this->save_order_booking_state($order, $booking_state);
+
+		$print_state = isset($booking_state['print']) && is_array($booking_state['print']) ? $booking_state['print'] : array();
+		$message = isset($print_state['message']) && (string) $print_state['message'] !== '' ? (string) $print_state['message'] : 'Labeler sendt til printer.';
+		$printer_label = isset($print_state['printer_label']) ? sanitize_text_field((string) $print_state['printer_label']) : $printer_id;
+		$order->add_order_note('Cargonizer reprint: ' . (!empty($print_state['success']) ? 'OK' : 'Feilet') . ' - ' . $message . ' Printer: ' . $printer_label);
+
+		if (empty($print_state['success'])) {
+			wp_send_json_error(array(
+				'message' => $message,
+				'print' => $print_state,
+			), 400);
+		}
+
+		wp_send_json_success(array(
+			'message' => $message,
+			'print' => $print_state,
+		));
+	}
+
 	private function sanitize_posted_packages($packages) {
 		$clean_packages = array();
 		foreach ($packages as $package) {

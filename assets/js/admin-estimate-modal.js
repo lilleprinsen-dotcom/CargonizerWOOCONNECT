@@ -82,6 +82,75 @@
 				return s.replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]; });
 			}
 
+			function handleBookingReprintClick(btn){
+				var wrap = btn.closest('.lp-cargonizer-booking-reprint-controls');
+				if (!wrap) { return; }
+				var orderId = wrap.getAttribute('data-order-id') || '';
+				var printer = wrap.querySelector('.lp-cargonizer-booking-reprint-printer');
+				var status = wrap.querySelector('.lp-cargonizer-booking-reprint-status');
+				var printerId = printer ? (printer.value || '') : '';
+				if (!orderId) {
+					if (status) {
+						status.style.color = '#b32d2e';
+						status.textContent = 'Reprint feilet: mangler ordre-ID.';
+					}
+					return;
+				}
+				if (!printerId) {
+					if (status) {
+						status.style.color = '#b32d2e';
+						status.textContent = 'Velg printer for reprint.';
+					}
+					return;
+				}
+				if (!window.fetch) {
+					if (status) {
+						status.style.color = '#b32d2e';
+						status.textContent = 'Reprint feilet: nettleseren støtter ikke direkte utskrift uten sidelast.';
+					}
+					return;
+				}
+				if (!confirm('Skrive ut Cargonizer-labeler på nytt?')) {
+					return;
+				}
+
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_reprint_booking_labels');
+				form.append('nonce', (config.nonces && config.nonces.reprintBookingLabels ? config.nonces.reprintBookingLabels : ''));
+				form.append('order_id', orderId);
+				form.append('printer_id', printerId);
+				if (status) {
+					status.style.color = '#646970';
+					status.textContent = 'Sender labeler til printer...';
+				}
+				btn.disabled = true;
+
+				fetch((config.ajaxUrl || window.ajaxurl || ''), { method:'POST', credentials:'same-origin', body: form })
+					.then(function(response){
+						return response.json().catch(function(){ throw new Error('Ugyldig respons fra server.'); });
+					})
+					.then(function(payload){
+						var message = payload && payload.data && payload.data.message ? payload.data.message : '';
+						if (payload && payload.success) {
+							if (status) {
+								status.style.color = '#125228';
+								status.textContent = message || 'Labeler sendt til printer på nytt.';
+							}
+							return;
+						}
+						throw new Error(message || 'Reprint feilet.');
+					})
+					.catch(function(error){
+						if (status) {
+							status.style.color = '#b32d2e';
+							status.textContent = 'Reprint feilet: ' + (error && error.message ? error.message : 'ukjent feil');
+						}
+					})
+					.then(function(){
+						btn.disabled = false;
+					});
+			}
+
 			function toNum(v){
 				var n = parseFloat(v);
 				return isNaN(n) ? 0 : n;
@@ -3283,6 +3352,12 @@
 				}
 
 			document.addEventListener('click', function(e){
+				var reprintBtn = e.target.closest('.lp-cargonizer-booking-reprint-button');
+				if (reprintBtn) {
+					e.preventDefault();
+					handleBookingReprintClick(reprintBtn);
+					return;
+				}
 				var btn = e.target.closest('.lp-cargonizer-estimate-open');
 				if (btn) {
 					e.preventDefault();
