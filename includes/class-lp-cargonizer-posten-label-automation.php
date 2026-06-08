@@ -2202,7 +2202,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 				$print_result['error'] = 'DirectPrint disabled';
 			} elseif ($printer_id === '') {
 				$print_result['error'] = 'DirectPrint printer mangler.';
-			} elseif ($stamp_error !== '' && $stamp_required_for_print && !$stamp_error_is_recoverable) {
+			} elseif ($stamp_error !== '' && $stamp_required_for_print) {
 				$print_result['error'] = 'Stempling feilet: ' . $stamp_error;
 			} elseif ($print_path === '' || !$this->is_file_inside_label_dir($print_path) || !is_readable($print_path)) {
 				$print_result['error'] = 'PDF for DirectPrint mangler eller kan ikke leses.';
@@ -2302,7 +2302,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 						'stamped_label_file_path' => $new_stamped_path,
 					);
 				}
-				if (is_wp_error($stamp_result) && $this->is_recoverable_pdf_stamp_error($stamp_result)) {
+				if (is_wp_error($stamp_result) && !$stamp_required_for_print && $this->is_recoverable_pdf_stamp_error($stamp_result)) {
 					return array(
 						'print_file_path' => $original_path,
 						'stamped_label_file_path' => '',
@@ -2356,9 +2356,6 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$stamped_path = $this->build_stamped_label_path($original_path, $package_index);
 		$stamp_result = $this->stamp_pdf_file($original_path, $stamped_path, $stamp_text, $settings);
 		if (is_wp_error($stamp_result)) {
-			if ($this->is_recoverable_pdf_stamp_error($stamp_result)) {
-				return $original_path;
-			}
 			return $stamp_result;
 		}
 		if (!$this->is_file_inside_label_dir($stamped_path) || !is_readable($stamped_path)) {
