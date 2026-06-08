@@ -304,7 +304,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 	}
 
 	public function admin_reprint_labels_action() {
+		$is_ajax = isset($_REQUEST['ajax']) && !is_array($_REQUEST['ajax']) && (string) wp_unslash($_REQUEST['ajax']) === '1';
 		if (!current_user_can('manage_woocommerce')) {
+			if ($is_ajax) {
+				wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+			}
 			wp_die(esc_html__('Ingen tilgang.', 'lp-cargonizer'), '', array('response' => 403));
 		}
 
@@ -314,6 +318,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$package_index = isset($_REQUEST['package_index']) && !is_array($_REQUEST['package_index']) ? absint($_REQUEST['package_index']) : 0;
 		$posted_redirect = isset($_REQUEST['redirect_to']) && !is_array($_REQUEST['redirect_to']) ? esc_url_raw((string) wp_unslash($_REQUEST['redirect_to'])) : '';
 		if ($job_id === '' || !wp_verify_nonce($nonce, self::NONCE_ACTION_REPRINT_LABELS . '_' . $job_id)) {
+			if ($is_ajax) {
+				wp_send_json_error(array('message' => 'Ugyldig forespørsel.'), 403);
+			}
 			wp_die(esc_html__('Ugyldig forespørsel.', 'lp-cargonizer'), '', array('response' => 403));
 		}
 
@@ -326,6 +333,21 @@ class LP_Cargonizer_Posten_Label_Automation {
 			? $result->get_error_message()
 			: (isset($result['message']) ? (string) $result['message'] : 'Etikett sendt til printer på nytt.');
 		$message = function_exists('mb_substr') ? mb_substr($message, 0, 180) : substr($message, 0, 180);
+		if ($is_ajax) {
+			if (is_wp_error($result)) {
+				wp_send_json_error(array(
+					'message' => $message,
+					'job_id' => $job_id,
+				), 400);
+			}
+
+			wp_send_json_success(array(
+				'message' => $message,
+				'job_id' => $job_id,
+				'result' => is_array($result) ? $result : array(),
+			));
+		}
+
 		$redirect_url = add_query_arg(array(
 			'lp_posten_reprint' => is_wp_error($result) ? 'failed' : 'printed',
 			'lp_posten_job_id' => $job_id,
@@ -830,7 +852,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
 		$package_map = $this->build_package_index_map($packages);
 		$control_id = 'lp-posten-reprint-' . sanitize_html_class((string) $job->job_id);
-		$onclick = "return (function(link){var wrap=link.closest('.lp-posten-reprint-controls');var printer=wrap?wrap.querySelector('[data-lp-posten-reprint-printer]'):null;var pack=wrap?wrap.querySelector('[data-lp-posten-reprint-package]'):null;if(!printer||!printer.value){alert('Velg printer for reprint.');return false;}var url=link.getAttribute('data-base-url')+'&printer_id='+encodeURIComponent(printer.value);if(pack&&pack.value!==''){url+='&package_index='+encodeURIComponent(pack.value);}link.href=url;return confirm('Skrive ut Posten-etikett på nytt?');})(this);";
+		$onclick = "return (function(link){var wrap=link.closest('.lp-posten-reprint-controls');var printer=wrap?wrap.querySelector('[data-lp-posten-reprint-printer]'):null;var pack=wrap?wrap.querySelector('[data-lp-posten-reprint-package]'):null;var status=wrap?wrap.querySelector('[data-lp-posten-reprint-status]'):null;if(!printer||!printer.value){alert('Velg printer for reprint.');return false;}if(!window.fetch){if(status){status.style.color='#b32d2e';status.textContent='Reprint feilet: nettleseren støtter ikke direkte utskrift uten sidelast.';}return false;}var url=link.getAttribute('data-base-url')+'&ajax=1&printer_id='+encodeURIComponent(printer.value);if(pack&&pack.value!==''){url+='&package_index='+encodeURIComponent(pack.value);}if(!confirm('Skrive ut Posten-etikett på nytt?')){return false;}if(status){status.style.color='#646970';status.textContent='Sender etikett til printer...';}link.classList.add('disabled');link.setAttribute('aria-disabled','true');fetch(url,{credentials:'same-origin'}).then(function(response){return response.json().catch(function(){throw new Error('Ugyldig respons fra server.');});}).then(function(payload){var message=payload&&payload.data&&payload.data.message?payload.data.message:'';if(payload&&payload.success){if(status){status.style.color='#125228';status.textContent=message||'Etikett sendt til printer på nytt.';}return;}throw new Error(message||'Reprint feilet.');}).catch(function(error){if(status){status.style.color='#b32d2e';status.textContent='Reprint feilet: '+(error&&error.message?error.message:'ukjent feil');}}).then(function(){link.classList.remove('disabled');link.removeAttribute('aria-disabled');});return false;})(this);";
 
 		echo '<div id="' . esc_attr($control_id) . '" class="lp-posten-reprint-controls" style="margin-top:10px;padding-top:8px;border-top:1px solid #dcdcde;">';
 		echo '<div style="margin-bottom:4px;"><strong>Reprint</strong></div>';
@@ -853,6 +875,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			echo '</label>';
 		}
 		echo '<a href="' . esc_url($href) . '" data-base-url="' . esc_url($base_url) . '" class="button" onclick="' . esc_attr($onclick) . '">Print på nytt</a>';
+		echo '<div data-lp-posten-reprint-status="1" style="margin-top:6px;color:#646970;"></div>';
 		if (!empty($printer_context['error'])) {
 			echo '<div style="margin-top:4px;color:#646970;">Printerlisten kunne ikke oppdateres akkurat nå. Viser lagret printervalg.</div>';
 		}
@@ -3450,15 +3473,38 @@ class LP_Cargonizer_Posten_Label_Automation {
 	}
 
 	private function get_order_recipient_phone($order) {
-		$shipping_phone = '';
-		if ($order && is_object($order) && method_exists($order, 'get_shipping_phone')) {
-			$shipping_phone = sanitize_text_field((string) $order->get_shipping_phone());
-		}
+		$shipping_phone = $this->get_order_shipping_phone($order);
 		if ($shipping_phone !== '') {
 			return $shipping_phone;
 		}
 
-		return sanitize_text_field((string) $order->get_billing_phone());
+		return $order && is_object($order) && method_exists($order, 'get_billing_phone')
+			? sanitize_text_field((string) $order->get_billing_phone())
+			: '';
+	}
+
+	private function get_order_shipping_phone($order) {
+		if (!$order || !is_object($order)) {
+			return '';
+		}
+
+		$candidates = array();
+		if (method_exists($order, 'get_shipping_phone')) {
+			$candidates[] = $order->get_shipping_phone();
+		}
+		if (method_exists($order, 'get_meta')) {
+			$candidates[] = $order->get_meta('_shipping_phone', true);
+			$candidates[] = $order->get_meta('shipping_phone', true);
+		}
+
+		foreach ($candidates as $candidate) {
+			$phone = sanitize_text_field((string) $candidate);
+			if ($phone !== '') {
+				return $phone;
+			}
+		}
+
+		return '';
 	}
 
 	private function first_non_empty($primary, $fallback) {
