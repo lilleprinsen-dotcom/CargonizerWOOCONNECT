@@ -55,6 +55,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		wp_enqueue_script('lp-cargonizer-admin-estimate-modal', $script_url, array(), $script_version, true);
 		$settings = $this->get_settings();
 		wp_localize_script('lp-cargonizer-admin-estimate-modal', 'lpCargonizerEstimateModalConfig', array(
+			'ajaxUrl' => admin_url('admin-ajax.php'),
 			'nonces' => array(
 				'orderData' => wp_create_nonce(self::NONCE_ACTION_ORDER_DATA),
 				'fetchOptions' => wp_create_nonce(self::NONCE_ACTION_FETCH_OPTIONS),
@@ -63,6 +64,7 @@ trait LP_Cargonizer_Admin_Page_Trait {
 				'optimizeDsv' => wp_create_nonce(self::NONCE_ACTION_OPTIMIZE_DSV),
 				'servicepartners' => wp_create_nonce(self::NONCE_ACTION_SERVICEPARTNERS),
 				'book' => wp_create_nonce(self::NONCE_ACTION_BOOK),
+				'reprintBookingLabels' => wp_create_nonce(self::NONCE_ACTION_REPRINT_BOOKING_LABELS),
 				'postenQueue' => class_exists('LP_Cargonizer_Posten_Label_Automation') ? wp_create_nonce(LP_Cargonizer_Posten_Label_Automation::get_queue_nonce_action()) : '',
 				'printers' => wp_create_nonce(self::NONCE_ACTION_PRINTERS),
 			),
@@ -88,12 +90,76 @@ trait LP_Cargonizer_Admin_Page_Trait {
 		}
 
 		$checkout_summary_html = $this->render_checkout_selection_summary_html($order);
+		$booking_reprint_html = $this->render_booking_reprint_controls_html($order);
 
 		echo '<div class="lp-cargonizer-order-actions" style="clear:both;margin-top:16px;padding-top:12px;border-top:1px solid #eee;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
 			. '<button type="button" class="button lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '">Estimer fraktkostnad</button>'
 			. '<button type="button" class="button lp-cargonizer-book-open" data-order-id="' . esc_attr($order->get_id()) . '">Book shipment</button>'
+			. $booking_reprint_html
 			. '</div>'
 			. $checkout_summary_html;
+	}
+
+	private function render_booking_reprint_controls_html($order) {
+		if (!$order || !is_a($order, 'WC_Order')) {
+			return '';
+		}
+
+		$booking_state = $this->load_order_booking_state($order);
+		if (empty($booking_state['booked'])) {
+			return '';
+		}
+
+		$method_key = isset($booking_state['method_key']) ? sanitize_text_field((string) $booking_state['method_key']) : '';
+		if ($method_key === self::MANUAL_NORGESPAKKE_KEY) {
+			return '';
+		}
+
+		$consignment_id = isset($booking_state['consignment_id']) ? sanitize_text_field((string) $booking_state['consignment_id']) : '';
+		$piece_ids = isset($booking_state['piece_ids']) && is_array($booking_state['piece_ids'])
+			? array_values(array_filter(array_map('sanitize_text_field', array_map('strval', $booking_state['piece_ids'])), 'strlen'))
+			: array();
+		if ($consignment_id === '' && empty($piece_ids)) {
+			return '';
+		}
+
+		$print_state = isset($booking_state['print']) && is_array($booking_state['print']) ? $booking_state['print'] : array();
+		$selected_printer_id = isset($print_state['printer_id']) ? sanitize_text_field((string) $print_state['printer_id']) : '';
+		if ($selected_printer_id === 'multiple') {
+			$selected_printer_id = '';
+		}
+		if ($selected_printer_id === '') {
+			$selected_printer_id = $this->get_current_user_default_printer_id();
+		}
+
+		$printer_options = $this->get_printer_label_map();
+		$printer_label = isset($print_state['printer_label']) ? sanitize_text_field((string) $print_state['printer_label']) : '';
+		if ($selected_printer_id !== '' && !isset($printer_options[$selected_printer_id])) {
+			$printer_options[$selected_printer_id] = $printer_label !== '' ? $printer_label : $selected_printer_id;
+		}
+		$user_default_printer_id = $this->get_current_user_default_printer_id();
+		if ($user_default_printer_id !== '' && !isset($printer_options[$user_default_printer_id])) {
+			$printer_options[$user_default_printer_id] = $user_default_printer_id;
+		}
+		if ($selected_printer_id === '' && !empty($printer_options)) {
+			$printer_ids = array_keys($printer_options);
+			$selected_printer_id = isset($printer_ids[0]) ? (string) $printer_ids[0] : '';
+		}
+		if (empty($printer_options)) {
+			return '<span class="lp-cargonizer-booking-reprint-unavailable" style="color:#b32d2e;">Ingen DirectPrint-printere tilgjengelig for reprint.</span>';
+		}
+
+		$html = '<span class="lp-cargonizer-booking-reprint-controls" data-order-id="' . esc_attr($order->get_id()) . '" style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;">';
+		$html .= '<select class="lp-cargonizer-booking-reprint-printer" aria-label="Velg printer for Cargonizer reprint" style="max-width:220px;">';
+		foreach ($printer_options as $printer_id => $label) {
+			$html .= '<option value="' . esc_attr((string) $printer_id) . '"' . selected((string) $printer_id, $selected_printer_id, false) . '>' . esc_html((string) $label) . '</option>';
+		}
+		$html .= '</select>';
+		$html .= '<button type="button" class="button lp-cargonizer-booking-reprint-button">Print på nytt</button>';
+		$html .= '<span class="lp-cargonizer-booking-reprint-status" style="color:#646970;"></span>';
+		$html .= '</span>';
+
+		return $html;
 	}
 
 	private function render_checkout_selection_summary_html($order) {
