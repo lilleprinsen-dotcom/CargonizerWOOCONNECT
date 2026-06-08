@@ -2755,10 +2755,21 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 		foreach ($matches as $match) {
 			$content = isset($match[3]) ? (string) $match[3] : '';
-			if (preg_match('/\/Type\s*\/Page\b/', $content)) {
+			if ($this->is_pdf_page_dictionary($content)) {
 				return array(
 					'object_number' => (int) $match[1],
 					'generation' => (int) $match[2],
+					'content' => trim($content),
+				);
+			}
+		}
+
+		foreach ($this->get_pdf_object_stream_entries((string) $pdf) as $entry) {
+			$content = isset($entry['content']) ? (string) $entry['content'] : '';
+			if ($this->is_pdf_page_dictionary($content)) {
+				return array(
+					'object_number' => isset($entry['object_number']) ? (int) $entry['object_number'] : 0,
+					'generation' => 0,
 					'content' => trim($content),
 				);
 			}
@@ -2768,11 +2779,134 @@ class LP_Cargonizer_Posten_Label_Automation {
 	}
 
 	private function get_max_pdf_object_number($pdf) {
-		if (!preg_match_all('/(\d+)\s+\d+\s+obj\b/', (string) $pdf, $matches)) {
-			return 0;
+		$numbers = array();
+		if (preg_match_all('/(\d+)\s+\d+\s+obj\b/', (string) $pdf, $matches)) {
+			$numbers = array_map('absint', $matches[1]);
 		}
-		$numbers = array_map('absint', $matches[1]);
+		foreach ($this->get_pdf_object_stream_entries((string) $pdf) as $entry) {
+			if (isset($entry['object_number'])) {
+				$numbers[] = absint($entry['object_number']);
+			}
+		}
+
 		return empty($numbers) ? 0 : max($numbers);
+	}
+
+	private function is_pdf_page_dictionary($content) {
+		return preg_match('/\/Type\s*\/Page\b/', (string) $content) === 1;
+	}
+
+	private function get_pdf_object_stream_entries($pdf) {
+		$entries = array();
+		if (!preg_match_all('/(\d+)\s+(\d+)\s+obj\b(.*?)endobj/s', (string) $pdf, $matches, PREG_SET_ORDER)) {
+			return $entries;
+		}
+
+		foreach ($matches as $match) {
+			$object_content = isset($match[3]) ? (string) $match[3] : '';
+			if (strpos($object_content, '/ObjStm') === false || strpos($object_content, '/FlateDecode') === false) {
+				continue;
+			}
+			if (!preg_match('/\/N\s+(\d+)/', $object_content, $n_match) || !preg_match('/\/First\s+(\d+)/', $object_content, $first_match)) {
+				continue;
+			}
+
+			$stream_data = $this->extract_pdf_stream_data($object_content);
+			if ($stream_data === '') {
+				continue;
+			}
+			$decoded_stream = $this->decode_pdf_flate_stream($stream_data);
+			if ($decoded_stream === false) {
+				continue;
+			}
+
+			$n = absint($n_match[1]);
+			$first = absint($first_match[1]);
+			if ($n < 1 || $first < 1 || strlen($decoded_stream) <= $first) {
+				continue;
+			}
+
+			$header = substr($decoded_stream, 0, $first);
+			$object_data = substr($decoded_stream, $first);
+			$tokens = preg_split('/\s+/', trim($header));
+			if (!is_array($tokens) || count($tokens) < ($n * 2)) {
+				continue;
+			}
+
+			$offsets = array();
+			for ($i = 0; $i < $n; $i++) {
+				$object_number = absint($tokens[$i * 2]);
+				$offset = absint($tokens[$i * 2 + 1]);
+				if ($object_number > 0) {
+					$offsets[] = array(
+						'object_number' => $object_number,
+						'offset' => $offset,
+					);
+				}
+			}
+			usort($offsets, function ($left, $right) {
+				return $left['offset'] === $right['offset'] ? 0 : ($left['offset'] < $right['offset'] ? -1 : 1);
+			});
+
+			foreach ($offsets as $index => $row) {
+				$start = (int) $row['offset'];
+				$end = isset($offsets[$index + 1]) ? (int) $offsets[$index + 1]['offset'] : strlen($object_data);
+				if ($start < 0 || $end <= $start || $start >= strlen($object_data)) {
+					continue;
+				}
+				$entries[] = array(
+					'object_number' => (int) $row['object_number'],
+					'content' => trim(substr($object_data, $start, $end - $start)),
+				);
+			}
+		}
+
+		return $entries;
+	}
+
+	private function extract_pdf_stream_data($object_content) {
+		$stream_pos = strpos((string) $object_content, 'stream');
+		if ($stream_pos === false) {
+			return '';
+		}
+		$start = $stream_pos + 6;
+		$line_break = substr((string) $object_content, $start, 2);
+		if ($line_break === "\r\n") {
+			$start += 2;
+		} elseif (substr((string) $object_content, $start, 1) === "\n" || substr((string) $object_content, $start, 1) === "\r") {
+			$start++;
+		}
+		$end = strpos((string) $object_content, 'endstream', $start);
+		if ($end === false || $end <= $start) {
+			return '';
+		}
+
+		return substr((string) $object_content, $start, $end - $start);
+	}
+
+	private function decode_pdf_flate_stream($stream_data) {
+		foreach (array('zlib_decode', 'gzuncompress', 'gzdecode') as $function_name) {
+			if (function_exists($function_name)) {
+				$decoded = @$function_name($stream_data);
+				if (is_string($decoded)) {
+					return $decoded;
+				}
+			}
+		}
+		if (function_exists('gzinflate')) {
+			$decoded = @gzinflate($stream_data);
+			if (is_string($decoded)) {
+				return $decoded;
+			}
+			if (strlen($stream_data) > 6) {
+				$decoded = @gzinflate(substr($stream_data, 2, -4));
+				if (is_string($decoded)) {
+					return $decoded;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	private function extract_pdf_page_media_box($page_content) {
