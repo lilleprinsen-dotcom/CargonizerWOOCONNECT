@@ -96,6 +96,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		add_action('wp_ajax_' . self::AJAX_ACTION_QUEUE, array($this, 'ajax_queue_posten_label_job'));
 		add_action('admin_post_' . self::ADMIN_ACTION_CANCEL_JOB, array($this, 'admin_cancel_job_action'));
 		add_action('admin_post_' . self::ADMIN_ACTION_REPRINT_LABELS, array($this, 'admin_reprint_labels_action'));
+		add_action('wp_ajax_' . self::ADMIN_ACTION_REPRINT_LABELS, array($this, 'admin_reprint_labels_action'));
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_label_status_panel'), 20);
 		add_action('woocommerce_payment_complete', array($this, 'maybe_auto_queue_for_order'), 20, 1);
 		add_action('woocommerce_order_status_processing', array($this, 'maybe_auto_queue_for_order'), 20, 1);
@@ -304,7 +305,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 	}
 
 	public function admin_reprint_labels_action() {
-		$is_ajax = isset($_REQUEST['ajax']) && !is_array($_REQUEST['ajax']) && (string) wp_unslash($_REQUEST['ajax']) === '1';
+		$is_ajax = (defined('DOING_AJAX') && DOING_AJAX) || (isset($_REQUEST['ajax']) && !is_array($_REQUEST['ajax']) && (string) wp_unslash($_REQUEST['ajax']) === '1');
 		if (!current_user_can('manage_woocommerce')) {
 			if ($is_ajax) {
 				wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
@@ -852,7 +853,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
 		$package_map = $this->build_package_index_map($packages);
 		$control_id = 'lp-posten-reprint-' . sanitize_html_class((string) $job->job_id);
-		$onclick = "return (function(link){var wrap=link.closest('.lp-posten-reprint-controls');var printer=wrap?wrap.querySelector('[data-lp-posten-reprint-printer]'):null;var pack=wrap?wrap.querySelector('[data-lp-posten-reprint-package]'):null;var status=wrap?wrap.querySelector('[data-lp-posten-reprint-status]'):null;if(!printer||!printer.value){alert('Velg printer for reprint.');return false;}if(!window.fetch){if(status){status.style.color='#b32d2e';status.textContent='Reprint feilet: nettleseren støtter ikke direkte utskrift uten sidelast.';}return false;}var url=link.getAttribute('data-base-url')+'&ajax=1&printer_id='+encodeURIComponent(printer.value);if(pack&&pack.value!==''){url+='&package_index='+encodeURIComponent(pack.value);}if(!confirm('Skrive ut Posten-etikett på nytt?')){return false;}if(status){status.style.color='#646970';status.textContent='Sender etikett til printer...';}link.classList.add('disabled');link.setAttribute('aria-disabled','true');fetch(url,{credentials:'same-origin'}).then(function(response){return response.json().catch(function(){throw new Error('Ugyldig respons fra server.');});}).then(function(payload){var message=payload&&payload.data&&payload.data.message?payload.data.message:'';if(payload&&payload.success){if(status){status.style.color='#125228';status.textContent=message||'Etikett sendt til printer på nytt.';}return;}throw new Error(message||'Reprint feilet.');}).catch(function(error){if(status){status.style.color='#b32d2e';status.textContent='Reprint feilet: '+(error&&error.message?error.message:'ukjent feil');}}).then(function(){link.classList.remove('disabled');link.removeAttribute('aria-disabled');});return false;})(this);";
+		$onclick = "return (function(link){var wrap=link.closest('.lp-posten-reprint-controls');var printer=wrap?wrap.querySelector('[data-lp-posten-reprint-printer]'):null;var pack=wrap?wrap.querySelector('[data-lp-posten-reprint-package]'):null;var status=wrap?wrap.querySelector('[data-lp-posten-reprint-status]'):null;if(!printer||!printer.value){alert('Velg printer for reprint.');return false;}if(!window.fetch||!window.FormData){if(status){status.style.color='#b32d2e';status.textContent='Reprint feilet: nettleseren støtter ikke direkte utskrift uten sidelast.';}return false;}if(!confirm('Skrive ut Posten-etikett på nytt?')){return false;}var form=new FormData();form.append('action','" . esc_js(self::ADMIN_ACTION_REPRINT_LABELS) . "');form.append('ajax','1');form.append('job_id',link.getAttribute('data-job-id')||'');form.append('order_id',link.getAttribute('data-order-id')||'');form.append('_wpnonce',link.getAttribute('data-nonce')||'');form.append('printer_id',printer.value);if(pack&&pack.value!==''){form.append('package_index',pack.value);}if(status){status.style.color='#646970';status.textContent='Sender etikett til printer...';}link.classList.add('disabled');link.setAttribute('aria-disabled','true');fetch(link.getAttribute('data-ajax-url')||window.ajaxurl||'',{method:'POST',credentials:'same-origin',body:form}).then(function(response){return response.text().then(function(text){try{return JSON.parse(text);}catch(e){var snippet=text?text.replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim().slice(0,180):'';throw new Error(snippet||'Ugyldig respons fra server.');}});}).then(function(payload){var message=payload&&payload.data&&payload.data.message?payload.data.message:'';if(payload&&payload.success){if(status){status.style.color='#125228';status.textContent=message||'Etikett sendt til printer på nytt.';}return;}throw new Error(message||'Reprint feilet.');}).catch(function(error){if(status){status.style.color='#b32d2e';status.textContent='Reprint feilet: '+(error&&error.message?error.message:'ukjent feil');}}).then(function(){link.classList.remove('disabled');link.removeAttribute('aria-disabled');});return false;})(this);";
 
 		echo '<div id="' . esc_attr($control_id) . '" class="lp-posten-reprint-controls" style="margin-top:10px;padding-top:8px;border-top:1px solid #dcdcde;">';
 		echo '<div style="margin-bottom:4px;"><strong>Reprint</strong></div>';
@@ -874,7 +875,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			echo '</select>';
 			echo '</label>';
 		}
-		echo '<a href="' . esc_url($href) . '" data-base-url="' . esc_url($base_url) . '" class="button" onclick="' . esc_attr($onclick) . '">Print på nytt</a>';
+		echo '<a href="' . esc_url($href) . '" data-base-url="' . esc_url($base_url) . '" data-ajax-url="' . esc_url(admin_url('admin-ajax.php')) . '" data-job-id="' . esc_attr((string) $job->job_id) . '" data-order-id="' . esc_attr((string) $order_id) . '" data-nonce="' . esc_attr(wp_create_nonce(self::NONCE_ACTION_REPRINT_LABELS . '_' . (string) $job->job_id)) . '" class="button" onclick="' . esc_attr($onclick) . '">Print på nytt</a>';
 		echo '<div data-lp-posten-reprint-status="1" style="margin-top:6px;color:#646970;"></div>';
 		if (!empty($printer_context['error'])) {
 			echo '<div style="margin-top:4px;color:#646970;">Printerlisten kunne ikke oppdateres akkurat nå. Viser lagret printervalg.</div>';
@@ -1851,6 +1852,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 	private function build_completed_order_note($job) {
 		$printed = isset($job->printed) && (int) $job->printed === 1 ? 'Ja' : 'Nei';
 		$package_results = $this->json_decode(isset($job->package_results_json) ? $job->package_results_json : '');
+		$package_results = $this->hydrate_package_results_from_label_files($job, $package_results);
 		$packages = $this->json_decode(isset($job->packages_json) ? $job->packages_json : '');
 		$is_multi_note = count($packages) > 1 || count($package_results) > 1 || (isset($job->status) && (string) $job->status === self::JOB_STATUS_PARTIAL_FAILED);
 		if (!empty($package_results) && $is_multi_note) {
@@ -1923,6 +1925,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$links = array();
 		$seen_urls = array();
 		$package_results = $this->json_decode(isset($job->package_results_json) ? $job->package_results_json : '');
+		$package_results = $this->hydrate_package_results_from_label_files($job, $package_results);
 		if (!empty($package_results)) {
 			usort($package_results, array($this, 'sort_by_package_index'));
 			foreach ($package_results as $result) {
@@ -2051,6 +2054,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		if (empty($package_results) && !empty($job->tracking_number)) {
 			$package_results = array($this->build_stored_package_result(1, (string) $job->tracking_number, isset($job->tracking_url) ? (string) $job->tracking_url : '', isset($job->label_file_path) ? (string) $job->label_file_path : '', 0, 0));
 		}
+		$package_results = $this->hydrate_package_results_from_label_files($job, $package_results);
 		$stamped_label_files = $this->json_decode(isset($job->stamped_label_files_json) ? $job->stamped_label_files_json : '');
 		$print_results = $this->json_decode(isset($job->print_results_json) ? $job->print_results_json : '');
 		$now = gmdate('Y-m-d H:i:s');
@@ -2168,6 +2172,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		if (empty($package_results) && !empty($job->tracking_number)) {
 			$package_results = array($this->build_stored_package_result(1, (string) $job->tracking_number, isset($job->tracking_url) ? (string) $job->tracking_url : '', isset($job->label_file_path) ? (string) $job->label_file_path : '', 0, 0));
 		}
+		$package_results = $this->hydrate_package_results_from_label_files($job, $package_results);
 		usort($package_results, array($this, 'sort_by_package_index'));
 
 		$direct_print_enabled = !empty($robot_settings['direct_print_enabled']) ? 1 : 0;
@@ -3124,7 +3129,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$expected_indexes = array(1);
 		}
 
-		$raw_package_results = $this->get_request_package_results($request);
+		$raw_package_results = $this->get_request_package_results($request, $expected_indexes);
 		if (is_wp_error($raw_package_results)) {
 			return $raw_package_results;
 		}
@@ -3135,11 +3140,32 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return $this->prepare_single_package_completion($request, (string) $job->job_id, $expected_indexes, $printed);
 	}
 
-	private function get_request_package_results($request) {
-		$raw = $request->get_param('package_results');
-		if ($raw === null || $raw === '') {
-			return null;
+	private function get_request_package_results($request, $expected_indexes = array()) {
+		foreach (array('package_results', 'labels', 'label_results') as $param_key) {
+			$raw = $request->get_param($param_key);
+			if ($raw === null || $raw === '') {
+				continue;
+			}
+			if (is_string($raw)) {
+				$decoded = json_decode($raw, true);
+				$raw = is_array($decoded) ? $decoded : null;
+			}
+			if (!is_array($raw) || empty($raw)) {
+				return new WP_Error('posten_job_package_results_invalid', $param_key . ' maa vaere en ikke-tom liste.', array('status' => 400));
+			}
+
+			return $this->normalize_request_package_result_rows($raw);
 		}
+
+		$parallel_results = $this->build_package_results_from_parallel_request_arrays($request, $expected_indexes);
+		if (!empty($parallel_results)) {
+			return $parallel_results;
+		}
+
+		return null;
+	}
+
+	private function normalize_request_package_result_rows($raw) {
 		if (is_string($raw)) {
 			$decoded = json_decode($raw, true);
 			$raw = is_array($decoded) ? $decoded : null;
@@ -3148,7 +3174,100 @@ class LP_Cargonizer_Posten_Label_Automation {
 			return new WP_Error('posten_job_package_results_invalid', 'package_results maa vaere en ikke-tom liste.', array('status' => 400));
 		}
 
-		return array_values($raw);
+		if ($this->looks_like_package_result_row($raw)) {
+			if (!isset($raw['package_index'])) {
+				$raw['package_index'] = 1;
+			}
+			return array($raw);
+		}
+
+		$rows = array();
+		$is_zero_indexed_list = array_key_exists(0, $raw);
+		foreach ($raw as $key => $row) {
+			if (is_object($row)) {
+				$row = (array) $row;
+			}
+			if (is_array($row) && !isset($row['package_index'])) {
+				$key_index = is_numeric($key) ? absint($key) : 0;
+				$row['package_index'] = (!$is_zero_indexed_list && $key_index > 0) ? $key_index : count($rows) + 1;
+			}
+			$rows[] = $row;
+		}
+
+		return $rows;
+	}
+
+	private function looks_like_package_result_row($row) {
+		if (!is_array($row)) {
+			return false;
+		}
+		foreach (array('tracking_number', 'label_pdf_base64', 'label_pdf', 'pdf_base64', 'label_filename') as $key) {
+			if (array_key_exists($key, $row)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private function build_package_results_from_parallel_request_arrays($request, $expected_indexes) {
+		$tracking_numbers = $this->get_array_request_param($request, array('tracking_numbers'));
+		$tracking_urls = $this->get_array_request_param($request, array('tracking_urls'));
+		$label_pdfs = $this->get_array_request_param($request, array('label_pdfs_base64', 'label_pdf_base64s', 'label_pdfs', 'label_pdf_base64', 'label_pdf'));
+		$label_filenames = $this->get_array_request_param($request, array('label_filenames'));
+		if (empty($tracking_numbers) || empty($label_pdfs)) {
+			return array();
+		}
+
+		$count = max(count($tracking_numbers), count($label_pdfs));
+		$rows = array();
+		for ($position = 0; $position < $count; $position++) {
+			$package_index = isset($expected_indexes[$position]) ? absint($expected_indexes[$position]) : ($position + 1);
+			$rows[] = array(
+				'package_index' => $package_index,
+				'tracking_number' => $this->get_indexed_or_position_value($tracking_numbers, $package_index, $position),
+				'tracking_url' => $this->get_indexed_or_position_value($tracking_urls, $package_index, $position),
+				'label_pdf_base64' => $this->get_indexed_or_position_value($label_pdfs, $package_index, $position),
+				'label_filename' => $this->get_indexed_or_position_value($label_filenames, $package_index, $position),
+			);
+		}
+
+		return $rows;
+	}
+
+	private function get_array_request_param($request, $keys) {
+		foreach ((array) $keys as $key) {
+			$value = $request->get_param($key);
+			if ($value === null || $value === '') {
+				continue;
+			}
+			if (is_string($value)) {
+				$decoded = json_decode($value, true);
+				if (is_array($decoded)) {
+					return $decoded;
+				}
+				continue;
+			}
+			if (is_array($value) && !empty($value)) {
+				return $value;
+			}
+		}
+
+		return array();
+	}
+
+	private function get_indexed_or_position_value($values, $package_index, $position) {
+		if (!is_array($values) || empty($values)) {
+			return '';
+		}
+		if (array_key_exists($package_index, $values)) {
+			return is_scalar($values[$package_index]) ? (string) $values[$package_index] : '';
+		}
+		$string_index = (string) $package_index;
+		if (array_key_exists($string_index, $values)) {
+			return is_scalar($values[$string_index]) ? (string) $values[$string_index] : '';
+		}
+		$list = array_values($values);
+		return isset($list[$position]) && is_scalar($list[$position]) ? (string) $list[$position] : '';
 	}
 
 	private function prepare_multi_package_completion($job_id, $raw_package_results, $expected_indexes, $printed) {
@@ -3171,6 +3290,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$label_base64 = isset($result['label_pdf_base64']) ? (string) $result['label_pdf_base64'] : '';
 			if ($label_base64 === '' && isset($result['label_pdf'])) {
 				$label_base64 = (string) $result['label_pdf'];
+			}
+			if ($label_base64 === '' && isset($result['pdf_base64'])) {
+				$label_base64 = (string) $result['pdf_base64'];
 			}
 			if ($tracking_number === '' || $label_base64 === '') {
 				return new WP_Error('posten_job_package_result_missing_fields', 'Hvert kolli maa ha tracking_number og label_pdf_base64.', array('status' => 400));
@@ -3250,6 +3372,59 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return $order_package_results;
+	}
+
+	private function hydrate_package_results_from_label_files($job, $package_results) {
+		$package_results = is_array($package_results) ? $package_results : array();
+		$label_files = $this->json_decode(isset($job->label_files_json) ? $job->label_files_json : '');
+		if (empty($label_files)) {
+			return $package_results;
+		}
+
+		$tracking_numbers = $this->json_decode(isset($job->tracking_numbers_json) ? $job->tracking_numbers_json : '');
+		if (empty($tracking_numbers) && isset($job->tracking_number) && (string) $job->tracking_number !== '') {
+			$tracking_numbers = array((string) $job->tracking_number);
+		}
+
+		foreach (array_values($label_files) as $position => $label_file) {
+			if (!is_array($label_file)) {
+				continue;
+			}
+			$package_index = isset($label_file['package_index']) ? absint($label_file['package_index']) : ($position + 1);
+			if ($package_index < 1) {
+				continue;
+			}
+
+			$result = $this->get_package_result_for_index($package_results, $package_index);
+			$tracking_number = isset($result['tracking_number']) ? sanitize_text_field((string) $result['tracking_number']) : '';
+			if ($tracking_number === '') {
+				$tracking_number = $this->get_indexed_or_position_value($tracking_numbers, $package_index, $position);
+			}
+			$tracking_url = isset($result['tracking_url']) ? esc_url_raw((string) $result['tracking_url']) : '';
+			if ($tracking_url === '' && $tracking_number !== '') {
+				$tracking_url = $this->build_default_tracking_url($tracking_number);
+			}
+
+			$result['package_index'] = $package_index;
+			$result['tracking_number'] = $tracking_number;
+			$result['tracking_url'] = $tracking_url;
+			if (!empty($label_file['label_file_path'])) {
+				$result['label_file_path'] = (string) $label_file['label_file_path'];
+			}
+			if (!empty($label_file['label_attachment_id'])) {
+				$result['label_attachment_id'] = absint($label_file['label_attachment_id']);
+			}
+			if (!empty($label_file['label_filename'])) {
+				$result['label_filename'] = sanitize_file_name((string) $label_file['label_filename']);
+			} elseif (!empty($result['label_file_path'])) {
+				$result['label_filename'] = basename((string) $result['label_file_path']);
+			}
+
+			$package_results = $this->upsert_indexed_row($package_results, $package_index, $result);
+		}
+
+		usort($package_results, array($this, 'sort_by_package_index'));
+		return $package_results;
 	}
 
 	private function finalize_completion_payload($package_results, $expected_indexes) {
@@ -3593,6 +3768,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 				'label_filename' => !empty($row->label_file_path) ? basename((string) $row->label_file_path) : '',
 			));
 		}
+		$package_results = $this->hydrate_package_results_from_label_files($row, $package_results);
 		$print_results = $this->index_by_package_index($this->json_decode(isset($row->print_results_json) ? $row->print_results_json : ''));
 		usort($package_results, array($this, 'sort_by_package_index'));
 		foreach ($package_results as &$result) {
