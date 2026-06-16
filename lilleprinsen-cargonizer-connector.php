@@ -24,7 +24,10 @@ require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-pickup-controller
 require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-pickup-compatibility-layer.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-selection-persistence-service.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-posten-label-automation.php';
+require_once __DIR__ . '/includes/class-lp-cargonizer-posten-printer-choice-compat.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-plugin.php';
+
+LP_Cargonizer_Posten_Printer_Choice_Compat::register_hooks();
 
 $lp_cargonizer_plugin = new LP_Cargonizer_Plugin();
 $lp_cargonizer_plugin->bootstrap();
