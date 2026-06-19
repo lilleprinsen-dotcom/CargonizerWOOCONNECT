@@ -1035,6 +1035,54 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return $clean_packages;
 	}
 
+	private function build_booking_recipient_from_request($order, $method_payload = array()) {
+		$recipient_country = $this->resolve_recipient_country_for_context($order, $method_payload);
+		$recipient = array(
+			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
+			'address_1' => $order->get_shipping_address_1(),
+			'address_2' => $order->get_shipping_address_2(),
+			'postcode' => $order->get_shipping_postcode(),
+			'city' => $order->get_shipping_city(),
+			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
+			'email' => $order->get_billing_email(),
+			'phone' => $this->get_order_recipient_phone_for_api($order),
+		);
+		if ($recipient['name'] === '') {
+			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+
+		$posted_fields = array(
+			'name' => array('recipient_name', 'text'),
+			'address_1' => array('recipient_address_1', 'text'),
+			'address_2' => array('recipient_address_2', 'text'),
+			'postcode' => array('recipient_postcode', 'text'),
+			'city' => array('recipient_city', 'text'),
+			'country' => array('recipient_country', 'country'),
+			'email' => array('recipient_email', 'email'),
+			'phone' => array('recipient_phone', 'text'),
+		);
+
+		foreach ($posted_fields as $recipient_key => $field) {
+			$post_key = $field[0];
+			if (!isset($_POST[$post_key]) || is_array($_POST[$post_key])) {
+				continue;
+			}
+
+			$value = wp_unslash($_POST[$post_key]);
+			$value = $field[1] === 'email'
+				? sanitize_email((string) $value)
+				: sanitize_text_field((string) $value);
+			if ($field[1] === 'country') {
+				$value = strtoupper($value);
+			}
+			if ($value !== '') {
+				$recipient[$recipient_key] = $value;
+			}
+		}
+
+		return $recipient;
+	}
+
 	private function sanitize_posted_method_payload($method) {
 		$agreement_id = '';
 		if (isset($method['agreement_id'])) {
@@ -1300,11 +1348,20 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt eller hent/aktiver fraktmetoder i Cargonizer-innstillingene.'), 400);
 		}
 
+		$recipient = $this->build_booking_recipient_from_request($order, $method_payload);
+		if ($recipient['country'] === '') {
+			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land maa vaere en gyldig ISO-2-kode, for eksempel NO.'), 400);
+		}
+		if ($notify_email_to_consignee && trim((string) $recipient['email']) === '') {
+			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, saa e-postvarsling kan ikke brukes for denne bookingen.'), 400);
+		}
+
 		if ($this->is_manual_norgespakke_method($method_payload) && class_exists('LP_Cargonizer_Posten_Label_Automation')) {
 			$queue_result = LP_Cargonizer_Posten_Label_Automation::instance()->queue_from_admin_request($order, $method_payload, $clean_packages, array(
 				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 				'notify_email_to_consignee' => $notify_email_to_consignee,
 				'source' => 'legacy_booking_ajax',
+				'recipient' => $recipient,
 			));
 			if (is_wp_error($queue_result)) {
 				wp_send_json_error(array('message' => $queue_result->get_error_message()), 400);
@@ -1317,27 +1374,6 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$sms_service = $this->find_sms_service_for_method($methods[0]);
 			$method_payload['sms_service_id'] = $sms_service['service_id'];
 			$method_payload['sms_service_name'] = $sms_service['service_name'];
-		}
-
-		$recipient_country = $this->resolve_recipient_country_for_context($order, $method_payload);
-		$recipient = array(
-			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
-			'address_1' => $order->get_shipping_address_1(),
-			'address_2' => $order->get_shipping_address_2(),
-			'postcode' => $order->get_shipping_postcode(),
-			'city' => $order->get_shipping_city(),
-			'country' => isset($recipient_country['normalized']) ? $recipient_country['normalized'] : '',
-			'email' => $order->get_billing_email(),
-			'phone' => $this->get_order_recipient_phone_for_api($order),
-		);
-		if ($recipient['name'] === '') {
-			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
-		}
-		if ($recipient['country'] === '') {
-			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.'), 400);
-		}
-		if ($notify_email_to_consignee && trim((string) $recipient['email']) === '') {
-			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, så e-postvarsling kan ikke brukes for denne bookingen.'), 400);
 		}
 
 		$sender_id_override = !empty($method_payload['sender_id']) ? (string) $method_payload['sender_id'] : (isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '');

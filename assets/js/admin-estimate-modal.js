@@ -479,6 +479,18 @@
 				return assignments;
 			}
 
+			function appendCurrentRecipient(form){
+				var recipient = currentRecipient || {};
+				form.append('recipient_name', recipient.name || '');
+				form.append('recipient_address_1', recipient.address_1 || '');
+				form.append('recipient_address_2', recipient.address_2 || '');
+				form.append('recipient_postcode', recipient.postcode || '');
+				form.append('recipient_city', recipient.city || '');
+				form.append('recipient_country', recipient.country || '');
+				form.append('recipient_email', recipient.email || '');
+				form.append('recipient_phone', recipient.phone || '');
+			}
+
 			function createColli(pkg){
 				var row = document.createElement('div');
 				row.className = 'lp-colli-row';
@@ -1637,10 +1649,7 @@
 				form.append('carrier_id', methodData.carrier_id || '');
 				form.append('carrier_name', methodData.carrier_name || '');
 				form.append('product_name', methodData.product_name || '');
-				form.append('recipient_country', (currentRecipient && currentRecipient.country) ? currentRecipient.country : '');
-				form.append('recipient_postcode', (currentRecipient && currentRecipient.postcode) ? currentRecipient.postcode : '');
-				form.append('recipient_city', (currentRecipient && currentRecipient.city) ? currentRecipient.city : '');
-				form.append('recipient_address_1', (currentRecipient && currentRecipient.address_1) ? currentRecipient.address_1 : '');
+				appendCurrentRecipient(form);
 				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){
 						var status = res && typeof res.status === 'number' ? res.status : 0;
@@ -2973,6 +2982,7 @@
 					form.append('package_printer_assignments[' + packageIndex + ']', packagePrinterAssignments[packageIndex]);
 				});
 				form.append('notify_email_to_consignee', notifyEmailToConsignee ? '1' : '0');
+				appendCurrentRecipient(form);
 
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })

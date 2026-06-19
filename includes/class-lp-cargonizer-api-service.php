@@ -1710,6 +1710,9 @@ class LP_Cargonizer_Api_Service {
 			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
 			$description = isset($package['description']) ? trim((string) $package['description']) : '';
+			if ($description === '' && isset($package['name'])) {
+				$description = trim((string) $package['name']);
+			}
 			$length_xml = $this->normalize_positive_decimal_for_xml(isset($package['length']) ? $package['length'] : null);
 			$width_xml = $this->normalize_positive_decimal_for_xml(isset($package['width']) ? $package['width'] : null);
 			$height_xml = $this->normalize_positive_decimal_for_xml(isset($package['height']) ? $package['height'] : null);
@@ -1836,6 +1839,9 @@ class LP_Cargonizer_Api_Service {
 			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
 			$description = isset($package['description']) ? trim((string) $package['description']) : '';
+			if ($description === '' && isset($package['name'])) {
+				$description = trim((string) $package['name']);
+			}
 			$length_xml = $this->normalize_positive_decimal_for_xml(isset($package['length']) ? $package['length'] : null);
 			$width_xml = $this->normalize_positive_decimal_for_xml(isset($package['width']) ? $package['width'] : null);
 			$height_xml = $this->normalize_positive_decimal_for_xml(isset($package['height']) ? $package['height'] : null);
