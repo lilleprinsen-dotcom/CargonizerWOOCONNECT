@@ -269,6 +269,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			'warehouse_profile_id' => isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '',
 			'notify_email_to_consignee' => isset($_POST['notify_email_to_consignee']) ? (bool) $this->settings_service->sanitize_checkbox_value(wp_unslash($_POST['notify_email_to_consignee'])) : false,
 			'source' => 'admin_manual_norgespakke',
+			'recipient' => $this->get_recipient_override_from_request(),
 		));
 
 		if (is_wp_error($result)) {
@@ -413,7 +414,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		$sender = $this->resolve_sender_profile(isset($args['warehouse_profile_id']) ? $args['warehouse_profile_id'] : '');
-		$recipient = $this->build_recipient_snapshot($order);
+		$recipient = $this->build_recipient_snapshot($order, isset($args['recipient']) && is_array($args['recipient']) ? $args['recipient'] : array());
 		$recipient_validation = $this->validate_recipient_for_norgespakke($recipient);
 		if (is_wp_error($recipient_validation)) {
 			return $recipient_validation;
@@ -1392,6 +1393,64 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return sanitize_text_field((string) $value);
 	}
 
+	private function get_recipient_override_from_request() {
+		$recipient = array();
+		$fields = array(
+			'name' => array('recipient_name', 'text'),
+			'address_1' => array('recipient_address_1', 'text'),
+			'address_2' => array('recipient_address_2', 'text'),
+			'postcode' => array('recipient_postcode', 'text'),
+			'city' => array('recipient_city', 'text'),
+			'country' => array('recipient_country', 'country'),
+			'email' => array('recipient_email', 'email'),
+			'phone' => array('recipient_phone', 'text'),
+		);
+
+		foreach ($fields as $recipient_key => $field) {
+			$post_key = $field[0];
+			if (!isset($_POST[$post_key]) || is_array($_POST[$post_key])) {
+				continue;
+			}
+
+			$value = wp_unslash($_POST[$post_key]);
+			$value = $field[1] === 'email'
+				? sanitize_email((string) $value)
+				: sanitize_text_field((string) $value);
+			if ($field[1] === 'country') {
+				$value = strtoupper($value);
+			}
+			if ($value !== '') {
+				$recipient[$recipient_key] = $value;
+			}
+		}
+
+		return $recipient;
+	}
+
+	private function sanitize_recipient_override($recipient) {
+		if (!is_array($recipient)) {
+			return array();
+		}
+
+		$clean = array();
+		foreach (array('name', 'address_1', 'address_2', 'postcode', 'city', 'country', 'email', 'phone') as $key) {
+			if (!isset($recipient[$key])) {
+				continue;
+			}
+			$value = $key === 'email'
+				? sanitize_email((string) $recipient[$key])
+				: sanitize_text_field((string) $recipient[$key]);
+			if ($key === 'country') {
+				$value = strtoupper($value);
+			}
+			if ($value !== '') {
+				$clean[$key] = $value;
+			}
+		}
+
+		return $clean;
+	}
+
 	private function sanitize_packages($packages) {
 		$packages = is_array($packages) ? $packages : array();
 		$clean = array();
@@ -1440,7 +1499,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 		return $clean;
 	}
 
-	private function build_recipient_snapshot($order) {
+	private function build_recipient_snapshot($order, $recipient_override = array()) {
 		$shipping_name = trim((string) $order->get_shipping_first_name() . ' ' . (string) $order->get_shipping_last_name());
 		$billing_name = trim((string) $order->get_billing_first_name() . ' ' . (string) $order->get_billing_last_name());
 		$name = $this->first_non_empty($shipping_name, $billing_name);
@@ -1454,7 +1513,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$country = 'NO';
 		}
 
-		return array(
+		$recipient = array(
 			'name' => sanitize_text_field($name),
 			'company' => sanitize_text_field($company),
 			'address_1' => sanitize_text_field($address_1),
@@ -1465,6 +1524,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 			'email' => sanitize_email((string) $order->get_billing_email()),
 			'phone' => $this->get_order_recipient_phone($order),
 		);
+		foreach ($this->sanitize_recipient_override($recipient_override) as $key => $value) {
+			$recipient[$key] = $value;
+		}
+
+		return $recipient;
 	}
 
 	private function build_shipping_snapshot($order, $method_payload, $args) {
