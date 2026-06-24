@@ -1156,9 +1156,9 @@ class LP_Cargonizer_Posten_Label_Automation {
 			'label_url' => isset($response['label_url']) ? $response['label_url'] : '',
 			'package_results' => isset($response['package_results']) ? $response['package_results'] : array(),
 			'label_files' => isset($response['label_files']) ? $response['label_files'] : array(),
-			'stamped_label_files' => isset($response['stamped_label_files']) ? $response['stamped_label_files'] : array(),
-			'print_results' => isset($response['print_results']) ? $response['print_results'] : array(),
-			'printed' => isset($response['printed']) ? (int) $response['printed'] : 0,
+			'stamped_label_files' => !empty($response['stamped_label_files']) ? $response['stamped_label_files'] : $this->build_stamped_label_files_for_completion_response($print_context['stamped_label_files']),
+			'print_results' => $print_context['print_results'],
+			'printed' => (int) $print_context['printed'],
 			'missing_package_indexes' => isset($completion['missing_package_indexes']) ? $completion['missing_package_indexes'] : array(),
 		));
 	}
@@ -2405,6 +2405,18 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$print_results = array();
 		$all_printed = !empty($package_results);
 		$now = gmdate('Y-m-d H:i:s');
+
+		if (empty($package_results)) {
+			$print_results[] = array(
+				'package_index' => 1,
+				'printed' => 0,
+				'printer_id' => $printer_id,
+				'http_status' => 0,
+				'error' => $direct_print_enabled ? 'Ingen lagrede Posten-labeler ble funnet for DirectPrint.' : 'DirectPrint disabled',
+				'printed_at_gmt' => $now,
+			);
+			$all_printed = false;
+		}
 
 		foreach ($package_results as &$result) {
 			if (!is_array($result)) {
@@ -4158,6 +4170,21 @@ class LP_Cargonizer_Posten_Label_Automation {
 		unset($print_result);
 
 		return $print_results;
+	}
+
+	private function build_stamped_label_files_for_completion_response($stamped_label_files) {
+		$response_files = array();
+		foreach ((array) $stamped_label_files as $label_file) {
+			if (!is_array($label_file)) {
+				continue;
+			}
+			$response_files[] = array(
+				'package_index' => isset($label_file['package_index']) ? absint($label_file['package_index']) : 0,
+				'stamped_label_filename' => isset($label_file['stamped_label_filename']) ? sanitize_file_name((string) $label_file['stamped_label_filename']) : '',
+			);
+		}
+		usort($response_files, array($this, 'sort_by_package_index'));
+		return $response_files;
 	}
 
 	private function index_by_package_index($rows) {
