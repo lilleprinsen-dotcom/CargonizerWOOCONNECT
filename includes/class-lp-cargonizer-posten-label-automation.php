@@ -15,6 +15,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 	const REST_ROUTE_PRIMARY = '/posten-jobs';
 	const REST_ROUTE_LEGACY = '/posten-label-jobs';
 	const TOKEN_HEADER = 'X-LP-Posten-Robot-Token';
+	const ORDER_OVERVIEW_PRINT_COLUMN = 'lp_posten_print_status';
 	const SCHEMA_VERSION_OPTION = 'lp_cargonizer_posten_jobs_schema_version';
 	const SCHEMA_VERSION = '4';
 	const ORDER_STATUS_WAITING = 'lp-waiting-label';
@@ -98,6 +99,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 		add_action('admin_post_' . self::ADMIN_ACTION_REPRINT_LABELS, array($this, 'admin_reprint_labels_action'));
 		add_action('wp_ajax_' . self::ADMIN_ACTION_REPRINT_LABELS, array($this, 'admin_reprint_labels_action'));
 		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_label_status_panel'), 20);
+		add_filter('manage_edit-shop_order_columns', array($this, 'add_order_overview_print_column'), 40);
+		add_action('manage_shop_order_posts_custom_column', array($this, 'render_legacy_order_overview_print_column'), 20, 2);
+		add_filter('manage_woocommerce_page_wc-orders_columns', array($this, 'add_order_overview_print_column'), 40);
+		add_action('manage_woocommerce_page_wc-orders_custom_column', array($this, 'render_hpos_order_overview_print_column'), 20, 2);
+		add_action('admin_head', array($this, 'render_order_overview_print_column_styles'));
 		add_action('woocommerce_payment_complete', array($this, 'maybe_auto_queue_for_order'), 20, 1);
 		add_action('woocommerce_order_status_processing', array($this, 'maybe_auto_queue_for_order'), 20, 1);
 		add_action('woocommerce_order_status_changed', array($this, 'handle_order_status_changed'), 20, 4);
@@ -132,6 +138,68 @@ class LP_Cargonizer_Posten_Label_Automation {
 		$statuses['wc-' . self::ORDER_STATUS_WAITING] = 'Venter på etikett';
 		$statuses['wc-' . self::ORDER_STATUS_CREATED] = 'Etikett opprettet';
 		return $statuses;
+	}
+
+	public function add_order_overview_print_column($columns) {
+		if (!is_array($columns) || isset($columns[self::ORDER_OVERVIEW_PRINT_COLUMN])) {
+			return $columns;
+		}
+
+		$insert_after = isset($columns['order_status']) ? 'order_status' : 'order_number';
+		$output = array();
+		$inserted = false;
+		foreach ($columns as $key => $label) {
+			$output[$key] = $label;
+			if ((string) $key === $insert_after) {
+				$output[self::ORDER_OVERVIEW_PRINT_COLUMN] = 'Posten print';
+				$inserted = true;
+			}
+		}
+		if (!$inserted) {
+			$output[self::ORDER_OVERVIEW_PRINT_COLUMN] = 'Posten print';
+		}
+
+		return $output;
+	}
+
+	public function render_legacy_order_overview_print_column($column, $post_id) {
+		if ((string) $column !== self::ORDER_OVERVIEW_PRINT_COLUMN) {
+			return;
+		}
+
+		$order = function_exists('wc_get_order') ? wc_get_order(absint($post_id)) : null;
+		$this->render_order_overview_print_flag($order);
+	}
+
+	public function render_hpos_order_overview_print_column($column, $order) {
+		if ((string) $column !== self::ORDER_OVERVIEW_PRINT_COLUMN) {
+			return;
+		}
+
+		if (!$order || !is_object($order) || !method_exists($order, 'get_id')) {
+			$order_id = is_scalar($order) ? absint($order) : 0;
+			$order = $order_id > 0 && function_exists('wc_get_order') ? wc_get_order($order_id) : null;
+		}
+
+		$this->render_order_overview_print_flag($order);
+	}
+
+	public function render_order_overview_print_column_styles() {
+		if (!function_exists('get_current_screen')) {
+			return;
+		}
+		$screen = get_current_screen();
+		$screen_id = $screen && isset($screen->id) ? (string) $screen->id : '';
+		if (!in_array($screen_id, array('edit-shop_order', 'woocommerce_page_wc-orders'), true)) {
+			return;
+		}
+		?>
+		<style>
+			.column-<?php echo esc_html(self::ORDER_OVERVIEW_PRINT_COLUMN); ?> { width: 108px; }
+			.lp-posten-print-flag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; background: #fbeaea; color: #8a1f11; border: 1px solid #d63638; font-size: 11px; font-weight: 600; line-height: 1.6; white-space: nowrap; }
+			.lp-posten-print-ok { color: #646970; font-size: 11px; white-space: nowrap; }
+		</style>
+		<?php
 	}
 
 	public function maybe_install_table() {
@@ -683,6 +751,80 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return $this->get_job_by_id($job_id);
+	}
+
+	private function render_order_overview_print_flag($order) {
+		$context = $this->get_order_overview_print_failure_context($order);
+		if (empty($context['failed'])) {
+			echo '<span class="lp-posten-print-ok" aria-label="' . esc_attr('Ingen Posten DirectPrint-feil') . '">-</span>';
+			return;
+		}
+
+		$reason = isset($context['reason']) ? (string) $context['reason'] : '';
+		$label = 'Print feilet';
+		$title = $reason !== '' ? $reason : 'Posten DirectPrint ble valgt, men etiketten er ikke markert som printet.';
+		echo '<span class="lp-posten-print-flag" title="' . esc_attr($title) . '" aria-label="' . esc_attr($label . ': ' . $title) . '">' . esc_html($label) . '</span>';
+	}
+
+	private function get_order_overview_print_failure_context($order) {
+		if (!$order || !is_object($order) || !method_exists($order, 'get_meta')) {
+			return array('failed' => false, 'reason' => '');
+		}
+
+		$status = sanitize_key((string) $order->get_meta(self::META_LABEL_STATUS, true));
+		if (!in_array($status, array(self::JOB_STATUS_COMPLETED, self::JOB_STATUS_PARTIAL_FAILED), true)) {
+			return array('failed' => false, 'reason' => '');
+		}
+
+		$direct_print_enabled = (int) $order->get_meta(self::META_DIRECT_PRINT_ENABLED, true);
+		$printer_id = sanitize_text_field((string) $order->get_meta(self::META_DIRECT_PRINT_PRINTER_ID, true));
+		if ($direct_print_enabled !== 1 && $printer_id === '') {
+			return array('failed' => false, 'reason' => '');
+		}
+
+		if ((int) $order->get_meta(self::META_LABEL_PRINTED, true) === 1) {
+			return array('failed' => false, 'reason' => '');
+		}
+
+		$print_results = $order->get_meta(self::META_PRINT_RESULTS, true);
+		$package_results = $order->get_meta(self::META_PACKAGE_RESULTS, true);
+		$reasons = $this->collect_order_overview_print_failure_reasons(
+			is_array($print_results) ? $print_results : array(),
+			is_array($package_results) ? $package_results : array()
+		);
+		if (empty($reasons)) {
+			$reasons[] = 'Posten DirectPrint ble valgt, men ingen utskriftsresultater er lagret.';
+		}
+
+		return array(
+			'failed' => true,
+			'reason' => implode(' | ', array_values(array_unique($reasons))),
+		);
+	}
+
+	private function collect_order_overview_print_failure_reasons($print_results, $package_results) {
+		$reasons = array();
+		foreach ((array) $print_results as $result) {
+			if (!is_array($result) || !empty($result['printed'])) {
+				continue;
+			}
+			$package_index = isset($result['package_index']) ? absint($result['package_index']) : 0;
+			$error = isset($result['error']) ? sanitize_text_field((string) $result['error']) : '';
+			if ($error === '' && isset($result['print_error'])) {
+				$error = sanitize_text_field((string) $result['print_error']);
+			}
+			$reasons[] = ($package_index > 0 ? 'Kolli ' . $package_index . ': ' : '') . ($error !== '' ? $error : 'Ingen feilmelding fra DirectPrint.');
+		}
+
+		foreach ((array) $package_results as $result) {
+			if (!is_array($result) || !empty($result['printed']) || empty($result['print_error'])) {
+				continue;
+			}
+			$package_index = isset($result['package_index']) ? absint($result['package_index']) : 0;
+			$reasons[] = ($package_index > 0 ? 'Kolli ' . $package_index . ': ' : '') . sanitize_text_field((string) $result['print_error']);
+		}
+
+		return array_values(array_filter($reasons, 'strlen'));
 	}
 
 	public function render_order_label_status_panel($order) {
