@@ -1709,9 +1709,9 @@ class LP_Cargonizer_Api_Service {
 			$width_cm = isset($package['width']) ? (float) $package['width'] : 0;
 			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
-			$description = isset($package['description']) ? trim((string) $package['description']) : '';
-			if ($description === '' && isset($package['name'])) {
-				$description = trim((string) $package['name']);
+			$description = isset($package['name']) ? trim((string) $package['name']) : '';
+			if ($description === '' && isset($package['description'])) {
+				$description = trim((string) $package['description']);
 			}
 			$length_xml = $this->normalize_positive_decimal_for_xml(isset($package['length']) ? $package['length'] : null);
 			$width_xml = $this->normalize_positive_decimal_for_xml(isset($package['width']) ? $package['width'] : null);
@@ -1838,9 +1838,9 @@ class LP_Cargonizer_Api_Service {
 			$width_cm = isset($package['width']) ? (float) $package['width'] : 0;
 			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
-			$description = isset($package['description']) ? trim((string) $package['description']) : '';
-			if ($description === '' && isset($package['name'])) {
-				$description = trim((string) $package['name']);
+			$description = isset($package['name']) ? trim((string) $package['name']) : '';
+			if ($description === '' && isset($package['description'])) {
+				$description = trim((string) $package['description']);
 			}
 			$length_xml = $this->normalize_positive_decimal_for_xml(isset($package['length']) ? $package['length'] : null);
 			$width_xml = $this->normalize_positive_decimal_for_xml(isset($package['width']) ? $package['width'] : null);

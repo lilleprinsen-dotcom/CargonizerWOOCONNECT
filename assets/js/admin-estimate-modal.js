@@ -391,8 +391,9 @@
 					if (!validateColliRow(row)) {
 						allValid = false;
 					}
-					var name = row.querySelector('[data-colli-field="name"]').value.trim();
-					var description = row.querySelector('[data-colli-field="description"]').value.trim();
+					var nameField = row.querySelector('[data-colli-field="name"]');
+					var descriptionField = row.querySelector('[data-colli-field="description"]');
+					var packageText = nameField ? nameField.value.trim() : (descriptionField ? descriptionField.value.trim() : '');
 					var weight = toNum(row.querySelector('[data-colli-field="weight"]').value);
 					var length = toNum(row.querySelector('[data-colli-field="length"]').value);
 					var width = toNum(row.querySelector('[data-colli-field="width"]').value);
@@ -400,8 +401,8 @@
 					var volume = toNum(((length * width * height) / 1000).toFixed(3));
 					return {
 						index: index,
-						name: name,
-						description: description,
+						name: packageText,
+						description: packageText,
 						weight: weight,
 						length: length,
 						width: width,
@@ -492,15 +493,15 @@
 			}
 
 			function createColli(pkg){
+				var packageText = pkg.name || pkg.description || '';
 				var row = document.createElement('div');
 				row.className = 'lp-colli-row';
 				row.style.cssText = 'border:1px solid #dcdcde;padding:10px 12px;margin-bottom:8px;background:#fff;box-shadow:0 1px 1px rgba(0,0,0,.03);';
 				row.innerHTML = '' +
 					'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
 					'<strong class="lp-colli-title">Kolli</strong><span style="display:flex;gap:6px;align-items:center;"><button type="button" class="button button-small lp-colli-printer-toggle" style="display:none;">Printer</button><button type="button" class="button-link-delete lp-remove-colli">Fjern</button></span></div>' +
-					'<div style="display:grid;grid-template-columns:repeat(2,minmax(180px,1fr)) repeat(4,minmax(110px,1fr));gap:8px;margin-top:8px;align-items:end;">' +
-					'<label style="display:flex;flex-direction:column;gap:4px;">Navn<input type="text" class="regular-text lp-colli-name" data-colli-field="name" style="width:100%;" value="'+esc(pkg.name || '')+'"></label>' +
-					'<label style="display:flex;flex-direction:column;gap:4px;">Beskrivelse<input type="text" class="regular-text lp-colli-description" data-colli-field="description" style="width:100%;" value="'+esc(pkg.description || '')+'"></label>' +
+					'<div style="display:grid;grid-template-columns:minmax(220px,2fr) repeat(4,minmax(110px,1fr));gap:8px;margin-top:8px;align-items:end;">' +
+					'<label style="display:flex;flex-direction:column;gap:4px;">Navn<input type="text" class="regular-text lp-colli-name" data-colli-field="name" style="width:100%;" value="'+esc(packageText)+'"></label>' +
 					'<label style="display:flex;flex-direction:column;gap:4px;">Vekt (kg)<input type="number" step="0.01" min="0" class="small-text lp-colli-weight" data-colli-field="weight" style="width:100%;" value="'+esc(pkg.weight || '')+'"></label>' +
 					'<label style="display:flex;flex-direction:column;gap:4px;">Lengde (cm)<input type="number" step="0.01" min="0" class="small-text lp-colli-length" data-colli-field="length" style="width:100%;" value="'+esc(pkg.length || '')+'"></label>' +
 					'<label style="display:flex;flex-direction:column;gap:4px;">Bredde (cm)<input type="number" step="0.01" min="0" class="small-text lp-colli-width" data-colli-field="width" style="width:100%;" value="'+esc(pkg.width || '')+'"></label>' +
