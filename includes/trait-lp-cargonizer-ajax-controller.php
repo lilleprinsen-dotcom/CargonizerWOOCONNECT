@@ -1023,9 +1023,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 	private function sanitize_posted_packages($packages) {
 		$clean_packages = array();
 		foreach ($packages as $package) {
+			$package_text = $this->sanitize_package_display_text($package);
 			$clean_packages[] = array(
-				'name' => isset($package['name']) ? sanitize_text_field($package['name']) : '',
-				'description' => isset($package['description']) ? sanitize_text_field($package['description']) : '',
+				'name' => $package_text,
+				'description' => $package_text,
 				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
 				'length' => isset($package['length']) ? (float) $package['length'] : 0,
 				'width' => isset($package['width']) ? (float) $package['width'] : 0,
@@ -1033,6 +1034,19 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			);
 		}
 		return $clean_packages;
+	}
+
+	private function sanitize_package_display_text($package) {
+		if (!is_array($package)) {
+			return '';
+		}
+
+		$name = isset($package['name']) ? sanitize_text_field((string) $package['name']) : '';
+		if ($name !== '') {
+			return $name;
+		}
+
+		return isset($package['description']) ? sanitize_text_field((string) $package['description']) : '';
 	}
 
 	private function build_booking_recipient_from_request($order, $method_payload = array()) {
@@ -1992,9 +2006,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$clean_packages = array();
 		foreach ($packages as $package) {
+			$package_text = $this->sanitize_package_display_text($package);
 			$clean_packages[] = array(
-				'name' => isset($package['name']) ? sanitize_text_field($package['name']) : '',
-				'description' => isset($package['description']) ? sanitize_text_field($package['description']) : '',
+				'name' => $package_text,
+				'description' => $package_text,
 				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
 				'length' => isset($package['length']) ? (float) $package['length'] : 0,
 				'width' => isset($package['width']) ? (float) $package['width'] : 0,
@@ -2565,9 +2580,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$clean_packages = array();
 		foreach ($packages as $package) {
+			$package_text = $this->sanitize_package_display_text($package);
 			$clean_packages[] = array(
-				'name' => isset($package['name']) ? sanitize_text_field($package['name']) : '',
-				'description' => isset($package['description']) ? sanitize_text_field($package['description']) : '',
+				'name' => $package_text,
+				'description' => $package_text,
 				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
 				'length' => isset($package['length']) ? (float) $package['length'] : 0,
 				'width' => isset($package['width']) ? (float) $package['width'] : 0,

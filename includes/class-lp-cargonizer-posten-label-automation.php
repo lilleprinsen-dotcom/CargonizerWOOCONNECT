@@ -1658,10 +1658,11 @@ class LP_Cargonizer_Posten_Label_Automation {
 				continue;
 			}
 
+			$package_text = $this->get_package_text_from_payload($package);
 			$clean[] = array(
 				'index' => count($clean) + 1,
-				'name' => isset($package['name']) ? sanitize_text_field((string) $package['name']) : '',
-				'description' => isset($package['description']) ? sanitize_text_field((string) $package['description']) : '',
+				'name' => $package_text,
+				'description' => $package_text,
 				'weight_kg' => $weight,
 				'weight_grams' => (int) round($weight * 1000),
 				'length_cm' => max(0, $length),
@@ -1679,6 +1680,19 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return $clean;
+	}
+
+	private function get_package_text_from_payload($package) {
+		if (!is_array($package)) {
+			return '';
+		}
+
+		$name = isset($package['name']) ? sanitize_text_field((string) $package['name']) : '';
+		if ($name !== '') {
+			return $name;
+		}
+
+		return isset($package['description']) ? sanitize_text_field((string) $package['description']) : '';
 	}
 
 	private function build_recipient_snapshot($order, $recipient_override = array()) {
