@@ -259,6 +259,30 @@ class LP_Cargonizer_Estimator_Service {
 		return $result;
 	}
 
+	private function get_norgespakke_base_price_ex_vat($weight, $vat_percent) {
+		if ($weight <= 10) {
+			$price_incl_vat = 140.0;
+		} elseif ($weight <= 25) {
+			$price_incl_vat = 251.0;
+		} else {
+			$price_incl_vat = 335.0;
+		}
+
+		$vat_percent = (float) $vat_percent > 0 ? (float) $vat_percent : 25.0;
+		return round($price_incl_vat / (1 + ($vat_percent / 100)), 2);
+	}
+
+	private function normalize_norgespakke_standard_dimensions($length, $width, $height) {
+		$dimensions = array(max(0, (float) $length), max(0, (float) $width), max(0, (float) $height));
+		rsort($dimensions, SORT_NUMERIC);
+
+		return array(
+			'length' => min(120.0, isset($dimensions[0]) ? $dimensions[0] : 0.0),
+			'width' => min(60.0, isset($dimensions[1]) ? $dimensions[1] : 0.0),
+			'height' => min(60.0, isset($dimensions[2]) ? $dimensions[2] : 0.0),
+		);
+	}
+
 	public function calculate_norgespakke_estimate($packages, $method_payload, $pricing_config) {
 		// copied verbatim behavior
 		$result = array('status' => 'failed','error' => '','selected_price_source' => 'manual_norgespakke','selected_price_value' => '','original_list_price' => '','manual_handling_fee' => '0.00','bring_manual_handling_fee' => '0.00','total_handling_fee' => '0.00','bring_manual_handling_triggered' => false,'bring_manual_handling_package_count' => 0,'base_price' => '','discount_percent' => '','discounted_base' => '','fuel_surcharge' => '','recalculated_fuel_surcharge' => '','toll_surcharge' => '','handling_fee' => '','subtotal_ex_vat' => '','vat_percent' => '','price_incl_vat' => '','rounded_price' => '','final_price_ex_vat' => '','norgespakke_debug' => array());
@@ -267,6 +291,7 @@ class LP_Cargonizer_Estimator_Service {
 		$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
 		$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
 		$vat_percent = isset($pricing_config['vat_percent']) ? $this->sanitize_non_negative_number($pricing_config['vat_percent']) : 0;
+		if ($vat_percent <= 0) { $vat_percent = 25; }
 		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
 		$include_handling_fee = isset($pricing_config['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing_config['manual_norgespakke_include_handling']) : true;
 		$package_rows = array(); $total_base = 0.0; $total_handling = 0.0; $handling_count = 0;
@@ -275,16 +300,21 @@ class LP_Cargonizer_Estimator_Service {
 			$length = isset($package['length']) ? (float) $package['length'] : 0;
 			$width = isset($package['width']) ? (float) $package['width'] : 0;
 			$height = isset($package['height']) ? (float) $package['height'] : 0;
+			$standard_dimensions = $this->normalize_norgespakke_standard_dimensions($length, $width, $height);
+			$standard_package = $package;
+			$standard_package['length'] = $standard_dimensions['length'];
+			$standard_package['width'] = $standard_dimensions['width'];
+			$standard_package['height'] = $standard_dimensions['height'];
 			$name = isset($package['name']) && (string) $package['name'] !== '' ? (string) $package['name'] : (isset($package['description']) ? (string) $package['description'] : 'Kolli ' . ($idx + 1));
 			$description = isset($package['description']) ? (string) $package['description'] : '';
 			if ($weight <= 0) { $result['error'] = 'Norgespakke-kolli ' . ($idx + 1) . ' har ugyldig eller manglende vekt. Vekt må være over 0 kg.'; return $result; }
 			if ($weight > 35) { $result['error'] = 'Norgespakke-kolli ' . ($idx + 1) . ' veier ' . number_format($weight, 2, '.', '') . ' kg og overskrider maksgrensen på 35 kg.'; return $result; }
-			if ($weight <= 10) { $base_price = 112.0; } elseif ($weight <= 25) { $base_price = 200.8; } else { $base_price = 268.0; }
-			$handling_triggered = $this->package_triggers_manual_handling($package);
+			$base_price = $this->get_norgespakke_base_price_ex_vat($weight, $vat_percent);
+			$handling_triggered = $this->package_triggers_manual_handling($standard_package);
 			$handling_fee = ($include_handling_fee && $handling_triggered) ? 164.0 : 0.0;
 			if ($include_handling_fee && $handling_triggered) { $handling_count++; }
 			$total_base += $base_price; $total_handling += $handling_fee;
-			$package_rows[] = array('package_number' => $idx + 1,'name' => $name,'description' => $description,'weight' => number_format($weight, 2, '.', ''),'length' => number_format($length, 2, '.', ''),'width' => number_format($width, 2, '.', ''),'height' => number_format($height, 2, '.', ''),'base_price' => number_format($base_price, 2, '.', ''),'handling_triggered' => $handling_triggered,'handling_reason' => $handling_triggered ? 'Én side over 120 cm eller minst to sider over 60 cm.' : 'Ingen håndteringstrigger.','handling_fee' => number_format($handling_fee, 2, '.', ''),'package_total' => number_format($base_price + $handling_fee, 2, '.', ''));
+			$package_rows[] = array('package_number' => $idx + 1,'name' => $name,'description' => $description,'weight' => number_format($weight, 2, '.', ''),'length' => number_format($standard_dimensions['length'], 2, '.', ''),'width' => number_format($standard_dimensions['width'], 2, '.', ''),'height' => number_format($standard_dimensions['height'], 2, '.', ''),'original_length' => number_format($length, 2, '.', ''),'original_width' => number_format($width, 2, '.', ''),'original_height' => number_format($height, 2, '.', ''),'base_price' => number_format($base_price, 2, '.', ''),'handling_triggered' => $handling_triggered,'handling_reason' => $handling_triggered ? 'Én side over 120 cm eller minst to sider over 60 cm.' : 'Ingen håndteringstrigger etter standardmål.','handling_fee' => number_format($handling_fee, 2, '.', ''),'package_total' => number_format($base_price + $handling_fee, 2, '.', ''));
 		}
 		$discount_amount = $total_base * ($discount_percent / 100); $discounted_base = $total_base - $discount_amount; $fuel_amount = $discounted_base * ($fuel_percent / 100);
 		$subtotal_ex_vat = $discounted_base + $fuel_amount + $toll_surcharge + $total_handling; $price_incl_vat = $subtotal_ex_vat * (1 + ($vat_percent / 100));

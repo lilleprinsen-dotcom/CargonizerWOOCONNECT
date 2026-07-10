@@ -1648,6 +1648,7 @@ class LP_Cargonizer_Posten_Label_Automation {
 			$length = $this->sanitize_optional_dimension($package, array('length', 'length_cm'), 'lengde', $index, $errors);
 			$width = $this->sanitize_optional_dimension($package, array('width', 'width_cm'), 'bredde', $index, $errors);
 			$height = $this->sanitize_optional_dimension($package, array('height', 'height_cm'), 'høyde', $index, $errors);
+			$standard_dimensions = $this->normalize_norgespakke_standard_dimensions($length, $width, $height);
 
 			if ($weight <= 0) {
 				$errors[] = 'Kolli ' . $index . ' mangler vekt.';
@@ -1665,9 +1666,12 @@ class LP_Cargonizer_Posten_Label_Automation {
 				'description' => $package_text,
 				'weight_kg' => $weight,
 				'weight_grams' => (int) round($weight * 1000),
-				'length_cm' => max(0, $length),
-				'width_cm' => max(0, $width),
-				'height_cm' => max(0, $height),
+				'length_cm' => $standard_dimensions['length_cm'],
+				'width_cm' => $standard_dimensions['width_cm'],
+				'height_cm' => $standard_dimensions['height_cm'],
+				'original_length_cm' => max(0, $length),
+				'original_width_cm' => max(0, $width),
+				'original_height_cm' => max(0, $height),
 			);
 		}
 
@@ -1680,6 +1684,17 @@ class LP_Cargonizer_Posten_Label_Automation {
 		}
 
 		return $clean;
+	}
+
+	private function normalize_norgespakke_standard_dimensions($length, $width, $height) {
+		$dimensions = array(max(0, (float) $length), max(0, (float) $width), max(0, (float) $height));
+		rsort($dimensions, SORT_NUMERIC);
+
+		return array(
+			'length_cm' => min(120.0, isset($dimensions[0]) ? $dimensions[0] : 0.0),
+			'width_cm' => min(60.0, isset($dimensions[1]) ? $dimensions[1] : 0.0),
+			'height_cm' => min(60.0, isset($dimensions[2]) ? $dimensions[2] : 0.0),
+		);
 	}
 
 	private function get_package_text_from_payload($package) {
