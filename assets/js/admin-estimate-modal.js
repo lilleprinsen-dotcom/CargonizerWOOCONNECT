@@ -1965,6 +1965,16 @@
 				return isNaN(parsed) ? NaN : parsed;
 			}
 
+			function getDisplayPriceValue(row){
+				if (!row) { return ''; }
+				var finalExVat = row.final_price_ex_vat !== undefined && row.final_price_ex_vat !== null ? String(row.final_price_ex_vat) : '';
+				var roundedPrice = row.rounded_price !== undefined && row.rounded_price !== null ? String(row.rounded_price) : '';
+				if (isManualNorgespakkeRow(row)) {
+					return finalExVat !== '' ? finalExVat : roundedPrice;
+				}
+				return roundedPrice !== '' ? roundedPrice : finalExVat;
+			}
+
 			function renderEstimateResults(results){
 				function parsePriceNumber(value) {
 					if (value === null || value === undefined || value === '') {
@@ -2009,8 +2019,8 @@
 				});
 
 				okResults.sort(function(a, b){
-					var aValue = parsePriceNumber(a && a.rounded_price !== undefined && a.rounded_price !== '' ? a.rounded_price : (a ? a.final_price_ex_vat : ''));
-					var bValue = parsePriceNumber(b && b.rounded_price !== undefined && b.rounded_price !== '' ? b.rounded_price : (b ? b.final_price_ex_vat : ''));
+					var aValue = parsePriceNumber(getDisplayPriceValue(a));
+					var bValue = parsePriceNumber(getDisplayPriceValue(b));
 					var aMissing = isNaN(aValue);
 					var bMissing = isNaN(bValue);
 					if (aMissing && bMissing) { return 0; }
@@ -2040,9 +2050,7 @@
 					var fuelAmountText = toText(row.recalculated_fuel_surcharge);
 					var tollSurchargeText = toText(row.toll_surcharge);
 					var handlingFeeText = toText(row.total_handling_fee !== '' && row.total_handling_fee !== undefined ? row.total_handling_fee : row.handling_fee);
-					var actualPriceText = row.rounded_price !== '' && row.rounded_price !== undefined
-						? row.rounded_price
-						: (row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—');
+					var actualPriceText = getDisplayPriceValue(row) || '—';
 					var statusText = row.status || 'unknown';
 					var packageSummaryHtml = renderManualNorgespakkeSummary(row, { compact: true, title: 'Kolli' });
 					var multiShipmentInfo = (row.optimized_partition_used && (row.optimized_shipment_count || 0) > 1)
@@ -2100,7 +2108,7 @@
 			}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Leveringsmåte</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Leveringsmåte</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris eks. MVA</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
 					(okRows || '<tr><td colspan="11"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
@@ -2119,11 +2127,11 @@
 
 			function getRowPriceValue(row){
 				if (!row) { return NaN; }
-				return parsePriceNumber(row.rounded_price !== undefined && row.rounded_price !== '' ? row.rounded_price : (row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : ''));
+				return parsePriceNumber(getDisplayPriceValue(row));
 			}
 
 			function formatRecommendationPrice(row){
-				var price = row && row.rounded_price !== undefined && row.rounded_price !== '' ? row.rounded_price : (row && row.final_price_ex_vat !== undefined && row.final_price_ex_vat !== '' ? row.final_price_ex_vat : '');
+				var price = getDisplayPriceValue(row);
 				return price !== '' ? (price + ' kr') : 'Pris mangler';
 			}
 

@@ -2305,7 +2305,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 					$item['subtotal_ex_vat'] = $manual_calculation['subtotal_ex_vat'];
 					$item['vat_percent'] = $manual_calculation['vat_percent'];
 					$item['price_incl_vat'] = $manual_calculation['price_incl_vat'];
-					$item['rounded_price'] = $manual_calculation['rounded_price'];
+					$item['rounded_price'] = $manual_calculation['final_price_ex_vat'];
 					$item['final_price_ex_vat'] = $manual_calculation['final_price_ex_vat'];
 					$item['norgespakke_debug'] = isset($manual_calculation['norgespakke_debug']) ? $manual_calculation['norgespakke_debug'] : array();
 				}
