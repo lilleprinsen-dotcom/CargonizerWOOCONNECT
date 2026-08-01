@@ -6,6 +6,7 @@ if (!defined('ABSPATH')) {
 
 class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 	const ORDER_META_KEY = '_lp_cargonizer_checkout_selection';
+	const PACKAGES_ORDER_META_KEY = '_lp_cargonizer_packages';
 	const PICKUP_SESSION_KEY = 'lp_cargonizer_checkout_pickup_selection_map';
 
 	/** @var LP_Cargonizer_Settings_Service */
@@ -178,6 +179,7 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			return;
 		}
 
+		$package_metadata = $this->build_order_package_metadata($order);
 		$payload = array(
 			'version' => 1,
 			'saved_at_gmt' => gmdate('Y-m-d H:i:s'),
@@ -188,15 +190,102 @@ class LP_Cargonizer_Checkout_Selection_Persistence_Service {
 			'quote_context' => $persisted_rows[0]['quote_context'],
 			'compatibility_payload' => $persisted_rows[0]['compatibility_payload'],
 			'packages' => $persisted_rows,
+			'resolved_packages' => $package_metadata,
 		);
 
 		$order->update_meta_data(self::ORDER_META_KEY, $payload);
+		if (!empty($package_metadata)) {
+			$order->update_meta_data(self::PACKAGES_ORDER_META_KEY, $package_metadata);
+		} else {
+			$order->delete_meta_data(self::PACKAGES_ORDER_META_KEY);
+		}
 		$order->save();
 		$this->log_live_checkout_event('debug', 'Persisted checkout selection metadata for order.', array(
 			'source' => $source,
 			'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
 			'package_count' => count($persisted_rows),
+			'resolved_package_count' => count($package_metadata),
 		));
+	}
+
+	private function build_order_package_metadata($order) {
+		if (!class_exists('LP_Cargonizer_Package_Builder') || !class_exists('LP_Cargonizer_Shipping_Profile_Resolver') || !class_exists('LP_Cargonizer_Package_Resolution_Service')) {
+			return array();
+		}
+
+		try {
+			$settings_provider = array($this->settings_service, 'get_settings');
+			$package_resolution_service = new LP_Cargonizer_Package_Resolution_Service($settings_provider);
+			$profile_resolver = new LP_Cargonizer_Shipping_Profile_Resolver($settings_provider, $package_resolution_service);
+			$package_builder = new LP_Cargonizer_Package_Builder($profile_resolver, $settings_provider);
+			$result = $package_builder->build_from_order($order);
+			$packages = isset($result['packages']) && is_array($result['packages']) ? $result['packages'] : array();
+			return $this->sanitize_order_package_metadata($packages);
+		} catch (Throwable $throwable) {
+			$this->log_live_checkout_event('error', 'Failed to persist resolved package metadata for order.', array(
+				'order_id' => method_exists($order, 'get_id') ? (int) $order->get_id() : 0,
+				'error' => $throwable->getMessage(),
+			));
+			return array();
+		}
+	}
+
+	private function sanitize_order_package_metadata($packages) {
+		$result = array();
+		if (!is_array($packages)) {
+			return $result;
+		}
+
+		foreach ($packages as $index => $package) {
+			if (!is_array($package)) {
+				continue;
+			}
+			$row = array(
+				'index' => (int) $index,
+				'name' => isset($package['name']) ? sanitize_text_field((string) $package['name']) : '',
+				'description' => isset($package['description']) ? sanitize_text_field((string) $package['description']) : '',
+				'quantity' => isset($package['quantity']) ? max(1, (int) $package['quantity']) : 1,
+				'weight' => isset($package['weight']) ? round((float) $package['weight'], 3) : 0,
+				'length' => isset($package['length']) ? round((float) $package['length'], 3) : 0,
+				'width' => isset($package['width']) ? round((float) $package['width'], 3) : 0,
+				'height' => isset($package['height']) ? round((float) $package['height'], 3) : 0,
+				'product_id' => isset($package['product_id']) ? (int) $package['product_id'] : 0,
+				'line_quantity' => isset($package['line_quantity']) ? max(1, (int) $package['line_quantity']) : 1,
+				'profile_slug' => isset($package['profile_slug']) ? sanitize_key((string) $package['profile_slug']) : '',
+				'is_separate_package' => !empty($package['is_separate_package']),
+				'missing_dimensions' => !empty($package['missing_dimensions']),
+			);
+
+			if (isset($package['combined_items']) && is_array($package['combined_items'])) {
+				$row['combined_items'] = $this->sanitize_combined_package_items($package['combined_items']);
+			}
+
+			$result[] = $row;
+		}
+
+		return $result;
+	}
+
+	private function sanitize_combined_package_items($items) {
+		$result = array();
+		foreach ($items as $item) {
+			if (!is_array($item)) {
+				continue;
+			}
+			$result[] = array(
+				'name' => isset($item['name']) ? sanitize_text_field((string) $item['name']) : '',
+				'description' => isset($item['description']) ? sanitize_text_field((string) $item['description']) : '',
+				'quantity' => isset($item['quantity']) ? max(1, (int) $item['quantity']) : 1,
+				'weight' => isset($item['weight']) ? round((float) $item['weight'], 3) : 0,
+				'length' => isset($item['length']) ? round((float) $item['length'], 3) : 0,
+				'width' => isset($item['width']) ? round((float) $item['width'], 3) : 0,
+				'height' => isset($item['height']) ? round((float) $item['height'], 3) : 0,
+				'product_id' => isset($item['product_id']) ? (int) $item['product_id'] : 0,
+				'line_quantity' => isset($item['line_quantity']) ? max(1, (int) $item['line_quantity']) : 1,
+				'profile_slug' => isset($item['profile_slug']) ? sanitize_key((string) $item['profile_slug']) : '',
+			);
+		}
+		return $result;
 	}
 
 	private function build_selected_rates_from_shipping_items($shipping_items) {
