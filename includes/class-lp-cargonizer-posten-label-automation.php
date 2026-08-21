@@ -428,6 +428,58 @@ class LP_Cargonizer_Posten_Label_Automation {
 		exit;
 	}
 
+	public function operations_get_job_state($job_id) {
+			$job_id = $this->sanitize_job_id($job_id);
+			if ($job_id === '') {
+				return new WP_Error('posten_job_missing_id', 'Mangler Posten jobb-ID.');
+			}
+			$job = $this->get_job_by_id($job_id);
+			if (!$job) {
+				return new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.');
+			}
+			return $this->format_job_response($job, true);
+	}
+
+	public function operations_reprint_labels($job_id, $printer_id, $package_index = 0, $actor_context = array()) {
+			$job_id = $this->sanitize_job_id($job_id);
+			if ($job_id === '') {
+				return new WP_Error('posten_job_missing_id', 'Mangler Posten jobb-ID.');
+			}
+			$job = $this->get_job_by_id($job_id);
+			if (!$job) {
+				return new WP_Error('posten_job_not_found', 'Posten labeljobb ikke funnet.');
+			}
+			$result = $this->reprint_job_labels($job, $printer_id, $package_index);
+			if (is_wp_error($result)) {
+				return $result;
+			}
+			$result['actor'] = $this->sanitize_operations_actor_context($actor_context);
+			return $result;
+	}
+
+	public function operations_cancel_job($job_id, $actor_context = array()) {
+			$actor = $this->sanitize_operations_actor_context($actor_context);
+			$message = 'Kansellert via Cargonizer operations facade.';
+			if (!empty($actor['employee_display_name'])) {
+				$message .= ' Aktør: ' . $actor['employee_display_name'] . '.';
+			} elseif (!empty($actor['wordpress_user_login'])) {
+				$message .= ' Aktør: ' . $actor['wordpress_user_login'] . '.';
+			}
+			return $this->cancel_job_by_id($job_id, $message);
+	}
+
+	private function sanitize_operations_actor_context($actor_context) {
+			$actor_context = is_array($actor_context) ? $actor_context : array();
+			return array(
+				'source' => isset($actor_context['source']) ? sanitize_key((string) $actor_context['source']) : '',
+				'employee_id' => isset($actor_context['employee_id']) ? sanitize_text_field((string) $actor_context['employee_id']) : '',
+				'employee_display_name' => isset($actor_context['employee_display_name']) ? sanitize_text_field((string) $actor_context['employee_display_name']) : '',
+				'device_id' => isset($actor_context['device_id']) ? sanitize_text_field((string) $actor_context['device_id']) : '',
+				'wordpress_user_id' => isset($actor_context['wordpress_user_id']) ? absint($actor_context['wordpress_user_id']) : 0,
+				'wordpress_user_login' => isset($actor_context['wordpress_user_login']) ? sanitize_text_field((string) $actor_context['wordpress_user_login']) : '',
+			);
+	}
+
 	public function queue_from_admin_request($order, $method_payload, $packages, $args = array()) {
 		$settings = $this->settings_service->get_settings();
 		$robot_settings = isset($settings['posten_robot']) && is_array($settings['posten_robot']) ? $settings['posten_robot'] : array();

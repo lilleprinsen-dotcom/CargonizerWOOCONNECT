@@ -4,7 +4,7 @@ Tags: woocommerce, shipping, cargonizer
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -18,6 +18,13 @@ This plugin provides a WooCommerce admin integration for Cargonizer settings, tr
 2. Activate the plugin in WordPress.
 
 == Changelog ==
+= 1.2.0 =
+* Added internal Woo Ops-ready Cargonizer operations facade for safe PHP reuse of existing plugin services.
+* Added actor-context and idempotency scaffolding for future facade-based bookings.
+* Routed safe admin context/options/servicepartner/printer/reprint lookups through the facade while preserving existing admin response contracts.
+* Kept existing WordPress-admin booking behavior unchanged where full regression equivalence could not be proven without live carrier side effects.
+* No external REST booking API was added.
+
 = 1.1.0 =
 * 2026-04-08: PR #29 - Fixed order action button layout collision on the WooCommerce admin order page.
 * 2026-04-08: PR #30 - Added additive booking/printer diagnostics in the admin UI.
