@@ -114,6 +114,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			return new WP_Error($code, $message, array(
 				'http_status' => (int) $http_status,
 				'payload' => $payload,
+				'execution_unknown' => !empty($payload['execution_unknown']),
 			));
 		}
 
@@ -149,18 +150,13 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		public function operations_estimate_shipping($order_id, $packages, $selected_methods, $sender_profile_id = '', $recipient_override = array()) {
-			return new WP_Error(
-				'lp_cargonizer_estimate_facade_not_enabled',
-				'Estimering er foreløpig bevart i eksisterende admin-AJAX fordi regresjon mot alle estimator-sideeffekter ikke er bevist i denne ZIP-en.'
-			);
-		}
-
-		public function operations_book_shipment($order_id, $booking_request, $actor_context = array()) {
-			return new WP_Error(
-				'lp_cargonizer_booking_facade_not_enabled',
-				'Book shipment er fail-closed i facaden til booking-adapteren er regresjonsbevist. Eksisterende WordPress-admin booking er uendret og fortsatt autoritativ.',
-				array('execution_unknown' => false)
-			);
+			return $this->execute_shared_estimate_core(array(
+				'order_id' => absint($order_id),
+				'packages' => is_array($packages) ? $packages : array(),
+				'methods' => is_array($selected_methods) ? $selected_methods : array(),
+				'warehouse_profile_id' => sanitize_key((string) $sender_profile_id),
+				'recipient' => is_array($recipient_override) ? $recipient_override : array(),
+			));
 		}
 
 		private function derive_generic_label_state($print_state) {
@@ -234,9 +230,12 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			$posten_settings = isset($settings['posten_robot']) && is_array($settings['posten_robot']) ? $settings['posten_robot'] : array();
 
 			return array(
-				'plugin_version' => '1.2.0',
+				'plugin_version' => '1.3.0',
 				'booking_supported' => true,
 				'estimates_supported' => true,
+				'booking_facade_status' => 'shared_core',
+				'booking_execution_confirmation_required' => true,
+				'external_idempotency_supported' => true,
 				'servicepartners_supported' => true,
 				'printers_supported' => true,
 				'generic_reprint_supported' => true,
@@ -1229,7 +1228,8 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		return isset($package['description']) ? sanitize_text_field((string) $package['description']) : '';
 	}
 
-	private function build_booking_recipient_from_request($order, $method_payload = array()) {
+	private function build_booking_recipient_from_request($order, $method_payload = array(), $request = null) {
+		$request = is_array($request) ? $request : $_POST;
 		$recipient_country = $this->resolve_recipient_country_for_context($order, $method_payload);
 		$recipient = array(
 			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
@@ -1258,11 +1258,11 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		foreach ($posted_fields as $recipient_key => $field) {
 			$post_key = $field[0];
-			if (!isset($_POST[$post_key]) || is_array($_POST[$post_key])) {
+			if (!isset($request[$post_key]) || is_array($request[$post_key])) {
 				continue;
 			}
 
-			$value = wp_unslash($_POST[$post_key]);
+			$value = wp_unslash($request[$post_key]);
 			$value = $field[1] === 'email'
 				? sanitize_email((string) $value)
 				: sanitize_text_field((string) $value);
@@ -1507,61 +1507,137 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			), 403);
 		}
 
-		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$admin_request = wp_unslash($_POST);
+		$admin_request['confirm_execution'] = true;
+		$admin_request['idempotency_key'] = function_exists('wp_generate_uuid4')
+			? 'wordpress-admin:' . wp_generate_uuid4()
+			: 'wordpress-admin:' . uniqid('', true);
+		$result = $this->get_operations_facade()->book_shipment(
+			isset($admin_request['order_id']) ? absint($admin_request['order_id']) : 0,
+			$admin_request,
+			$this->operations_get_current_wordpress_actor_context()
+		);
+		if (is_wp_error($result)) {
+			$error_data = $result->get_error_data();
+			$status = is_array($error_data) && isset($error_data['http_status']) ? (int) $error_data['http_status'] : 400;
+			$payload = is_array($error_data) && isset($error_data['payload']) && is_array($error_data['payload'])
+				? $error_data['payload']
+				: array('message' => $result->get_error_message());
+			wp_send_json_error($payload, $status);
+		}
+
+		wp_send_json_success($result);
+	}
+
+	public function operations_book_shipment($order_id, $booking_request, $actor_context = array()) {
+		$request = is_array($booking_request) ? $booking_request : array();
+		$request['order_id'] = absint($order_id);
+		if (!isset($request['methods']) && isset($request['method']) && is_array($request['method'])) {
+			$request['methods'] = array($request['method']);
+		}
+		return $this->execute_shared_booking_core($request, $actor_context);
+	}
+
+	/**
+	 * Authoritative booking core shared by WordPress Admin and Woo Ops.
+	 *
+	 * This method owns validation, normalization, XML creation, provider execution,
+	 * persistence, printing, status changes and notes. Callers only adapt transport.
+	 */
+	private function execute_shared_booking_core($request, $actor_context = array()) {
+		$request = is_array($request) ? $request : array();
+		$actor_context = $this->normalize_operations_actor_context($actor_context);
+
+		$order_id = isset($request['order_id']) ? absint($request['order_id']) : 0;
 		$order = $order_id ? wc_get_order($order_id) : false;
 		if (!$order) {
-			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+			return $this->operations_error('lp_cargonizer_order_not_found', 'Ordre ikke funnet.', 404);
 		}
 
 		$existing_booking_state = $this->load_order_booking_state($order);
 
-		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
-		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
-		$package_printer_assignments = isset($_POST['package_printer_assignments']) && is_array($_POST['package_printer_assignments'])
-			? $this->sanitize_package_printer_assignments(wp_unslash($_POST['package_printer_assignments']))
+		$packages = isset($request['packages']) && is_array($request['packages']) ? $request['packages'] : array();
+		$methods = isset($request['methods']) && is_array($request['methods']) ? $request['methods'] : array();
+		$package_printer_assignments = isset($request['package_printer_assignments']) && is_array($request['package_printer_assignments'])
+			? $this->sanitize_package_printer_assignments($request['package_printer_assignments'])
 			: array();
 		$enabled_map = $this->get_enabled_method_map();
 
 		if (empty($enabled_map)) {
-			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert i Cargonizer-innstillingene.'), 400);
+			return $this->operations_error('lp_cargonizer_no_enabled_methods', 'Ingen fraktmetoder er aktivert i Cargonizer-innstillingene.', 400);
 		}
 		if (empty($packages)) {
-			wp_send_json_error(array('message' => 'Mangler kolli.'), 400);
+			return $this->operations_error('lp_cargonizer_packages_missing', 'Mangler kolli.', 400);
 		}
 		if (count($methods) !== 1) {
-			wp_send_json_error(array('message' => 'Velg nøyaktig én fraktmetode for booking.'), 400);
+			return $this->operations_error('lp_cargonizer_method_count_invalid', 'Velg nøyaktig én fraktmetode for booking.', 400);
 		}
 
 		$clean_packages = $this->sanitize_posted_packages($packages);
-		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
-		$method_payload = $this->sanitize_posted_method_payload($methods[0]);
-		$notify_email_to_consignee = isset($_POST['notify_email_to_consignee']) ? (bool) $this->sanitize_checkbox_value(wp_unslash($_POST['notify_email_to_consignee'])) : false;
+		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($request['warehouse_profile_id']) ? sanitize_key((string) $request['warehouse_profile_id']) : '');
+		$requested_method = $this->sanitize_posted_method_payload($methods[0]);
+		$enabled_method = $this->find_enabled_method_for_sender_profile($requested_method, $warehouse_profile, $enabled_map);
+		if (empty($enabled_method)) {
+			return $this->operations_error('lp_cargonizer_method_not_enabled_for_sender', 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt eller hent/aktiver fraktmetoder i Cargonizer-innstillingene.', 400);
+		}
+		$employee_choices = array(
+			'servicepartner' => $requested_method['servicepartner'],
+			'servicepartner_customer_number' => $requested_method['servicepartner_customer_number'],
+			'servicepartner_selection_source' => $requested_method['servicepartner_selection_source'],
+			'servicepartner_user_selected' => $requested_method['servicepartner_user_selected'],
+			'servicepartner_selected_option' => $requested_method['servicepartner_selected_option'],
+			'use_sms_service' => $requested_method['use_sms_service'],
+			'sms_service_id' => $requested_method['sms_service_id'],
+			'sms_service_name' => $requested_method['sms_service_name'],
+			'selected_service_ids' => $requested_method['selected_service_ids'],
+		);
+		$method_payload = $this->sanitize_posted_method_payload(array_merge($enabled_method, $employee_choices));
+		$notify_email_to_consignee = isset($request['notify_email_to_consignee']) ? (bool) $this->sanitize_checkbox_value($request['notify_email_to_consignee']) : false;
 		$method_key = $this->normalize_method_key_for_sender_profile($method_payload, $warehouse_profile);
 		$method_payload['key'] = $method_key;
-		if (!isset($enabled_map[$method_key]) || !$this->method_matches_selected_sender_profile($method_payload, $warehouse_profile)) {
-			wp_send_json_error(array('message' => 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt eller hent/aktiver fraktmetoder i Cargonizer-innstillingene.'), 400);
+		if (!$this->method_matches_selected_sender_profile($method_payload, $warehouse_profile)) {
+			return $this->operations_error('lp_cargonizer_method_not_enabled_for_sender', 'Valgt fraktmetode er ikke aktivert for valgt senderadresse. Last fraktvalg på nytt eller hent/aktiver fraktmetoder i Cargonizer-innstillingene.', 400);
 		}
 
-		$recipient = $this->build_booking_recipient_from_request($order, $method_payload);
+		$recipient = $this->build_booking_recipient_from_request($order, $method_payload, $request);
 		if ($recipient['country'] === '') {
-			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land maa vaere en gyldig ISO-2-kode, for eksempel NO.'), 400);
+			return $this->operations_error('lp_cargonizer_recipient_country_invalid', 'Ugyldig mottakerland. Land maa vaere en gyldig ISO-2-kode, for eksempel NO.', 400);
 		}
 		if ($notify_email_to_consignee && trim((string) $recipient['email']) === '') {
-			wp_send_json_error(array('message' => 'Mottaker mangler e-postadresse, saa e-postvarsling kan ikke brukes for denne bookingen.'), 400);
+			return $this->operations_error('lp_cargonizer_recipient_email_missing', 'Mottaker mangler e-postadresse, saa e-postvarsling kan ikke brukes for denne bookingen.', 400);
 		}
 
 		if ($this->is_manual_norgespakke_method($method_payload) && class_exists('LP_Cargonizer_Posten_Label_Automation')) {
+			if (empty($request['confirm_execution'])) {
+				return array(
+					'state' => 'preflight_ready',
+					'provider_execution' => 'disabled',
+					'message' => 'Posten-bookingen er validert, men ingen labeljobb ble opprettet.',
+					'normalized' => array(
+						'order_id' => $order_id,
+						'order_number' => (string) $order->get_order_number(),
+						'recipient' => $recipient,
+						'packages' => $clean_packages,
+						'sender_profile_id' => isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '',
+						'method' => $method_payload,
+						'notify_email_to_consignee' => $notify_email_to_consignee,
+						'printer_id' => $this->resolve_effective_printer_choice(isset($request['printer_choice']) ? $request['printer_choice'] : ''),
+						'package_printer_assignments' => $package_printer_assignments,
+						'provider_payload_sha256' => hash('sha256', wp_json_encode(array($recipient, $clean_packages, $method_payload))),
+					),
+				);
+			}
 			$queue_result = LP_Cargonizer_Posten_Label_Automation::instance()->queue_from_admin_request($order, $method_payload, $clean_packages, array(
 				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 				'notify_email_to_consignee' => $notify_email_to_consignee,
-				'source' => 'legacy_booking_ajax',
+				'source' => $actor_context['source'] !== '' ? $actor_context['source'] : 'wordpress_admin',
 				'recipient' => $recipient,
 			));
 			if (is_wp_error($queue_result)) {
-				wp_send_json_error(array('message' => $queue_result->get_error_message()), 400);
+				return $this->operations_error($queue_result->get_error_code(), $queue_result->get_error_message(), 400);
 			}
 
-			wp_send_json_success($queue_result);
+			return $queue_result;
 		}
 
 		if ($method_payload['sms_service_id'] === '') {
@@ -1610,14 +1686,47 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		if ($xml === '') {
 			$xml_build_error = $this->get_last_xml_build_error();
-			wp_send_json_error(array(
+			return $this->operations_error('lp_cargonizer_booking_xml_invalid', isset($xml_build_error['message']) && $xml_build_error['message'] !== '' ? $xml_build_error['message'] : 'Kunne ikke bygge booking-XML.', 500, array(
 				'message' => isset($xml_build_error['message']) && $xml_build_error['message'] !== '' ? $xml_build_error['message'] : 'Kunne ikke bygge booking-XML.',
 				'debug' => isset($xml_build_error['context']) ? $xml_build_error['context'] : array(),
-			), 500);
+			));
+		}
+
+		if (empty($request['confirm_execution'])) {
+			$printer_id = $this->resolve_effective_printer_choice(isset($request['printer_choice']) ? $request['printer_choice'] : '');
+			return array(
+				'state' => 'preflight_ready',
+				'provider_execution' => 'disabled',
+				'message' => 'Bookingforespørselen er validert. Ingen sending, label, utskrift, historikk eller ordrenotat ble opprettet.',
+				'normalized' => array(
+					'order_id' => $order_id,
+					'order_number' => (string) $order->get_order_number(),
+					'recipient' => $recipient,
+					'packages' => $clean_packages,
+					'sender_profile_id' => isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '',
+					'sender_id' => $sender_id_override,
+					'method' => $method_payload,
+					'notify_email_to_consignee' => $notify_email_to_consignee,
+					'printer_id' => $printer_id,
+					'package_printer_assignments' => $package_printer_assignments,
+					'provider_payload_sha256' => hash('sha256', $xml),
+				),
+			);
 		}
 
 		$booking_result = $this->create_booking_consignment($xml, $sender_id_override);
 		if (empty($booking_result['success'])) {
+			if (isset($booking_result['http_status']) && (int) $booking_result['http_status'] === 0) {
+				return $this->operations_error(
+					'lp_cargonizer_execution_unknown',
+					'Bookingstatus er ukjent fordi providersvaret ikke kunne bekreftes. Ikke prøv bookingen blindt på nytt.',
+					409,
+					array(
+						'message' => 'Booking krever kontroll. Provider kan ha mottatt forespørselen.',
+						'execution_unknown' => true,
+					)
+				);
+			}
 			$combined_error_text = strtolower(trim(
 				(isset($booking_result['error_code']) ? $booking_result['error_code'] : '') . ' ' .
 				(isset($booking_result['error_type']) ? $booking_result['error_type'] : '') . ' ' .
@@ -1637,7 +1746,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				$servicepartner_options = isset($servicepartner_fetch['options']) && is_array($servicepartner_fetch['options']) ? $servicepartner_fetch['options'] : array();
 			}
 
-			wp_send_json_error(array(
+			return $this->operations_error('lp_cargonizer_booking_failed', isset($booking_result['error']) && $booking_result['error'] !== '' ? $booking_result['error'] : 'Booking feilet.', 200, array(
 				'message' => isset($booking_result['error']) && $booking_result['error'] !== '' ? $booking_result['error'] : 'Booking feilet.',
 				'error_code' => isset($booking_result['error_code']) ? $booking_result['error_code'] : '',
 				'error_type' => isset($booking_result['error_type']) ? $booking_result['error_type'] : '',
@@ -1652,7 +1761,7 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'selected_servicepartner' => $servicepartner_selection_debug['selected_servicepartner'],
 				'selected_servicepartner_customer_number' => $servicepartner_selection_debug['selected_servicepartner_customer_number'],
 				'auto_selection_reason' => $servicepartner_selection_debug['auto_selection_reason'],
-			), 200);
+			));
 		}
 
 		$booking_state = $this->get_default_booking_state();
@@ -1692,14 +1801,22 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		$booking_state['notify_email_to_consignee'] = $notify_email_to_consignee;
 		$booking_state['created_at_gmt'] = gmdate('Y-m-d H:i:s');
 		$current_user = wp_get_current_user();
-		$booking_state['created_by_user_id'] = (string) get_current_user_id();
-		$booking_state['created_by_user_login'] = $current_user && isset($current_user->user_login) ? (string) $current_user->user_login : '';
-		$booking_state['created_by_display_name'] = $current_user && isset($current_user->display_name) ? (string) $current_user->display_name : '';
+		$booking_state['created_by_user_id'] = (string) $actor_context['wordpress_user_id'];
+		$booking_state['created_by_user_login'] = $actor_context['wordpress_user_login'];
+		$booking_state['created_by_display_name'] = $actor_context['employee_display_name'];
+		$booking_state['created_by_employee_id'] = $actor_context['employee_id'];
+		$booking_state['created_by_device_id'] = $actor_context['device_id'];
+		$booking_state['created_by_source'] = $actor_context['source'];
+		if ($booking_state['created_by_user_id'] === '0' && $current_user) {
+			$booking_state['created_by_user_id'] = (string) get_current_user_id();
+			$booking_state['created_by_user_login'] = isset($current_user->user_login) ? (string) $current_user->user_login : '';
+			$booking_state['created_by_display_name'] = isset($current_user->display_name) ? (string) $current_user->display_name : '';
+		}
 		$estimated_price_selection = $this->resolve_booking_estimated_shipping_price($booking_result, $recipient, $clean_packages, $method_payload);
 		$booking_state['estimated_shipping_price'] = isset($estimated_price_selection['estimated_shipping_price']) ? (string) $estimated_price_selection['estimated_shipping_price'] : 'ikke tilgjengelig';
 		$booking_state['estimated_shipping_price_source'] = isset($estimated_price_selection['estimated_shipping_price_source']) ? (string) $estimated_price_selection['estimated_shipping_price_source'] : 'missing';
 
-		$posted_printer_choice = isset($_POST['printer_choice']) ? wp_unslash($_POST['printer_choice']) : '';
+		$posted_printer_choice = isset($request['printer_choice']) ? $request['printer_choice'] : '';
 		$printer_id = $this->resolve_effective_printer_choice($posted_printer_choice);
 		$booking_state['print'] = $this->run_booking_label_prints($booking_state, $clean_packages, $printer_id, $package_printer_assignments, $sender_id_override);
 		$booking_state['status_change'] = $this->apply_booking_order_status_after_created($order, $this->get_booking_order_status_after_created_setting());
@@ -1721,10 +1838,11 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 
 		$this->save_order_booking_state($order, $booking_state);
 		if (!empty($warehouse_profile)) {
-			update_post_meta($order->get_id(), '_lp_cargonizer_warehouse_profile_id', isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '');
-			update_post_meta($order->get_id(), '_lp_cargonizer_sender_id_used', isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '');
-			update_post_meta($order->get_id(), '_lp_cargonizer_sender_entity_id_used', isset($warehouse_profile['sender_entity_id']) ? (string) $warehouse_profile['sender_entity_id'] : '');
-			update_post_meta($order->get_id(), '_lp_cargonizer_sender_profile_name', isset($warehouse_profile['name']) ? (string) $warehouse_profile['name'] : '');
+			$order->update_meta_data('_lp_cargonizer_warehouse_profile_id', isset($warehouse_profile['profile_id']) ? (string) $warehouse_profile['profile_id'] : '');
+			$order->update_meta_data('_lp_cargonizer_sender_id_used', isset($warehouse_profile['sender_id']) ? (string) $warehouse_profile['sender_id'] : '');
+			$order->update_meta_data('_lp_cargonizer_sender_entity_id_used', isset($warehouse_profile['sender_entity_id']) ? (string) $warehouse_profile['sender_entity_id'] : '');
+			$order->update_meta_data('_lp_cargonizer_sender_profile_name', isset($warehouse_profile['name']) ? (string) $warehouse_profile['name'] : '');
+			$order->save_meta_data();
 		}
 
 		$creator_name = $booking_state['created_by_display_name'] !== '' ? $booking_state['created_by_display_name'] : $booking_state['created_by_user_login'];
@@ -1825,12 +1943,12 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 		$booking_count = $this->get_booking_count_from_state($booking_state);
 
-		wp_send_json_success(array(
+		return array(
 			'message' => 'Shipment booked successfully.',
 			'booking' => $booking_state,
 			'booking_count' => $booking_count,
 			'has_previous_bookings' => $booking_count > 1,
-		));
+		);
 	}
 
 
@@ -2220,24 +2338,40 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
-		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$result = $this->execute_shared_estimate_core(wp_unslash($_POST));
+		if (is_wp_error($result)) {
+			$error_data = $result->get_error_data();
+			$status = is_array($error_data) && isset($error_data['http_status']) ? (int) $error_data['http_status'] : 400;
+			$payload = is_array($error_data) && isset($error_data['payload']) && is_array($error_data['payload'])
+				? $error_data['payload']
+				: array('message' => $result->get_error_message());
+			wp_send_json_error($payload, $status);
+		}
+		wp_send_json_success($result);
+	}
+
+	/** Shared estimator core for WordPress Admin and Woo Ops. */
+	private function execute_shared_estimate_core($request) {
+		$request = is_array($request) ? $request : array();
+
+		$order_id = isset($request['order_id']) ? absint($request['order_id']) : 0;
 		$order = $order_id ? wc_get_order($order_id) : false;
 		if (!$order) {
-			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+			return $this->operations_error('lp_cargonizer_order_not_found', 'Ordre ikke funnet.', 404);
 		}
 
-		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
-		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
-		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($_POST['warehouse_profile_id']) ? sanitize_key(wp_unslash($_POST['warehouse_profile_id'])) : '');
+		$packages = isset($request['packages']) && is_array($request['packages']) ? $request['packages'] : array();
+		$methods = isset($request['methods']) && is_array($request['methods']) ? $request['methods'] : array();
+		$warehouse_profile = $this->resolve_selected_warehouse_profile(isset($request['warehouse_profile_id']) ? sanitize_key((string) $request['warehouse_profile_id']) : '');
 		$sender_id_override = isset($warehouse_profile['sender_id']) ? sanitize_text_field((string) $warehouse_profile['sender_id']) : '';
 		$enabled_map = $this->get_enabled_method_map();
 
 		if (empty($enabled_map)) {
-			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert i Cargonizer-innstillingene.'), 400);
+			return $this->operations_error('lp_cargonizer_no_enabled_methods', 'Ingen fraktmetoder er aktivert i Cargonizer-innstillingene.', 400);
 		}
 
 		if (empty($packages) || empty($methods)) {
-			wp_send_json_error(array('message' => 'Mangler kolli eller fraktvalg.'), 400);
+			return $this->operations_error('lp_cargonizer_estimate_input_missing', 'Mangler kolli eller fraktvalg.', 400);
 		}
 
 		$clean_packages = array();
@@ -2264,12 +2398,21 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 			'email' => $order->get_billing_email(),
 			'phone' => $this->get_order_recipient_phone_for_api($order),
 		);
+		$recipient_override = isset($request['recipient']) && is_array($request['recipient']) ? $request['recipient'] : array();
+		foreach (array('name', 'address_1', 'address_2', 'postcode', 'city', 'country', 'email', 'phone') as $recipient_key) {
+			if (isset($recipient_override[$recipient_key]) && is_scalar($recipient_override[$recipient_key]) && trim((string) $recipient_override[$recipient_key]) !== '') {
+				$recipient[$recipient_key] = $recipient_key === 'email'
+					? sanitize_email((string) $recipient_override[$recipient_key])
+					: sanitize_text_field((string) $recipient_override[$recipient_key]);
+			}
+		}
+		$recipient['country'] = $this->sanitize_country_code($recipient['country']);
 
 		if ($recipient['name'] === '') {
 			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
 		}
 		if ($recipient['country'] === '') {
-			wp_send_json_error(array('message' => 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.'), 400);
+			return $this->operations_error('lp_cargonizer_recipient_country_invalid', 'Ugyldig mottakerland. Land må være en gyldig ISO-2-kode, for eksempel NO.', 400);
 		}
 
 		$results = array();
@@ -2318,6 +2461,25 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
 				'warehouse_profile_name' => isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '',
 			);
+			$current_enabled_method = $this->find_enabled_method_for_sender_profile($method_payload, $warehouse_profile, $enabled_map);
+			if (empty($current_enabled_method)) {
+				continue;
+			}
+			$current_method = $this->sanitize_posted_method_payload($current_enabled_method);
+			$method_payload = array_merge($current_method, array(
+				'servicepartner' => $method_payload['servicepartner'],
+				'servicepartner_customer_number' => $method_payload['servicepartner_customer_number'],
+				'servicepartner_selection_source' => $method_payload['servicepartner_selection_source'],
+				'servicepartner_user_selected' => $method_payload['servicepartner_user_selected'],
+				'servicepartner_selected_option' => $method_payload['servicepartner_selected_option'],
+				'use_sms_service' => $method_payload['use_sms_service'],
+				'sms_service_id' => $method_payload['sms_service_id'],
+				'sms_service_name' => $method_payload['sms_service_name'],
+				'selected_service_ids' => $method_payload['selected_service_ids'],
+				'sender_id_override' => !empty($current_method['sender_id']) ? sanitize_text_field((string) $current_method['sender_id']) : $sender_id_override,
+				'warehouse_profile_id' => isset($warehouse_profile['profile_id']) ? sanitize_key((string) $warehouse_profile['profile_id']) : '',
+				'warehouse_profile_name' => isset($warehouse_profile['name']) ? sanitize_text_field((string) $warehouse_profile['name']) : '',
+			));
 				if ($method_payload['key'] === '') {
 					$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 				}
@@ -2772,10 +2934,10 @@ trait LP_Cargonizer_Ajax_Controller_Trait {
 		}
 
 		if (!$has_allowed_methods) {
-			wp_send_json_error(array('message' => 'Ingen av de valgte fraktmetodene er aktivert i Cargonizer-innstillingene.'), 400);
+			return $this->operations_error('lp_cargonizer_methods_not_enabled', 'Ingen av de valgte fraktmetodene er aktivert i Cargonizer-innstillingene.', 400);
 		}
 
-		wp_send_json_success(array('results' => $results));
+		return array('results' => $results);
 	}
 
 

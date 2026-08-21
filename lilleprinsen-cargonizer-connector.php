@@ -2,7 +2,7 @@
 /*
 Plugin Name: Lilleprinsen Cargonizer Connector
 Description: Egen WooCommerce-adminside for å lagre Cargonizer-autentisering og hente fraktmetoder fra transport_agreements.xml
-Version: 1.2.0
+Version: 1.3.0
 Author: Lilleprinsen
 */
 
