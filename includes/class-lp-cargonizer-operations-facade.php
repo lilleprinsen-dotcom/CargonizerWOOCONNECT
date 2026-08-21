@@ -90,6 +90,11 @@ class LP_Cargonizer_Operations_Facade {
 				return $result;
 			}
 			if (is_array($result)) {
+				if (isset($result['state']) && $result['state'] === 'preflight_ready') {
+					$result['fingerprint'] = $fingerprint;
+					$result['idempotency'] = array('status' => 'not_persisted_preflight', 'key' => $idempotency_key);
+					return $result;
+				}
 				$result['idempotency'] = array('status' => 'created', 'key' => $idempotency_key);
 				$this->store_idempotency_result($order_id, $idempotency_key, $fingerprint, $result);
 			}
@@ -134,6 +139,8 @@ class LP_Cargonizer_Operations_Facade {
 	private function fingerprint_booking_request($booking_request) {
 		$normalized = $booking_request;
 		unset($normalized['idempotency_key']);
+		unset($normalized['confirm_execution']);
+		unset($normalized['actor']);
 		$this->recursive_ksort($normalized);
 		return hash('sha256', wp_json_encode($normalized));
 	}
@@ -150,7 +157,10 @@ class LP_Cargonizer_Operations_Facade {
 	}
 
 	private function get_idempotency_record($order_id, $idempotency_key) {
-		$records = get_post_meta($order_id, self::IDEMPOTENCY_META_KEY, true);
+		$order = function_exists('wc_get_order') ? wc_get_order(absint($order_id)) : false;
+		$records = $order && is_a($order, 'WC_Order')
+			? $order->get_meta(self::IDEMPOTENCY_META_KEY, true)
+			: null;
 		if (!is_array($records)) {
 			return null;
 		}
@@ -183,12 +193,17 @@ class LP_Cargonizer_Operations_Facade {
 	}
 
 	private function store_idempotency_record($order_id, $idempotency_key, $record) {
-		$records = get_post_meta($order_id, self::IDEMPOTENCY_META_KEY, true);
+		$order = function_exists('wc_get_order') ? wc_get_order(absint($order_id)) : false;
+		if (!$order || !is_a($order, 'WC_Order')) {
+			return;
+		}
+		$records = $order->get_meta(self::IDEMPOTENCY_META_KEY, true);
 		if (!is_array($records)) {
 			$records = array();
 		}
 		$records[$this->normalize_idempotency_storage_key($idempotency_key)] = $record;
-		update_post_meta($order_id, self::IDEMPOTENCY_META_KEY, $records);
+		$order->update_meta_data(self::IDEMPOTENCY_META_KEY, $records);
+		$order->save_meta_data();
 	}
 
 	private function normalize_idempotency_storage_key($idempotency_key) {
