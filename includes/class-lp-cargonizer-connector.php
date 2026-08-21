@@ -40,6 +40,8 @@ class LP_Cargonizer_Connector {
 	private $package_builder_service;
 	/** @var LP_Cargonizer_Method_Rule_Engine */
 	private $method_rule_engine_service;
+	/** @var LP_Cargonizer_Operations_Facade */
+	private $operations_facade;
 
 	public function __construct() {
 		$this->settings_service = new LP_Cargonizer_Settings_Service(self::OPTION_KEY, self::MANUAL_NORGESPAKKE_KEY);
@@ -78,6 +80,13 @@ class LP_Cargonizer_Connector {
 		$this->method_rule_engine_service = new LP_Cargonizer_Method_Rule_Engine(function () {
 			return $this->get_settings();
 		});
+		if (class_exists('LP_Cargonizer_Operations_Facade')) {
+			$this->operations_facade = new LP_Cargonizer_Operations_Facade($this);
+		}
+	}
+
+	public function get_operations_facade() {
+		return $this->operations_facade;
 	}
 
 	public function register_hooks() {

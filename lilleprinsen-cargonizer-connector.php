@@ -2,7 +2,7 @@
 /*
 Plugin Name: Lilleprinsen Cargonizer Connector
 Description: Egen WooCommerce-adminside for å lagre Cargonizer-autentisering og hente fraktmetoder fra transport_agreements.xml
-Version: 1.1.0
+Version: 1.2.0
 Author: Lilleprinsen
 */
 
@@ -25,6 +25,7 @@ require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-pickup-compatibil
 require_once __DIR__ . '/includes/class-lp-cargonizer-checkout-selection-persistence-service.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-posten-label-automation.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-posten-printer-choice-compat.php';
+require_once __DIR__ . '/includes/class-lp-cargonizer-operations-facade.php';
 require_once __DIR__ . '/includes/class-lp-cargonizer-plugin.php';
 
 LP_Cargonizer_Posten_Printer_Choice_Compat::register_hooks();
